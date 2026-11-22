@@ -3,7 +3,7 @@
 > 给 AI Agent 用的轻量编程工具：省 token 的工具集 + 可派活的内置工人 + 独立验收。
 > A lightweight coding toolkit built for AI agents, not humans.
 
-**状态：需求阶段（V1.0 基线已冻结），尚无可运行代码。**
+**状态：M1 Python 原型（直接模式工具集）可用；派活 / 工人（M2）尚未实现。**
 
 ## 它解决什么
 - 现有编程工具为人设计，AI 用起来读得多、改容易失败、不知道改得对不对。
@@ -25,10 +25,49 @@
 3. 单二进制、低内存（目标：空闲 < 50 MB），云端 Agent 一条命令装好；
 4. 公开、可复现的评测。
 
+## 安装与使用（M1）
+
+```bash
+pip install git+https://github.com/tangniutt/agentkit    # Python 3.10+，无需 root
+agentkit doctor                                          # 自检：版本、git、写权限、磁盘、tree-sitter、模型配置
+```
+
+AI 读 [`llms.txt`](llms.txt) 即可上手。所有命令默认输出一行紧凑 JSON：
+
+```json
+{"ok":true,"data":{...},"error":null,"truncated":false,"next":null}
+```
+
+- 输出预算：默认 2000 token（≈4 字符/token），`--budget N` 可调；任何输入都不超限，截断时 `truncated:true` 且 `next` 给出续读命令。
+- `--human` 输出人类可读文本。
+
+| 命令 | 作用 |
+|---|---|
+| `agentkit repo_map` | 目录 + 主要符号（tree-sitter，支持 Python/JS/TS/Go/Rust/Java 等；无 tree-sitter 时退化为正则） |
+| `agentkit search "re" [path] [-i] [--fixed] [-g GLOB]` | 内容搜索，遵守 .gitignore，结果 `path:line:text`（有 ripgrep 用 ripgrep） |
+| `agentkit ls [dir] [-r]` / `agentkit glob '**/*.py'` | 列目录 / 按模式找文件 |
+| `agentkit read f.py:10-40` / `read f.py#Class.method` | 按行段 / 按符号读；拒读二进制；大文件分段 |
+| `agentkit edit f.py --old "..." --new "..."` | 唯一匹配替换；0 次 / 多次匹配返回最接近 3 处；语法错误拒写并给行号；读后文件被改则拒写 |
+| `agentkit patch` (stdin JSON) | 多文件原子补丁（replace/create/delete/rename），任一失败全部回滚 |
+| `agentkit create / delete / rename` | 新建 / 删除 / 重命名，同样自动快照 |
+| `agentkit run "cmd" [--timeout 120]` | 超时杀进程组；返回 exit_code、耗时、stderr 尾部优先；完整日志落盘 |
+| `agentkit verify --check "pytest -q"` | 在干净 worktree（非 git 则临时副本）跑验收；≤300 token 报告：pass/fail/invalid、改动文件、可疑标记 |
+| `agentkit checkpoint list / diff ID / rollback ID` | 每次改动前自动快照，回滚后哈希校验；不依赖 git |
+| `agentkit memory brief / add / list / search / show / forget` | 项目记忆（Markdown + front matter，SQLite FTS5 检索，代码锚定失效标记） |
+| `agentkit doctor` | 自检，每项给修复建议 |
+| `agentkit task create` | 派活（M2）；无模型时返回「直接模式」提示 |
+
+安全默认：`run`/`verify` 拒绝 `git push`、`git commit`、`sudo`、`rm -rf /`/`~`、`curl | sh`、读取 `~/.ssh` 和 `.env`；可在 `.agentkit/config.toml` 的 `[run] allow/deny` 调整。所有输出与日志自动脱敏（`sk-...`、`ghp_...`、`AKIA...` 等）。
+
+运行状态写在仓库内 `.agentkit/`（快照、日志、记忆；其中 `.gitignore` 只放行 `config.toml` 与记忆文件），不上传任何数据。
+
+开发：`pip install -e .[dev] && pytest -q`。
+
 ## 文档
 - [PRD v0.2](docs/prd-v0.2.md)
 - [V1.0 需求基线（冻结）](docs/v1.0-baseline.md)
 - [功能清单与借鉴来源](docs/feature-sources.md)
+- [进度](docs/STATUS.md) · [M1 dogfood 记录](docs/dogfood-m1.md)
 
 ## 明确不做
 不做人用 IDE / 聊天界面；不托管或转售模型；**不提供多账号轮换、代理池等绕过平台限额的功能**；不自动 push / 部署；无遥测。

@@ -1,0 +1,38 @@
+# AgentKit (M1 Python prototype)
+
+> Token-frugal coding tools for AI agents. Every command prints ONE line of compact JSON:
+> {"ok":bool,"data":...,"error":{"what","why","next"}|null,"truncated":bool,"next":"<command>"|null}
+> Output never exceeds the budget (default 2000 tokens ≈ 8000 chars; set with --budget N).
+> If "truncated" is true, run the command in "next" to continue. No model needed (direct mode).
+
+## Install (Python 3.10+, no root)
+pip install git+https://github.com/tangniutt/agentkit
+agentkit doctor            # checks version, git, write permission, disk, tree-sitter, model config
+
+## Workflow
+agentkit memory brief                      # AGENTS.md head + pinned project memories (≤500 tokens)
+agentkit repo_map                          # dirs + top symbols (Python/JS/TS/Go/Rust/Java...)
+agentkit search "regex" [path] [-i] [--fixed] [-g '*.py']   # path:line:text, respects .gitignore
+agentkit ls [dir] [-r]  |  agentkit glob '**/*.ts'
+agentkit read path/file.py:40-80           # or file.py#Class.method, or whole file (paged)
+agentkit edit file.py --old "exact unique text" --new "replacement"
+    # 0 or >1 matches -> error + data.candidates (3 closest, with line numbers); --all replaces every match
+    # syntax error after edit -> rejected with line number, file untouched
+    # file changed since your last read -> refused; read it again
+echo '{"ops":[{"op":"replace","path":"a.py","old":"x","new":"y"},{"op":"create","path":"b.py","content":"..."},
+             {"op":"delete","path":"c.py"},{"op":"rename","path":"d.py","to":"e.py"}]}' | agentkit patch   # all-or-nothing
+agentkit create path "content" | agentkit delete path.. | agentkit rename src dst
+agentkit run "pytest -q" [--timeout 120]   # exit_code, duration_s, stderr_tail first; full logs in .agentkit/logs/
+agentkit verify --check "pytest -q" [--check "..."]
+    # runs checks in a clean git worktree (or temp copy), ≤300-token report:
+    # verdict pass|fail|invalid (invalid = the check command itself is missing/broken),
+    # changed files, suspicious flags (tests_deleted, tests_modified, check_script_modified, test_config_modified)
+agentkit checkpoint list | diff ID | rollback ID   # automatic snapshot before every edit/create/delete/rename
+agentkit memory add "title" "body" -c project-info|conventions|lessons|tools-models|preferences [--pin] [--anchor file#Symbol]
+agentkit memory list | search "words" | show ID | forget ID   # anchored memories get maybe_stale when the code changes
+
+## Rules
+- run/verify refuse: git push, git commit, sudo, rm -rf / or ~, curl|sh, reading ~/.ssh or .env (override in .agentkit/config.toml [run] allow/deny).
+- Secrets (sk-..., ghp_..., AKIA..., etc.) are redacted from all output and logs.
+- `agentkit task create` needs a worker model (M2); in direct mode it tells you to use the tools yourself.
+- State lives in <repo>/.agentkit/ (checkpoints, logs, memory). Nothing is uploaded anywhere.
