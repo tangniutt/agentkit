@@ -64,5 +64,11 @@ Third-party code reused in this project is listed below with its source and lice
 Design ideas only (no code copied): Aider repo map ranking (Apache-2.0), SWE-agent
 windowed read / edit-lint (MIT), LooppooL and worker-bridge independent verification
 (MIT), Grok Workhorse guard rules (MIT), jcode checkpoint notes (MIT), Qoder memory docs.
+M2 (no code copied): mini-swe-agent DefaultAgent loop shape and consecutive-format-error
+limit (agentkit/worker.py); LooppooL compactToolResults "fold old tool outputs, keep recent
+steps" and per-task USD budget (agentkit/worker.py, agentkit/tasks.py); Grok Workhorse
+delegate/wait/result, recover-on-restart (running -> interrupted), /proc PID-reuse guard and
+commitsSince-style "worker committed" check (agentkit/tasks.py); worker-bridge per-task
+worktree, independent verification and escaping_paths symlink check (agentkit/tasks.py).
 
 Runtime dependency (not vendored): tree-sitter-language-pack (MIT/Apache-2.0 per grammar).

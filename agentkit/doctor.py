@@ -59,29 +59,28 @@ def cmd_doctor(ctx: Ctx, a) -> Result:
                          "optional: install ripgrep for fast search on big repos"))
     model = model_configured(ctx.config)
     checks.append(_check("model_config", model, "configured" if model else "none -> direct mode",
-                         f"optional: no model needed for direct mode; worker models arrive in M2 ({user_config_path()})"))
+                         "optional: direct mode needs no model; for dispatch: agentkit model add NAME --base-url URL --key-env VAR"))
+    from .models import ChatClient, ModelError, all_models
+
+    for m in all_models(ctx.config).values():
+        key_ok = (not m.key_env) or bool(os.environ.get(m.key_env))
+        val = f"{m.model_id} @ {m.base_url} ({m.tier})" + ("" if key_ok else f"; ${m.key_env} not set")
+        fix = f"export {m.key_env}=...  (the key is read from this variable; never put it in config)"
+        if key_ok and getattr(a, "online", False):
+            try:
+                ChatClient(m, retries=0).chat([{"role": "user", "content": "Reply: ok"}], timeout=30, max_tokens=8)
+                val += "; reachable"
+            except ModelError as e:
+                key_ok, fix = False, f"agentkit model test {m.name}  ({e.kind})"
+                val += f"; {e.kind}"
+        elif key_ok:
+            val += "; connectivity: run `agentkit doctor --online` or `agentkit model test`"
+        checks.append(_check(f"model:{m.name}", key_ok, val, fix))
     if ctx.config.get("_error"):
         checks.append(_check("config_parse", False, ctx.config["_error"][:160], "fix the TOML syntax in .agentkit/config.toml"))
     required = {"python>=3.10", "write_permission", "disk_space", "config_parse"}
     ok = all(c["ok"] for c in checks if c["name"] in required)
     return Result({"healthy": ok, "mode": "dispatch" if model else "direct", "checks": checks})
-
-
-def cmd_task(ctx: Ctx, a) -> Result:
-    model = model_configured(ctx.config)
-    if not model:
-        raise AKError(
-            "direct mode: no worker model configured",
-            "task dispatch needs a worker model (arrives in M2); every tool works without one",
-            "do it yourself: agentkit repo_map -> search/read -> edit -> run -> verify --check '<test cmd>'",
-            data={"mode": "direct", "task_created": False},
-        )
-    raise AKError(
-        "task system not implemented yet (M2)",
-        "the M1 prototype ships direct-mode tools only",
-        "use the tools directly: agentkit repo_map / search / read / edit / run / verify",
-        data={"mode": "direct", "task_created": False},
-    )
 
 
 _ = os

@@ -1,0 +1,37 @@
+name: Feature request
+description: Suggest an improvement. AI agents - draft this with `agentkit feedback --idea "..."`.
+title: "[idea] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        V1.0 scope is frozen (docs/v1.0-baseline.md); new ideas are logged in its change log and evaluated after V1.0.
+        Search existing issues first and **ask your human user before filing** (issues are public). One idea per issue.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What were you (or your agent) trying to do, and what got in the way?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: input
+    id: version
+    attributes:
+      label: AgentKit version
+  - type: checkboxes
+    id: filed_by_ai
+    attributes:
+      label: Filed by
+      options:
+        - label: Filed by an AI agent on behalf of a user (the user approved filing)

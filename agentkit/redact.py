@@ -51,8 +51,20 @@ _PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
 )
 
 
+_EXTRA: set = set()
+
+
+def register_secret(value) -> None:
+    """Mask this exact value everywhere from now on (configured model keys, M-17)."""
+    if value and len(str(value)) >= 6:
+        _EXTRA.add(str(value))
+
+
 def redact_text(value: str) -> str:
     result = str(value)
+    for sec in _EXTRA:
+        if sec in result:
+            result = result.replace(sec, MASK)
     for pattern, replacement in _PATTERNS:
         result = pattern.sub(replacement, result)
     return result

@@ -20,6 +20,15 @@ from .core import AKError, Ctx, Result, dumps, room_for
 from .redact import redact_text
 
 DEFAULT_TIMEOUT = 120
+ACTIVE: set = set()  # running Popen objects; the task watchdog kills their groups on budget/cancel
+
+
+def kill_active():
+    for proc in list(ACTIVE):
+        try:
+            _kill_group(proc)
+        except Exception:
+            pass
 
 
 def _kill_group(proc: subprocess.Popen):
@@ -55,6 +64,7 @@ def execute(command: str, cwd: Path, timeout: float, log_dir: Path, env: Optiona
             command, shell=True, cwd=str(cwd), stdout=fo, stderr=fe, stdin=subprocess.DEVNULL,
             start_new_session=os.name == "posix", env=env,
         )
+        ACTIVE.add(proc)
         try:
             proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -68,6 +78,8 @@ def execute(command: str, cwd: Path, timeout: float, log_dir: Path, env: Optiona
                     os.killpg(proc.pid, signal.SIGKILL)
                 except (ProcessLookupError, PermissionError):
                     pass
+        finally:
+            ACTIVE.discard(proc)
     dur = time.monotonic() - t0
     for p in (out_p, err_p):
         _redact_file(p)

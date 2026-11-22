@@ -42,11 +42,56 @@ def user_config_path() -> Path:
 def load_config(root: Path) -> dict:
     cfg = _read(root / ".agentkit" / "config.toml")
     user = _read(user_config_path())
-    if "model" in user and "model" not in cfg:
-        cfg["model"] = user["model"]
+    for k in ("model", "models"):
+        if k in user and k not in cfg:
+            cfg[k] = user[k]
     return cfg
 
 
 def model_configured(cfg: dict) -> bool:
+    if cfg.get("models"):
+        return True
     m = cfg.get("model") or {}
     return bool(m.get("base_url") or m.get("name") or os.environ.get("AGENTKIT_MODEL"))
+
+
+def repo_config_path(root: Path) -> Path:
+    return root / ".agentkit" / "config.toml"
+
+
+def _toml_value(v) -> str:
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (int, float)):
+        return repr(v)
+    if isinstance(v, (list, tuple)):
+        return "[" + ", ".join(_toml_value(x) for x in v) + "]"
+    s = str(v).replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{s}"'
+
+
+def set_table(root: Path, header: str, values: dict) -> Path:
+    """Replace (or append) one `[header]` table in the repo config, keeping everything else verbatim."""
+    p = repo_config_path(root)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    lines = p.read_text().splitlines() if p.exists() else []
+    out, skip = [], False
+    for ln in lines:
+        st = ln.strip()
+        if st.startswith("[") and not st.startswith("[["):
+            skip = st == f"[{header}]"
+            if skip:
+                continue
+        elif st.startswith("[["):
+            skip = False
+        if not skip:
+            out.append(ln)
+    while out and not out[-1].strip():
+        out.pop()
+    if values is not None:
+        if out:
+            out.append("")
+        out.append(f"[{header}]")
+        out += [f"{k} = {_toml_value(v)}" for k, v in values.items() if v is not None]
+    p.write_text("\n".join(out) + "\n")
+    return p

@@ -26,14 +26,17 @@ logs/
 state/
 verify/
 memory/index.sqlite*
+tasks/
+worktrees/
 """
 
 
 class AKError(Exception):
     """A structured, expected failure: {what, why, next}."""
 
-    def __init__(self, what: str, why: str = "", next: Optional[str] = None, data: Any = None):
+    def __init__(self, what: str, why: str = "", next: Optional[str] = None, data: Any = None, code: Optional[str] = None):
         super().__init__(what)
+        self.code = code  # stable error code (C-03, docs/errors.md); classified from `what` when None
         self.what = what
         self.why = why
         self.next = next
@@ -83,6 +86,7 @@ class Ctx:
     human: bool = False
     argv: list = field(default_factory=list)
     config: dict = field(default_factory=dict)
+    run_id: str = ""
 
     @property
     def budget_chars(self) -> int:
@@ -231,7 +235,11 @@ def fit(env: dict, budget_chars: int) -> dict:
         env["data"] = None
         env["truncated"] = True
         if env.get("error"):
-            env["error"] = {"what": str(env["error"].get("what", ""))[:80], "why": "", "next": None}
+            old = env["error"]
+            env["error"] = {"what": str(old.get("what", ""))[:80], "why": "", "next": None}
+            for k in ("code", "run"):
+                if k in old:
+                    env["error"][k] = old[k]
     if len(dumps(env)) > budget_chars:
         env["next"] = (str(env.get("next") or ""))[: max(0, budget_chars - 80)] or None
     return env

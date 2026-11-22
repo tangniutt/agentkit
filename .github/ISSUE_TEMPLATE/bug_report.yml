@@ -1,0 +1,73 @@
+name: Bug report
+description: Something in AgentKit failed or behaved wrongly. AI agents - draft this with `agentkit feedback --bug <run_id>`.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing: search existing issues, and **ask your human user first** (issues are public).
+        Never paste secrets, keys or private code. One issue per problem.
+        `agentkit feedback --bug <run_id>` prints a ready-to-file draft; `agentkit debug-bundle <run_id>` makes a redacted archive you can attach.
+  - type: input
+    id: version
+    attributes:
+      label: AgentKit version
+      description: "`agentkit --version`"
+    validations:
+      required: true
+  - type: input
+    id: command
+    attributes:
+      label: Command
+      description: The agentkit command that failed (e.g. `edit`, `task create`)
+    validations:
+      required: true
+  - type: input
+    id: error_code
+    attributes:
+      label: Error code
+      description: "`error.code` from the JSON output, e.g. AK-TOOL-EDIT-SYNTAX (see docs/errors.md)"
+  - type: input
+    id: run_id
+    attributes:
+      label: Run id / task id
+      description: "`error.run` from the JSON output, or the task id"
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: Smallest steps (commands + a tiny made-up repo) that show the problem. No private code.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Event log (redacted)
+      description: "`agentkit logs <id> --errors` output"
+      render: text
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Python, git versions
+  - type: checkboxes
+    id: filed_by_ai
+    attributes:
+      label: Filed by
+      options:
+        - label: Filed by an AI agent on behalf of a user (the user approved filing)
+        - label: I checked that no secrets or private code are included
+          required: true

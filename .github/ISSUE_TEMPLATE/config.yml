@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/tangniutt/agentkit/security/advisories/new
+    about: Report vulnerabilities privately (see SECURITY.md), never in a public issue.
+  - name: Error code reference
+    url: https://github.com/tangniutt/agentkit/blob/main/docs/errors.md
+    about: Look up an AK-* error code and its fix before filing.

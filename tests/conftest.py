@@ -32,7 +32,9 @@ class AK:
         if check_schema:
             assert set(k for k in res if not k.startswith("_")) == KEYS, res
             if not res["ok"]:
-                assert set(res["error"]) == {"what", "why", "next"}, res
+                # C-03: every error carries a stable code and the run id
+                assert set(res["error"]) == {"what", "why", "next", "code", "run"}, res
+                assert res["error"]["code"].startswith("AK-"), res
             if res["truncated"]:
                 assert res["next"], f"truncated output must carry next: {out[:300]}"
             b = budget if budget is not None else 2000
@@ -74,3 +76,16 @@ def ak(repo):
 def gitrepo(repo):
     git(repo, "init", "-q", "-b", "main")
     return repo
+
+
+# ---------------------------------------------------------------- M2: fake model server
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+
+@pytest.fixture
+def fake():
+    from eval.fake_openai import FakeOpenAI
+
+    s = FakeOpenAI().start()
+    yield s
+    s.stop()

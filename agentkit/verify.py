@@ -183,6 +183,62 @@ def _missing_command(cmd: str, cwd: Path) -> bool:
     return shutil.which(head) is None
 
 
+def run_checks(cmds: list, where: Path, timeout: float, log_dir: Path, env=None) -> list:
+    """Run each check in `where`; classify pass / fail / invalid (shared by verify and task verification)."""
+    checks = []
+    for c in cmds:
+        if _missing_command(c, where):
+            checks.append({"cmd": c, "result": "invalid", "why": "command not found"})
+            continue
+        r = execute(c, where, timeout, log_dir, env=env)
+        err = r["stderr_log"].read_text(errors="replace")
+        out = r["stdout_log"].read_text(errors="replace")
+        if r["timed_out"]:
+            res = "fail"
+        elif r["exit_code"] == 0:
+            res = "pass"
+        elif r["exit_code"] in (126, 127) or (r["exit_code"] != 0 and _NOT_FOUND.search(err[-400:]) and not out.strip() and len(err) < 600):
+            res = "invalid"
+        else:
+            res = "fail"
+        item = {"cmd": c, "result": res, "exit": r["exit_code"], "s": r["duration_s"]}
+        if r["timed_out"]:
+            item["why"] = f"timeout {timeout:g}s"
+        if r["exit_code"] == 5 and re.search(r"\bpytest\b", c):
+            item["why"] = "no tests collected"
+        if res != "pass":
+            last = [l for l in (err.strip() or out.strip()).splitlines() if l.strip()][-1:] or [""]
+            item.setdefault("why", last[0][-140:])
+        item["log"] = r["stderr_log"].name.replace(".stderr.log", "")
+        checks.append(item)
+    return checks
+
+
+def base_flags(changes: dict, cmds: list, checks: list, verdict: str, dep_roots: list) -> list:
+    """Suspicious-change flags shared by verify (M-10) and task reports (M-15)."""
+    flags = []
+    deleted_tests = [p for p, s in changes.items() if s == "D" and _TEST_PATH.search(p)]
+    modified_tests = [p for p, s in changes.items() if (s == "M" and _TEST_PATH.search(p))
+                      or (s == "A" and p.rsplit("/", 1)[-1] == "conftest.py")]
+    if deleted_tests:
+        flags.append({"flag": "tests_deleted", "paths": deleted_tests[:3]})
+    if modified_tests:
+        flags.append({"flag": "tests_modified", "paths": modified_tests[:3]})
+    deps = set()
+    for c in cmds:
+        for r in dep_roots:
+            deps |= _check_paths(c, r)
+    touched_check = sorted(p for p in changes if p in deps or any(d.endswith("/") and p.startswith(d) for d in deps))
+    if touched_check:
+        flags.append({"flag": "check_script_modified", "paths": touched_check[:3]})
+    cfg = [p for p in changes if _TEST_CONFIG.search(p)]
+    if cfg:
+        flags.append({"flag": "test_config_modified", "paths": cfg[:3]})
+    if verdict == "pass" and any(c.get("why") == "no tests collected" for c in checks):
+        flags.append({"flag": "no_tests_ran"})
+    return flags
+
+
 def cmd_verify(ctx: Ctx, a) -> Result:
     if not a.check:
         raise AKError("no --check given", "verify needs at least one check command", 'agentkit verify --check "pytest -q"')
@@ -197,35 +253,7 @@ def cmd_verify(ctx: Ctx, a) -> Result:
     mode = "?"
     try:
         where, changes, mode = _prepare_copy(ctx, tmp, a.base)
-        checks = []
-        log_dir = ctx.state("logs")
-        for c in a.check:
-            if _missing_command(c, where):
-                checks.append({"cmd": c, "result": "invalid", "why": "command not found"})
-                continue
-            r = execute(c, where, timeout, log_dir)
-            err = r["stderr_log"].read_text(errors="replace")
-            out = r["stdout_log"].read_text(errors="replace")
-            if r["timed_out"]:
-                res = "fail"
-            elif r["exit_code"] == 0:
-                res = "pass"
-            elif r["exit_code"] in (126, 127) or (r["exit_code"] != 0 and _NOT_FOUND.search(err[-400:]) and not out.strip() and len(err) < 600):
-                res = "invalid"
-            elif r["exit_code"] == 5 and re.search(r"\bpytest\b", c):
-                res = "fail"
-            else:
-                res = "fail"
-            item = {"cmd": c, "result": res, "exit": r["exit_code"], "s": r["duration_s"]}
-            if r["timed_out"]:
-                item["why"] = f"timeout {timeout:g}s"
-            if r["exit_code"] == 5 and re.search(r"\bpytest\b", c):
-                item["why"] = "no tests collected"
-            if res != "pass":
-                last = [l for l in (err.strip() or out.strip()).splitlines() if l.strip()][-1:] or [""]
-                item.setdefault("why", last[0][-140:])
-            item["log"] = ctx.rel(r["stderr_log"]).rsplit("/", 1)[-1].replace(".stderr.log", "")
-            checks.append(item)
+        checks = run_checks(a.check, where, timeout, ctx.state("logs"))
     finally:
         _cleanup(ctx, where, mode)
         shutil.rmtree(tmp, ignore_errors=True)
@@ -237,24 +265,7 @@ def cmd_verify(ctx: Ctx, a) -> Result:
     else:
         verdict = "fail"
 
-    flags = []
-    deleted_tests = [p for p, s in changes.items() if s == "D" and _TEST_PATH.search(p)]
-    modified_tests = [p for p, s in changes.items() if s == "M" and _TEST_PATH.search(p)]
-    if deleted_tests:
-        flags.append({"flag": "tests_deleted", "paths": deleted_tests[:3]})
-    if modified_tests:
-        flags.append({"flag": "tests_modified", "paths": modified_tests[:3]})
-    deps = set()
-    for c in a.check:
-        deps |= _check_paths(c, ctx.root)
-    touched_check = sorted(p for p in changes if p in deps or any(d.endswith("/") and p.startswith(d) for d in deps))
-    if touched_check:
-        flags.append({"flag": "check_script_modified", "paths": touched_check[:3]})
-    cfg = [p for p in changes if _TEST_CONFIG.search(p)]
-    if cfg:
-        flags.append({"flag": "test_config_modified", "paths": cfg[:3]})
-    if verdict == "pass" and any(c.get("why") == "no tests collected" for c in checks):
-        flags.append({"flag": "no_tests_ran"})
+    flags = base_flags(changes, a.check, checks, verdict, [ctx.root])
 
     report = {
         "verdict": verdict,
@@ -266,8 +277,18 @@ def cmd_verify(ctx: Ctx, a) -> Result:
     }
     if verdict == "invalid":
         report["hint"] = "a check command is missing or broken; fix the check, this is not a code failure"
-    if mode == "git-worktree" and a.base == "HEAD":
-        pass
+    code = {"fail": "AK-VERIFY-FAIL", "invalid": "AK-VERIFY-INVALID"}.get(verdict) or ("AK-VERIFY-SUSPICIOUS" if flags else None)
+    if code:
+        report["code"] = code
+        report["run"] = ctx.run_id
+    if ctx.run_id:
+        from .events import EventLog
+
+        ev = EventLog(ctx.root, ctx.run_id, "verifier")
+        for i, c in enumerate(checks):
+            ev.emit("check", step=i + 1, duration=c.get("s"), result=c["result"],
+                    error_code={"fail": "AK-VERIFY-FAIL", "invalid": "AK-VERIFY-INVALID"}.get(c["result"]),
+                    cmd=c["cmd"][:120], log=c.get("log"), why=c.get("why"))
     # full report on disk, compact one on stdout
     vdir = ctx.state("verify")
     rid = time.strftime("%Y%m%d-%H%M%S") + f"-{os.getpid()}"
@@ -301,7 +322,8 @@ def _compact(report: dict, room: int) -> tuple[dict, bool]:
         step(rep)
         trunc = True
     if len(dumps(rep)) > room:
-        rep = {"verdict": rep["verdict"], "suspicious": [f["flag"] for f in rep["suspicious"]]}
+        rep = {"verdict": rep["verdict"], "suspicious": [f["flag"] for f in rep["suspicious"]],
+               **{k: rep[k] for k in ("code", "run", "error") if rep.get(k)}}
         trunc = True
     return rep, trunc
 

@@ -136,10 +136,64 @@ def build_parser() -> argparse.ArgumentParser:
     mf.add_argument("id")
     ms.add_parser("brief")
 
-    sub.add_parser("doctor", help="self check with fix hints")
-    t = sub.add_parser("task", help="(M2) task dispatch; in direct mode tells you to use tools directly")
-    t.add_argument("task_cmd", nargs="?", default="create")
-    t.add_argument("rest", nargs=argparse.REMAINDER)
+    dr = sub.add_parser("doctor", help="self check with fix hints")
+    dr.add_argument("--online", action="store_true", help="also call each configured model once")
+    mo = sub.add_parser("model", help="worker models: add|list|test|remove (keys only by env var name)")
+    mos = mo.add_subparsers(dest="model_cmd", parser_class=_Parser)
+    moa = mos.add_parser("add")
+    moa.add_argument("name")
+    moa.add_argument("--base-url", required=True)
+    moa.add_argument("--model", help="provider model id (default: NAME)")
+    moa.add_argument("--key-env", help="NAME of the env var holding the key (never the key itself)")
+    moa.add_argument("--context", type=int, default=32000, help="context window, tokens")
+    moa.add_argument("--price-in", type=float, default=0.0, help="USD per 1M input tokens")
+    moa.add_argument("--price-out", type=float, default=0.0, help="USD per 1M output tokens")
+    moa.add_argument("--tier", default="low", help="low|mid|high")
+    moa.add_argument("--default", action="store_true")
+    mos.add_parser("list")
+    mot = mos.add_parser("test")
+    mot.add_argument("name", nargs="?")
+    mot.add_argument("--timeout", type=float, default=60)
+    mor = mos.add_parser("remove")
+    mor.add_argument("name")
+
+    t = sub.add_parser("task", help="dispatch to a worker: create|status|wait|report|cancel|clean")
+    ts = t.add_subparsers(dest="task_cmd", parser_class=_Parser)
+    tc = ts.add_parser("create")
+    tc.add_argument("goal", nargs="?")
+    tc.add_argument("--goal", dest="goal_opt")
+    tc.add_argument("--check", action="append", default=[])
+    tc.add_argument("--allow", action="append", default=[], help="glob/dir the worker may change (repeatable)")
+    tc.add_argument("--budget-tokens", type=int)
+    tc.add_argument("--budget-usd", type=float)
+    tc.add_argument("--budget-minutes", type=float)
+    tc.add_argument("--tier")
+    tc.add_argument("--model")
+    for name in ("status", "report", "cancel"):
+        x = ts.add_parser(name)
+        x.add_argument("ids", nargs="*")
+    tw = ts.add_parser("wait")
+    tw.add_argument("ids", nargs="*")
+    tw.add_argument("--timeout", type=float, default=300)
+    tcl = ts.add_parser("clean")
+    tcl.add_argument("ids", nargs="*")
+    tcl.add_argument("--all", action="store_true")
+    tcl.add_argument("--keep-branch", action="store_true")
+
+    lg = sub.add_parser("logs", help="structured event log of a run / task: logs ID [--errors] [--tail N]")
+    lg.add_argument("id")
+    lg.add_argument("--errors", action="store_true")
+    lg.add_argument("--tail", type=int)
+    db = sub.add_parser("debug-bundle", help="redacted .tar.gz (config sans keys, versions, events, report) for bug reports")
+    db.add_argument("id")
+    db.add_argument("--with-transcript", action="store_true", help="include the worker transcript (may contain code)")
+    fb = sub.add_parser("feedback", help="draft a GitHub issue (never posts): --bug RUN_ID | --idea TEXT")
+    fbg = fb.add_mutually_exclusive_group(required=True)
+    fbg.add_argument("--bug")
+    fbg.add_argument("--idea")
+
+    tr = sub.add_parser("_task-run", help=argparse.SUPPRESS)
+    tr.add_argument("id")
     return p
 
 
@@ -152,8 +206,41 @@ def _handlers():
         "edit": edit.cmd_edit, "patch": edit.cmd_patch, "create": edit.cmd_create, "delete": edit.cmd_delete,
         "rename": edit.cmd_rename, "run": run.cmd_run, "checkpoint": checkpoint.cmd_checkpoint,
         "verify": verify.cmd_verify, "memory": memory.cmd_memory, "doctor": doctor.cmd_doctor,
-        "task": doctor.cmd_task,
+        "task": _task, "model": _model, "_task-run": _task_run,
+        "logs": _diag("cmd_logs"), "debug-bundle": _diag("cmd_debug_bundle"), "feedback": _diag("cmd_feedback"),
     }
+
+
+def _diag(name):
+    def h(ctx, a):
+        from . import diag
+
+        return getattr(diag, name)(ctx, a)
+
+    return h
+
+
+def _task(ctx, a):
+    from . import tasks
+
+    if not a.task_cmd:
+        a.task_cmd, a.ids = "status", []
+    if a.task_cmd == "create":
+        a.goal = a.goal or getattr(a, "goal_opt", None)
+    return tasks.cmd_task(ctx, a)
+
+
+def _model(ctx, a):
+    from . import models
+
+    return models.cmd_model(ctx, a)
+
+
+def _task_run(ctx, a):
+    from . import tasks
+
+    tasks.run_task(ctx.root, a.id)
+    return Result({"ran": a.id})
 
 
 def split_globals(argv: list):
@@ -216,15 +303,21 @@ def render_human(env: dict) -> str:
 
 
 def run_cli(argv: list) -> tuple[dict, int, bool]:
+    import time as _time
+
+    from .events import EventLog, classify, new_run_id
+
     human = False
     ctx = None
+    run_id = new_run_id()
+    t0 = _time.monotonic()
+    cmd = None
+    root_for_log = None
     try:
         rest, budget, human, root = split_globals(argv)
         parser = build_parser()
         if not rest or rest[0] in ("-h", "--help", "help"):
-            from .core import Ctx
-
-            cmds = sorted(k for k in _handlers() if k not in ("repo-map", "map"))
+            cmds = sorted(k for k in _handlers() if k not in ("repo-map", "map", "_task-run"))
             return envelope(True, {"usage": "agentkit <command> [args] [--budget N] [--human]",
                                    "commands": cmds, "help": "agentkit <command> --help", "docs": "llms.txt"}), 0, human
         if rest == ["--version"]:
@@ -232,27 +325,60 @@ def run_cli(argv: list) -> tuple[dict, int, bool]:
         # argparse --help on subcommands prints text; turn into JSON
         if "--help" in rest or "-h" in rest:
             return envelope(True, {"help": _help_for(parser, [t for t in rest if t not in ("-h", "--help")])}), 0, human
+        cmd = rest[0]
         a = parser.parse_args(rest)
         ctx = make_ctx(root, budget, human, rest + (["--budget", str(budget)] if budget is not None else [])
                        + (["--root", root] if root else []))
+        ctx.run_id = run_id
+        root_for_log = ctx.root
         if a.cmd == "checkpoint" and not a.cp_cmd:
             a.cp_cmd, a.offset = "list", 0
         if a.cmd == "memory" and not a.mem_cmd:
             a.mem_cmd = "brief"
         res: Result = _handlers()[a.cmd](ctx, a)
         env = envelope(True, res.data, None, res.truncated, res.next)
+        if a.cmd not in ("logs", "_task-run", "feedback", "debug-bundle") and (ctx.root / ".agentkit").is_dir():
+            EventLog(ctx.root, run_id).emit("command", step=a.cmd, duration=_time.monotonic() - t0)
         return finalize(ctx, env, res.budget_chars), 0, human
     except AKError as e:
-        env = envelope(False, e.data, {"what": e.what, "why": e.why, "next": e.next}, False, e.next)
-        code = 2 if e.what.startswith("usage:") else 1
-        return (finalize(ctx, env) if ctx else _fin_noctx(env)), code, human
+        code = e.code or classify(e.what, cmd)
+        err = {"what": e.what, "why": e.why, "next": e.next, "code": code, "run": run_id}
+        env = envelope(False, e.data, err, False, e.next)
+        if root_for_log is not None and (root_for_log / ".agentkit").is_dir():
+            EventLog(root_for_log, run_id).emit("error", step=cmd, duration=_time.monotonic() - t0, error_code=code,
+                                                what=e.what[:200])
+        rc = 2 if e.what.startswith("usage:") else 1
+        return (finalize(ctx, env) if ctx else _fin_noctx(env)), rc, human
     except KeyboardInterrupt:
-        return _fin_noctx(envelope(False, None, {"what": "interrupted", "why": "", "next": None})), 130, human
-    except Exception as e:  # never crash with a traceback on stdout
-        tb = traceback.format_exc().strip().splitlines()[-3:]
-        env = envelope(False, None, {"what": f"internal error: {type(e).__name__}: {e}"[:300], "why": " | ".join(tb)[:400],
-                                     "next": "agentkit doctor; please report at github.com/tangniutt/agentkit/issues"})
+        return _fin_noctx(envelope(False, None, {"what": "interrupted", "why": "", "next": None, "code": "AK-USAGE",
+                                                 "run": run_id})), 130, human
+    except Exception as e:  # never crash with a traceback on stdout (C-03: traceback goes to a log file)
+        log_ptr = _log_crash(root_for_log, run_id, cmd, _time.monotonic() - t0)
+        env = envelope(False, None, {"what": f"internal error: {type(e).__name__}: {e}"[:200],
+                                     "why": (f"bug in agentkit; traceback in {log_ptr}; " if log_ptr else "bug in agentkit; ")
+                                            + f"details: agentkit logs {run_id}",
+                                     "next": f"agentkit feedback --bug {run_id}  (drafts an issue; ask your human before filing)",
+                                     "code": "AK-INTERNAL", "run": run_id})
         return (finalize(ctx, env) if ctx else _fin_noctx(env)), 1, human
+
+
+def _log_crash(root, run_id: str, cmd, duration: float):
+    """Write the traceback to .agentkit/logs/crash-<run>.log (redacted) + an AK-INTERNAL event."""
+    from pathlib import Path
+
+    from .events import EventLog
+    from .redact import redact_text
+
+    try:
+        r = Path(root) if root is not None else Path.cwd()
+        d = r / ".agentkit" / "logs"
+        d.mkdir(parents=True, exist_ok=True)
+        p = d / f"crash-{run_id}.log"
+        p.write_text(redact_text(traceback.format_exc()))
+        EventLog(r, run_id).emit("crash", step=cmd, duration=duration, error_code="AK-INTERNAL", log=p.name)
+        return f".agentkit/logs/{p.name}"
+    except Exception:
+        return None
 
 
 def _help_for(parser, words: list) -> str:
