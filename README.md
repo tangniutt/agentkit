@@ -3,7 +3,7 @@
 > 给 AI Agent 用的轻量编程工具：省 token 的工具集 + 可派活的内置工人 + 独立验收。
 > A lightweight coding toolkit built for AI agents, not humans.
 
-**状态：M1 Python 原型（直接模式工具集）可用；派活 / 工人（M2）尚未实现。**
+**状态：M2 Python 原型——直接模式工具集 + 派活（内置工人、OpenAI 兼容接口、独立验收与防作弊）可用。**
 
 ## 它解决什么
 - 现有编程工具为人设计，AI 用起来读得多、改容易失败、不知道改得对不对。
@@ -25,7 +25,7 @@
 3. 单二进制、低内存（目标：空闲 < 50 MB），云端 Agent 一条命令装好；
 4. 公开、可复现的评测。
 
-## 安装与使用（M1）
+## 安装与使用
 
 ```bash
 pip install git+https://github.com/tangniutt/agentkit    # Python 3.10+，无需 root
@@ -55,11 +55,23 @@ AI 读 [`llms.txt`](llms.txt) 即可上手。所有命令默认输出一行紧�
 | `agentkit checkpoint list / diff ID / rollback ID` | 每次改动前自动快照，回滚后哈希校验；不依赖 git |
 | `agentkit memory brief / add / list / search / show / forget` | 项目记忆（Markdown + front matter，SQLite FTS5 检索，代码锚定失效标记） |
 | `agentkit doctor` | 自检，每项给修复建议 |
-| `agentkit task create` | 派活（M2）；无模型时返回「直接模式」提示 |
+| `agentkit model add/list/test/remove` | 配置工人模型（任意 OpenAI 兼容接口）；配置里只存 Key 的**环境变量名** |
+| `agentkit task create "目标" --check "pytest -q" [--allow DIR] [--budget-tokens/--budget-usd/--budget-minutes] [--tier]` | 派活：工人在独立 worktree/分支 `agentkit/<id>` 干活；无模型时返回「直接模式」提示 |
+| `agentkit task status / wait / report / cancel / clean` | status <100 token；report ≤300 token（与 verify 同格式，verdict 多一个 `needs_review` = 测试过了但有作弊嫌疑） |
+| `agentkit logs <id> [--errors]` / `agentkit debug-bundle <id>` | 定位失败：结构化事件（哪一步、哪个组件、错误码）；脱敏归档用于报 Bug（错误码见 [docs/errors.md](docs/errors.md)） |
+| `agentkit feedback --bug <id> \| --idea "..."` | 生成脱敏的 Issue 草稿和预填链接，**从不自动提交** |
 
 安全默认：`run`/`verify` 拒绝 `git push`、`git commit`、`sudo`、`rm -rf /`/`~`、`curl | sh`、读取 `~/.ssh` 和 `.env`；可在 `.agentkit/config.toml` 的 `[run] allow/deny` 调整。所有输出与日志自动脱敏（`sk-...`、`ghp_...`、`AKIA...` 等）。
 
-运行状态写在仓库内 `.agentkit/`（快照、日志、记忆；其中 `.gitignore` 只放行 `config.toml` 与记忆文件），不上传任何数据。
+运行状态写在仓库内 `.agentkit/`（快照、日志、记忆、任务、worktree；其中 `.gitignore` 只放行 `config.toml` 与记忆文件），除了调用你配置的模型接口外不上传任何数据。
+
+### 派活模式要点
+- 工人只能用上面的工具（外加 `finish` 提交），不能 commit / push；工人说「完成」不算数：验收器把它的改动复制到全新 worktree 独立重跑检查，并标记删测试、跳过测试、改验收脚本、改白名单外文件、偷偷提交等行为。
+- 预算超限 5 秒内停止；429 按 Retry-After 等一次后暂停上报（不轮换账号）；Key 无效立即失败。
+- 评测：`python -m eval.run [--cheats]`（离线假模型，21 题 + 14 例作弊库）；`python -m eval.run --real --base-url URL --model-id ID --key-env VAR` 接真实模型。
+
+### 报告问题
+AI 代用户报 Bug / 提需求：先搜已有 Issue，**先问人类用户**（Issue 公开），用 `agentkit feedback` 生成草稿，不含密钥或私有代码，一个问题一个 Issue。
 
 开发：`pip install -e .[dev] && pytest -q`。
 
@@ -67,7 +79,7 @@ AI 读 [`llms.txt`](llms.txt) 即可上手。所有命令默认输出一行紧�
 - [PRD v0.2](docs/prd-v0.2.md)
 - [V1.0 需求基线（冻结）](docs/v1.0-baseline.md)
 - [功能清单与借鉴来源](docs/feature-sources.md)
-- [进度](docs/STATUS.md) · [M1 dogfood 记录](docs/dogfood-m1.md)
+- [进度](docs/STATUS.md) · [错误码](docs/errors.md) · dogfood 记录：[M1](docs/dogfood-m1.md) · [M2](docs/dogfood-m2.md)
 
 ## 明确不做
 不做人用 IDE / 聊天界面；不托管或转售模型；**不提供多账号轮换、代理池等绕过平台限额的功能**；不自动 push / 部署；无遥测。

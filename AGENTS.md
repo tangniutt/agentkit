@@ -22,6 +22,17 @@ AgentKit：给 AI Agent 用的轻量编程工具。三种模式：直接模式�
 - **不做**：账号轮换、代理池等绕过平台限额的功能；自动 push/部署；遥测。
 - **密钥**：绝不写进代码、测试、日志、文档。
 
-## 目录（M1 Python 原型阶段）
+## 目录（M2 Python 原型阶段）
 - `agentkit/` — 源码；`tests/` — 测试；`docs/` — 文档
+- `eval/` — M-20 评测题、作弊库、离线假模型服务器（`python -m eval.run`）
 - 运行测试：`pip install -e .[dev] && pytest -q`
+
+## 出错时怎么定位（C-03）
+- 每条失败命令的 JSON 都有 `error.code`（稳定错误码，见 `docs/errors.md`）和 `error.run`（运行 ID）。
+- `agentkit logs <run或任务ID> --errors` 看结构化事件（哪一步、哪个组件、耗时、错误码）；任务的 `status`/`report` 里有 `code`、`at`（组件#步骤）和日志指针。
+- `AK-INTERNAL` = AgentKit 自己的 bug：堆栈在 `.agentkit/logs/crash-<run>.log`，不会打进你的上下文。
+
+## Reporting problems（C-04）
+- 先搜已有 Issue：https://github.com/tangniutt/agentkit/issues
+- `agentkit feedback --bug <run_id>` / `agentkit feedback --idea "..."` 只生成草稿（标题、正文、预填链接），**从不自动提交**。
+- 提交前**先问你的人类用户**（Issue 是公开的）；绝不包含密钥或私有代码；一个问题一个 Issue；需要附件用 `agentkit debug-bundle <id>`。

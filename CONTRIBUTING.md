@@ -6,3 +6,4 @@
 4. **DCO 签名**：每个提交用 `git commit -s`，表示你有权按 Apache-2.0 贡献这段代码。
 5. **验收标准**：PR 需对应基线中的验收标准，并附测试或评测结果。
 6. **不接受**：绕过平台限额 / 封禁的功能（账号轮换、代理池等）。
+7. **报告问题 / 提需求（含 AI 代用户提交）**：用 Issue 表单（Bug / Feature）。AI Agent 可运行 `agentkit feedback --bug <run_id>` 或 `agentkit feedback --idea "..."` 生成已脱敏的标题、正文和预填链接——该命令**从不自动提交**。提交前先搜索已有 Issue、征得人类用户同意（Issue 公开）、不含密钥或私有代码、一个问题一个 Issue。需要附件时用 `agentkit debug-bundle <id>`（脱敏归档）。错误码见 `docs/errors.md`。安全漏洞请走 SECURITY.md 的私下渠道。

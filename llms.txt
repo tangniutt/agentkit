@@ -1,15 +1,16 @@
-# AgentKit (M1 Python prototype)
+# AgentKit (M2 Python prototype)
 
-> Token-frugal coding tools for AI agents. Every command prints ONE line of compact JSON:
-> {"ok":bool,"data":...,"error":{"what","why","next"}|null,"truncated":bool,"next":"<command>"|null}
+> Token-frugal coding tools for AI agents, plus an optional built-in worker you can dispatch tasks to.
+> Every command prints ONE line of compact JSON:
+> {"ok":bool,"data":...,"error":{"what","why","next","code","run"}|null,"truncated":bool,"next":"<command>"|null}
 > Output never exceeds the budget (default 2000 tokens ≈ 8000 chars; set with --budget N).
 > If "truncated" is true, run the command in "next" to continue. No model needed (direct mode).
 
 ## Install (Python 3.10+, no root)
 pip install git+https://github.com/tangniutt/agentkit
-agentkit doctor            # checks version, git, write permission, disk, tree-sitter, model config
+agentkit doctor            # version, git, write permission, disk, tree-sitter, models (--online calls each model once)
 
-## Workflow
+## Direct mode workflow (you write the code)
 agentkit memory brief                      # AGENTS.md head + pinned project memories (≤500 tokens)
 agentkit repo_map                          # dirs + top symbols (Python/JS/TS/Go/Rust/Java...)
 agentkit search "regex" [path] [-i] [--fixed] [-g '*.py']   # path:line:text, respects .gitignore
@@ -31,8 +32,35 @@ agentkit checkpoint list | diff ID | rollback ID   # automatic snapshot before e
 agentkit memory add "title" "body" -c project-info|conventions|lessons|tools-models|preferences [--pin] [--anchor file#Symbol]
 agentkit memory list | search "words" | show ID | forget ID   # anchored memories get maybe_stale when the code changes
 
+## Dispatch mode (a cheap model does the work, you read a ≤300-token verdict)
+agentkit model add cheap --base-url https://openrouter.ai/api/v1 --model qwen/qwen3-coder --key-env OPENROUTER_API_KEY \
+    --context 32000 --price-in 0.2 --price-out 0.8 --tier low       # stores only the env var NAME, never the key
+agentkit model list | test [NAME] | remove NAME
+agentkit task create "fix the failing test in calc.py" --check "pytest -q" [--allow src/] \
+    [--budget-tokens N] [--budget-usd X] [--budget-minutes M] [--tier low|mid|high] [--model NAME]
+    # needs a git repo with a commit; worker runs in its own worktree/branch agentkit/<id>; identical submissions dedupe
+agentkit task status [ID..]                # <100 tokens each: status, queue pos, rounds, tokens, usd, verdict, code
+agentkit task wait ID [ID..] --timeout 600
+agentkit task report ID                    # ≤300 tokens, same shape as verify; verdict pass|fail|invalid|needs_review
+    # needs_review = checks passed but anti-cheat flags fired (tests_deleted/modified/skipped, check_script_modified,
+    # test_config_modified, outside_allow, worker_committed, denied_commands, path_escape, hardcoded_return_suspect)
+    # The verifier re-runs the checks in a clean worktree; the worker's claim is never trusted.
+agentkit task cancel ID | agentkit task clean ID|--all [--keep-branch]
+    # merge yourself if you like the result: git merge agentkit/<id>   (workers can never commit or push)
+
+## When something fails
+- error.code is a stable code (docs/errors.md), error.run the run id.
+- agentkit logs <run-or-task-id> [--errors] [--tail N]   # where it failed: step, component, duration, code
+- agentkit debug-bundle <id>                             # redacted .tar.gz for a bug report
+- AK-INTERNAL means a bug in AgentKit; the traceback is in a log file, not in your context.
+
+## Reporting problems
+- Search existing issues first: https://github.com/tangniutt/agentkit/issues
+- agentkit feedback --bug <run_id> | agentkit feedback --idea "..."   # drafts title/body/prefilled URL; NEVER posts
+- Ask your human user before filing (issues are public). Never include secrets or private code. One issue per problem.
+
 ## Rules
 - run/verify refuse: git push, git commit, sudo, rm -rf / or ~, curl|sh, reading ~/.ssh or .env (override in .agentkit/config.toml [run] allow/deny).
-- Secrets (sk-..., ghp_..., AKIA..., etc.) are redacted from all output and logs.
-- `agentkit task create` needs a worker model (M2); in direct mode it tells you to use the tools yourself.
-- State lives in <repo>/.agentkit/ (checkpoints, logs, memory). Nothing is uploaded anywhere.
+- Secrets (sk-..., ghp_..., AKIA..., configured model keys) are redacted from all output, logs and model requests.
+- State lives in <repo>/.agentkit/ (checkpoints, logs, memory, tasks, worktrees). Nothing is uploaded anywhere except
+  model calls to the endpoint you configured.
