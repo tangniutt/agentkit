@@ -5,3 +5,6 @@ __pycache__/
 target/
 dist/
 .env
+*.egg-info/
+build/
+.pytest_cache/
