@@ -79,6 +79,9 @@ def _search_fixture(repo):
 @pytest.mark.parametrize("engine", ["rg", "python"])
 @pytest.mark.parametrize("use_git", [True, False])
 def test_search_respects_gitignore(ak, repo, engine, use_git):
+    import shutil
+    if engine == "rg" and not shutil.which("rg"):
+        pytest.skip("ripgrep not installed")
     _search_fixture(repo)
     if use_git:
         git(repo, "init", "-q")
