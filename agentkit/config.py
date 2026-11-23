@@ -31,7 +31,10 @@ run_filters = true     # command-aware filters for `run` output (raw: agentkit l
 dedup = true           # worker: identical tool results -> same_as_turn reference
 aging = true           # worker: tool results older than the last 2 turns -> one-line summaries
 age_min_chars = 4000   # age in batches of at least this much old text (keeps the cached prefix stable longer)
-style = "terse"        # worker output style ("terse" | "normal")
+style = "auto"         # worker terse-style note: auto (big repo -> in the prompt from round 1; else appended
+                       # once when the transcript grows) | terse (always) | normal (never)
+style_min_files = 40   # auto: tracked files that count as a big repo
+style_after_chars = 4000  # auto: transcript size (beyond system + task) that triggers the appended note
 """
 
 

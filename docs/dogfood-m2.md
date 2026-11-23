@@ -115,3 +115,64 @@ agentkit logs t95aeaf --tail 12
 
 ### 6.3 C-08 数字
 见 `docs/STATUS.md`「C-08 实测」：冗长日志 C-08 后显示 token 省 32–92%（pytest 300 警告 81%、npm 77%、cargo / jest 92%），git diff 1%、git status 0%；离线评测工人 token 多文件题 −11.6%、小题 +5.7%、合计 −1.4%；主管 token 不变。
+
+## 7. 第 3 家（NVIDIA NIM）+ 真实压缩 A/B + 续跑（2026-11-23 晚）
+
+所有数字都是**真实模型**（标注「离线」的除外）；每格只跑 1 次，轮数差 1–3 轮就能左右 token，噪声大。Key 全部由沙箱代理在网络层注入，命令里只有占位值。
+
+### 7.1 C-08 跟进：小任务的风格说明开销（离线，24 题脚本化假模型）
+
+| | 压缩关 | 改前（风格说明恒在） | 改后（`style = "auto"`） |
+|---|---|---|---|
+| 小题 21 道 工人 token | 120,445 | 127,301（+5.7%） | **120,445（0.0%）** |
+| 多文件 3 道 工人 token | 84,508 | 74,677（−11.6%） | **74,041（−12.4%）** |
+| 合计 | 204,953 | 201,978（−1.4%） | **194,486（−5.1%）** |
+| 主管 token 小题 / 多文件 | 3,226 / 552 | 3,226 / 553 | 3,226 / 553 |
+
+小题转录最长 1,704 字符，从不触发（阈值 4,000）；多文件题在第 4–6 轮追加说明。
+
+### 7.2 NVIDIA NIM（`nvidia/nemotron-3.5-lightning-30b-a3b`，`--preset nvidia`：rpm 30、max_wait 65、max_tokens 8192，`max_rounds=20`）
+
+`/v1/models` 33 个模型；带 tools 的探测：nemotron-3.5-lightning（0.5 s）、minimax-m3.1-flash（21 s）、kimi-k3.1-pro（48 s）都返回正确的 `tool_calls`（content 为空、思考在 `reasoning_content`）；glm-5.3-flash 90 s 超时。`model test` 对推理模型返回 `reasoning_only: true, finish_reason: length`（16 token 预算全用在思考上，接口正常）。
+
+| 题 | 压缩 | 结果 | 轮数 | 工人 token（入 / 出） | 主管 token | 用时 |
+|---|---|---|---|---|---|---|
+| ev-shop | 开 | pass | 15 | 56,601（53,285 / 3,316） | 185 | 49 s |
+| ev-shop | 关 | pass | 13 | 61,595（59,200 / 2,395） | 185 | 38 s |
+| ev-csv | 开 | pass | 9 | 26,741（24,925 / 1,816） | 181 | 21 s |
+| ev-csv | 关 | pass | 9 | 29,771（28,381 / 1,390） | 181 | 23 s |
+| ev-rename | 开 | pass | 16 | 63,731（60,958 / 2,773） | 185 | 44 s |
+| ev-rename | 关 | pass | 15 | 62,555（60,224 / 2,331） | 185 | 36 s |
+| **合计** | 开 / 关 | 6/6 | 40 / 37 | **147,073 / 153,921（−4.4%）** | 551 / 551 | |
+
+每轮输入 token：开 3,552 / 2,769 / 3,810，关 4,554 / 3,153 / 4,015（−22% / −12% / −5%）；但开压缩多用了 3 轮（老化后模型偶尔重读），输出 token 反而多（推理 token 为主，简洁风格管不到思考）。
+
+### 7.3 Gemini（免费档）
+
+- 16:4x 调用 1 次成功（配额已重置）。`gemini-3-flash-preview` A/B：3 题 × 2 档同时开跑，**每分钟限额**立即 429（Retry-After 50–56 s > 原 30 s 上限）→ 5 个任务第 1 轮暂停，只有 ev-shop（开）跑了 8 轮（验收 pass，finish 前被 429 暂停）。→ 发现：免费档每分钟限额的 Retry-After 稍超 30 s，原实现只能暂停；新增 `max_wait`（预设 65 s）与 `rpm` 节流。
+- **续跑**：给暂停的任务配 `max_wait = 65` 后逐个 `task resume`：ev-csv（开）续跑 14 轮 → **pass**（15 轮、35,914 token，压缩 aged 3、风格说明第 6 轮），随后 `gemini-3-flash-preview` **日配额** 429（Retry-After 83,458 s）→ 按要求停止，其余 5 个保持 paused（可续跑；ev-shop（开）验收已 pass）。
+- 改用 `gemini-3.5-flash-lite`（`max_wait 65`；第二批再加 `rpm 5`）：
+
+| 题 | 压缩 | 结果 | 轮数 | 工人 token | 备注 |
+|---|---|---|---|---|---|
+| ev-shop | 开 | pass | 10 | 24,422 | 一次跑完 |
+| ev-shop | 关 | pass | 8 + 11 | 17,874 + 41,438 = 59,312 | 第 8 轮 429 暂停 → `task resume` 后 pass（续跑重新探索，不可直接对比） |
+| ev-csv | 开 | pass | 14 | 35,568 | rpm 5，无 429 |
+| ev-csv | 关 | pass | 14 | 57,244 | 同上 |
+| ev-rename | 开 | pass | 16 | 38,037 | 同上 |
+| ev-rename | 关 | pass | 13 | 36,126 | 同上 |
+
+可直接对比的两题（ev-csv + ev-rename，同轮数上限、都无中断）：开 73,605 vs 关 93,370（**−21.2%**）；ev-rename 开压缩多 3 轮，反而 +5.3%。
+
+### 7.4 dogfood（NVIDIA，本仓库副本，给 `fsutil.py` 加 `human_bytes()` + 测试，`max_rounds=12`）
+
+1. 第一次：10 轮全在探索（repo_map、分段 read 200 行的 fsutil.py、glob、search），**被判「卡住：10 轮无新 diff」→ failed（不可续跑）**。→ 修复：首次改动之前，本轮拿到新结果（之前没见过的读取范围 / 搜索）的探索轮不计入卡住；重复同样的调用仍计入；`max_rounds` 仍封顶。回归测试 `test_exploring_before_first_edit_is_not_stuck`（旧代码失败）。
+2. 修复后第二次：12 轮用满 → `stopped: rounds`（可续跑），实现正确、检查通过（59,729 token，31 s）；验收器给 needs_review：`check_script_modified`（目标要求新建测试文件，预期）+ `hardcoded_return_suspect`（`if n == 0: return "0 B"`，启发式**误报**，已知取舍：只降级不判失败）。对比下午 OpenRouter 同族模型：12 轮 7/8 测试、102,578 token。
+
+### 7.5 本轮发现并修复
+1. 小任务付风格说明开销（C-08 跟进，见 7.1）。
+2. 免费档每分钟限额 Retry-After 50–56 s 超过固定 30 s 上限 → 任务总在暂停：`max_wait` / `rpm`（7.3）。
+3. 推理模型：`finish_reason=length` 且只有 `reasoning_content` 时原来报「no tool call」→ 现在明确说「输出 token 上限截断」；`reasoning_content` 从不回传（测试断言）；`model test` 显示 `reasoning_only`。
+4. HTTP 504 原归为本地超时 → 归为上游不可用（重试 2 次后暂停，可续跑），状态码与 200 body 两种都覆盖。
+5. 卡住检测误判探索（7.4）。
+
