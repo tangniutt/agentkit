@@ -16,6 +16,11 @@ python3 -m venv ~/.agentkit-venv && ~/.agentkit-venv/bin/pip install git+https:/
 agentkit doctor            # healthy:true = ready. version, git, write permission, disk, tree-sitter, models (--online calls each model once)
 agentkit uninstall         # prints what would be removed; agentkit uninstall --yes removes package, config, .agentkit/ state and worktrees (never your code or git history)
 
+## Operating manual (for a supervising AI; generated from the CLI, cannot drift)
+agentkit manual                 # quick start, direct vs delegate, safety rules, error recovery, command index (~1.7k tokens)
+agentkit manual task create     # one command or group: args (type/default), output keys, error codes, side effects, example
+agentkit manual --all --budget 4500   # everything (~3.7k tokens); Markdown copy: docs/agent-manual.md
+
 ## Direct mode workflow (you write the code)
 agentkit memory brief                      # AGENTS.md head + pinned project memories (≤500 tokens)
 agentkit repo_map                          # dirs + top symbols (Python/JS/TS/Go/Rust/Java...)

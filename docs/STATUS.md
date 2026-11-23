@@ -1,13 +1,13 @@
 # 进度
 
-更新：2026-11-23（M2 补完 + C-08 上下文压缩 + OpenRouter 实测）
+更新：2026-11-23（M2 补完 + C-08 上下文压缩 + OpenRouter 实测 + C-09 主管操作手册）
 
 | 阶段 | 状态 |
 |---|---|
-| M0 调研 + 需求基线 | 完成（基线冻结，变更 C-01 至 C-08 已登记） |
+| M0 调研 + 需求基线 | 完成（基线冻结，变更 C-01 至 C-09 已登记） |
 | 阶段二 接口契约 | 与 M1 合并完成：CLI 输出 schema 即契约（`{ok,data,error{what,why,next,code,run},truncated,next}`；C-03 增加 code、run） |
 | M1 Python 原型（直接模式工具集） | **完成**（见下表；偏差见「M1 未完成/偏差」） |
-| M2 工人 + 派活 + 验收器 | **完成**（含 C-03 / C-04；补完 C-05 续跑、C-06 输出瘦身 + 多文件评测、C-07 llms.txt 安装修正、C-08 上下文压缩、uninstall、日志 7 天清理；真实模型实测 2 家（Gemini、OpenRouter），评测仍是小样本，见「M2 未完成/偏差」） |
+| M2 工人 + 派活 + 验收器 | **完成**（含 C-03 / C-04；补完 C-05 续跑、C-06 输出瘦身 + 多文件评测、C-07 llms.txt 安装修正、C-08 上下文压缩、C-09 主管操作手册、uninstall、日志 7 天清理；真实模型实测 2 家（Gemini、OpenRouter），评测仍是小样本，见「M2 未完成/偏差」） |
 | M3 防作弊与安全 | 部分提前完成（M-15 基础规则 + 14 例作弊库 100% 检出、M-17 Key 引用与扫描测试）；沙箱仍在 V1.1 |
 | M4 Rust/Go 正式版 | 未开始 |
 | M5 评测与发布 | 未开始 |
@@ -36,7 +36,10 @@
 | OpenRouter 适配 | 完成；2026-11-23 真实调用：1 个 dogfood + 3 道多文件题（见下「OpenRouter 实测」） | 自动带 `HTTP-Referer` / `X-Title`；HTTP 200 里的 `error`（顶层或 choice 上 `finish_reason:error`）按 code 映射（401/403 → auth 不重试，429 → rate_limited，5xx / 无 code → 暂时不可用重试，402 → http）；429 读 `X-RateLimit-Reset`（毫秒时间戳，也从 body metadata 读）；`model add` 对无单价的非 `:free` OpenRouter 模型给警告；`eval.run --real` 拒绝非 `:free` 的 OpenRouter 模型（`--allow-paid` 才放行） | `test_m2_models.py` 新增 3 个 |
 
 | C-08 上下文压缩 | 完成 | ① `agentkit/compress.py` + `agentkit/filters/*.json`（15 个过滤器：pytest、unittest、jest/vitest、go test、cargo test、tsc、eslint、ruff、mypy、pip/uv、npm/pnpm/yarn install、git status/diff/log、generic），过滤器是数据，每个带内联样例（`verify_filters()` 是校验门）；按命令（拆 `&&`/`;`/`|`、去 `cd`/`FOO=1`/`uv run`/`npx` 前缀）再按输出特征选择；去 ANSI、`\r` 重绘、进度条，警告与重复行带 `[×N]` 计数折叠，相似行分组，头 / 尾 + 中间所有受保护行；含 error/fail/assert/traceback/panic/ERR! 等的行**永不删**；diff 先给「N files: 路径 (+a -b)」一行并按文件封顶、头部优先显示。`run` 输出带 `filtered:{filter,lines,raw}`，`run --raw` / `[compress] run_filters=false` 关闭；验收的 `why` 取摘要 / 诊断行（`best_why`）。② `agentkit/context.py` 会话去重：内容哈希（去掉耗时、日志名）相同的 read/search/ls/glob/repo_map/run/memory 结果 → `{"same_as_turn":N}`。③ 渐进老化：最近 2 轮原样，更早的工具结果变一行 `[aged]` 摘要（read：路径 + 行号 + sha；run：命令 + exit + 摘要行；search：命中文件），旧 create/edit 参数缩成合法 JSON；只改内容不删消息，tool_call/结果配对不变；攒够 `age_min_chars`（默认 4000）才批量老化；被引用的原文先挪进最近窗口。原 70% 折叠保留为兜底。④ 工人系统提示加简洁风格（约 70 token）+ 「命令在 worktree 根目录跑、别 cd 绝对路径」（dogfood 发现）。⑤ 稳定前缀：messages[0]（系统 + 记忆摘要）、messages[1]（任务）、工具定义从不改写。⑥ `validate`：代码块、受保护行及其上的路径 / URL / 版本号必须原样保留，否则退回原文；原文始终在 `.agentkit/logs`（写入时脱敏），`agentkit logs RUN --raw` 查看。⑦ `eval/compress_bench.py` + `eval/fixtures/logs/`（真实抓取的 npm / pip / git diff / git log / git status / pytest -v） | `test_compress.py`（17 个：所有过滤器样例、严重行在每个过滤器随机噪声下都保留、校验器拒绝 + 退回、小输出不动、run 过滤 + `logs --raw` 找回原文 + 两种关闭方式、坏 id 拒绝、验收 why、去重 + 老化配对与前缀、批量老化、工人端到端逐次请求前缀字节相同、关闭开关、diff 文件列表在前、基准不让任何关键行消失） |
-测试：`pytest -q` **189 个全绿**（M1 的 107 + M2 65 + C-08 17）；CI（Python 3.10 / 3.12）通过（ec5c3f7，run 45104300124）。Dogfood：`docs/dogfood-m2.md`（离线派活通过；真实 Gemini 任务暴露并修复了 503 处理 bug）。
+| C-09 主管操作手册 | 完成 | `agentkit/manual.py` + `agentkit manual`：默认 JSON 总览（快速上手流程、直接 / 派活模式取舍与实测 token、预算与安全规则、15 个常见错误码的修复（取自 `events.ERRORS`）、C-08 压缩说明、39 个命令一行索引带副作用标记）；`agentkit manual <命令或组>` 单命令详情（参数类型 / 默认值 / 说明从 `cli.build_parser()` 实时读取，输出字段、错误码、副作用、示例来自 SPEC）；`--all`（超出 `--budget` 时给 `next`）；`--human` / `--format md` 输出 Markdown；`docs/agent-manual.md` 为生成产物；`cli.py` 给 task create / verify / run / logs / feedback / edit 等补了参数说明（手册和 `--help` 同时受益）。大小（字符 / 4）：总览 ≈1.7k token（默认 2000 预算内），全部 ≈3.7k，单命令 88–365（平均 ≈150），task 组 ≈840 | `test_manual.py`（57 个：覆盖每个注册命令且新增命令缺条目即失败、39 个示例逐个解析回自己的命令、错误码在登记表与 docs/errors.md、副作用标记、参数来自解析器、JSON 合法与预算、`--all` 翻页、单命令大小、文档无漂移、`--human`、入口文档链接、无密钥样式字符串） |
+| C-08 修正 | 完成 | 做 C-09 时全量测试发现 `test_worker_compression_end_to_end_stable_prefix` 偶发失败（基线代码上 3/14）：`TranscriptCompressor._window_start` 在助手轮数 ≤ `keep_turns` 时把全部历史当作「旧」，`age_min_chars` 较小时工人刚读的文件在下一轮就被老化，测试只靠两次 pytest 打印相同耗时才通过。改为此时不老化任何内容；默认 `age_min_chars=4000` 下离线评测数字不变（小题 127,303 → 127,301、多文件 74,680 → 74,677 工人 token） | `test_recent_turns_never_aged_early`（旧代码失败、新代码通过）；端到端测试 8/8 稳定通过 |
+
+测试：`pytest -q` **247 个全绿**（M1 的 107 + M2 65 + C-08 18 + C-09 57）；CI 见下行。上一次 CI（Python 3.10 / 3.12）通过：ec5c3f7，run 45104300124。Dogfood：`docs/dogfood-m2.md`（离线派活通过；真实 Gemini 任务暴露并修复了 503 处理 bug）。
 
 ## C-08 实测（2026-11-23，诚实记录，含接近 0 的情况）
 

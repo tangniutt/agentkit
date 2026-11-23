@@ -33,7 +33,7 @@ pip install git+https://github.com/tangniutt/agentkit    # Python 3.10+，无需
 agentkit doctor                                          # 自检：版本、git、写权限、磁盘、tree-sitter、模型配置
 ```
 
-AI 读 [`llms.txt`](llms.txt) 即可上手。所有命令默认输出一行紧凑 JSON：
+AI 读 [`llms.txt`](llms.txt) 即可上手；管理 AgentKit 的主管 AI 用 `agentkit manual`（总览）/ `agentkit manual <命令>`（详情），Markdown 版见 [`docs/agent-manual.md`](docs/agent-manual.md)。所有命令默认输出一行紧凑 JSON：
 
 ```json
 {"ok":true,"data":{...},"error":null,"truncated":false,"next":null}
@@ -63,6 +63,7 @@ AI 读 [`llms.txt`](llms.txt) 即可上手。所有命令默认输出一行紧�
 | `agentkit uninstall [--yes] [--this-repo] [--delete-branches]` | 卸载：不带 `--yes` 只列出将删除的内容；删除包、`~/.config/agentkit`、`~/.local/share/agentkit`、各仓库 `.agentkit/` 与 worktree；**不动你的代码和 git 历史**（任务分支默认保留，git 已跟踪的共享记忆保留） |
 | `agentkit logs <id> [--errors]` / `agentkit debug-bundle <id>` | 定位失败：结构化事件（哪一步、哪个组件、错误码）；脱敏归档用于报 Bug（错误码见 [docs/errors.md](docs/errors.md)） |
 | `agentkit feedback --bug <id> \| --idea "..."` | 生成脱敏的 Issue 草稿和预填链接，**从不自动提交** |
+| `agentkit manual [命令] [--all] [--format md]` | 主管 AI 操作手册（C-09）：快速上手、直接 / 派活模式取舍、安全规则、错误恢复、每个命令的参数 / 输出 / 错误码 / 副作用 / 示例；由 CLI 定义自动生成，见 [docs/agent-manual.md](docs/agent-manual.md) |
 
 安全默认：`run`/`verify` 拒绝 `git push`、`git commit`、`sudo`、`rm -rf /`/`~`、`curl | sh`、读取 `~/.ssh` 和 `.env`；可在 `.agentkit/config.toml` 的 `[run] allow/deny` 调整。所有输出与日志自动脱敏（`sk-...`、`ghp_...`、`AKIA...` 等）。
 

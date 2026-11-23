@@ -107,6 +107,17 @@ Qoder 记忆系统闭源，但其文档和技术博客公开了设计；jcode �
 | 简洁输出风格 | OmniRoute `outputMode.ts` / `outputStyles`（caveman） | `open-sse/services/compression/outputMode.ts` | `worker.STYLE_TERSE` |
 | 缓存友好的稳定前缀（system + 工具定义 + 记忆摘要字节不变） | OmniRoute `prefixFreeze.ts` | 同名文件 | 老化从第 3 条消息开始；测试逐次请求比对前缀 |
 
+### F. 主管 AI 操作手册（变更 C-09）
+
+只借思路，没有复制任何第三方代码（NOTICE 不变）。
+
+| 功能 | 借鉴 | 说明 | 实现 |
+|---|---|---|---|
+| 给 AI 读的入口文档 | llms.txt 约定（llmstxt.org，Answer.AI 提出） | 一个短小、Markdown、给大模型读的入口文件，链接到更详细的文档；本项目 llms.txt 已沿用，C-09 在其中链接手册 | `llms.txt`「Operating manual」一节 |
+| 机器可读的命令自描述、从真实命令定义生成 | GitHub CLI `gh`（MIT）：`gh help reference` 由命令树生成完整参考；`--json` 不带字段时列出可用字段 | 文档从代码生成而不是手抄，所以不会漂移；输出字段可被发现 | `manual.walk()` 遍历 `cli.build_parser()`；`agentkit manual --format md` |
+| 按需取单个对象的说明，避免一次读全部 | Kubernetes `kubectl explain <resource>[.field]`（Apache-2.0） | 主管只取它要用的命令详情，省 token | `agentkit manual <命令>`（单命令约 90–370 token） |
+| 错误码 → 修复动作 | 本项目 C-03 错误码登记表 | 手册的「错误恢复」直接读 `events.ERRORS`，不另写一份 | `manual.recover()` |
+
 ## 三、开工克隆清单（已克隆到开发环境）
 
 jcode、mini-swe-agent、SWE-agent、Aider、XERJ、Grok Workhorse、worker-bridge、LooppooL 、OmniRoute（C-08）已浅克隆（只取最新版本），仅供阅读参考，不提交到本仓库。M1 原型以 mini-swe-agent 的循环 + SWE-agent 的工具 + Aider 的仓库地图为骨架；M4 正式版参考 jcode 的 Rust 架构。

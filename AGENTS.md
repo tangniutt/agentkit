@@ -13,6 +13,10 @@ AgentKit：给 AI Agent 用的轻量编程工具。三种模式：直接模式�
 5. `docs/process.md` — 开发流程规矩
 6. `docs/prd-v0.2.md` — 完整需求（v0.1 仅存档）
 
+## 主管 AI 操作手册（C-09）
+- `agentkit manual`（总览 ≈1.7k token）/ `agentkit manual <命令>`（单个命令详情）/ `agentkit manual --all --budget 4500`（全部）；Markdown 版 `docs/agent-manual.md`。
+- 手册由 `agentkit/cli.py` 的真实参数定义 + `agentkit/manual.py` 的 SPEC + 错误码登记表生成。**新增或修改命令时必须同步 SPEC 并重新生成**：`agentkit manual --format md > docs/agent-manual.md`（`tests/test_manual.py` 检查覆盖、示例可解析、错误码存在、文档无漂移、大小）。
+
 ## 硬规矩
 - **范围冻结**：只做基线里的 Must。新想法写进基线第 9 节「变更登记」，不要直接实现。
 - **先读参考再写**：模块开工前读 feature-sources.md 指定的参考实现（clone 到仓库外，不要提交第三方仓库）。

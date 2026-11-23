@@ -62,10 +62,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     e = sub.add_parser("edit", help="replace a unique snippet")
     e.add_argument("path")
-    e.add_argument("--old")
-    e.add_argument("--new")
-    e.add_argument("--old-file")
-    e.add_argument("--new-file")
+    e.add_argument("--old", help="exact text to replace (must match once unless --all)")
+    e.add_argument("--new", help="replacement text")
+    e.add_argument("--old-file", help="read --old from this file")
+    e.add_argument("--new-file", help="read --new from this file")
     e.add_argument("--stdin", action="store_true", help='read {"old":..,"new":..} JSON from stdin')
     e.add_argument("--all", action="store_true", help="replace every occurrence")
     e.add_argument("--dry-run", action="store_true")
@@ -92,8 +92,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     ru = sub.add_parser("run", help="run a shell command with timeout + budgeted output")
     ru.add_argument("command")
-    ru.add_argument("--timeout", type=float)
-    ru.add_argument("--cwd")
+    ru.add_argument("--timeout", type=float, help="seconds (default [run] timeout in config)")
+    ru.add_argument("--cwd", help="working directory inside the repo")
     ru.add_argument("--raw", action="store_true", help="no command-aware output filter (C-08)")
 
     cp = sub.add_parser("checkpoint", help="snapshots: list | diff ID | rollback ID | create FILE..")
@@ -110,9 +110,9 @@ def build_parser() -> argparse.ArgumentParser:
     cpc.add_argument("--reason")
 
     v = sub.add_parser("verify", help="run checks in a clean worktree/copy, ≤300-token report")
-    v.add_argument("--check", action="append", default=[])
-    v.add_argument("--timeout", type=float)
-    v.add_argument("--base", default="HEAD")
+    v.add_argument("--check", action="append", default=[], help="check command, e.g. 'pytest -q'")
+    v.add_argument("--timeout", type=float, help="seconds per check")
+    v.add_argument("--base", default="HEAD", help="git ref the clean worktree starts from")
 
     mem = sub.add_parser("memory", help="project memory: add|list|search|show|forget|brief")
     ms = mem.add_subparsers(dest="mem_cmd", parser_class=_Parser)
@@ -161,21 +161,21 @@ def build_parser() -> argparse.ArgumentParser:
     t = sub.add_parser("task", help="dispatch to a worker: create|status|wait|report|resume|cancel|clean")
     ts = t.add_subparsers(dest="task_cmd", parser_class=_Parser)
     tc = ts.add_parser("create")
-    tc.add_argument("goal", nargs="?")
-    tc.add_argument("--goal", dest="goal_opt")
-    tc.add_argument("--check", action="append", default=[])
-    tc.add_argument("--allow", action="append", default=[], help="glob/dir the worker may change (repeatable)")
-    tc.add_argument("--budget-tokens", type=int)
-    tc.add_argument("--budget-usd", type=float)
-    tc.add_argument("--budget-minutes", type=float)
-    tc.add_argument("--tier")
-    tc.add_argument("--model")
+    tc.add_argument("goal", nargs="?", help="what the worker must achieve")
+    tc.add_argument("--goal", dest="goal_opt", help="same as the positional goal")
+    tc.add_argument("--check", action="append", default=[], help="acceptance command run by the verifier, e.g. 'pytest -q'")
+    tc.add_argument("--allow", action="append", default=[], help="glob/dir the worker may change")
+    tc.add_argument("--budget-tokens", type=int, help="stop after this many worker tokens")
+    tc.add_argument("--budget-usd", type=float, help="stop after this many USD (needs model prices)")
+    tc.add_argument("--budget-minutes", type=float, help="stop after this many minutes")
+    tc.add_argument("--tier", help="low|mid|high: pick a model by tier")
+    tc.add_argument("--model", help="configured model NAME")
     for name in ("status", "report", "cancel"):
         x = ts.add_parser(name)
         x.add_argument("ids", nargs="*")
     tw = ts.add_parser("wait")
     tw.add_argument("ids", nargs="*")
-    tw.add_argument("--timeout", type=float, default=300)
+    tw.add_argument("--timeout", type=float, default=300, help="seconds to wait")
     tw.add_argument("--no-report", action="store_true", help="one finished task: status only, no inline report")
     trs = ts.add_parser("resume", help="continue a paused/interrupted/stopped task in its worktree (compacted transcript)")
     trs.add_argument("ids", nargs="*")
@@ -184,21 +184,21 @@ def build_parser() -> argparse.ArgumentParser:
     trs.add_argument("--budget-minutes", type=float, help="time budget for this resumed run")
     tcl = ts.add_parser("clean")
     tcl.add_argument("ids", nargs="*")
-    tcl.add_argument("--all", action="store_true")
-    tcl.add_argument("--keep-branch", action="store_true")
+    tcl.add_argument("--all", action="store_true", help="every finished task")
+    tcl.add_argument("--keep-branch", action="store_true", help="keep agentkit/<id> branches")
 
     lg = sub.add_parser("logs", help="structured event log of a run / task: logs ID [--errors] [--tail N]")
     lg.add_argument("id")
-    lg.add_argument("--errors", action="store_true")
-    lg.add_argument("--tail", type=int)
+    lg.add_argument("--errors", action="store_true", help="only events with an error code")
+    lg.add_argument("--tail", type=int, help="last N events")
     lg.add_argument("--raw", action="store_true", help="raw (redacted) stdout/stderr of a run log id (run-...)")
     db = sub.add_parser("debug-bundle", help="redacted .tar.gz (config sans keys, versions, events, report) for bug reports")
     db.add_argument("id")
     db.add_argument("--with-transcript", action="store_true", help="include the worker transcript (may contain code)")
     fb = sub.add_parser("feedback", help="draft a GitHub issue (never posts): --bug RUN_ID | --idea TEXT")
     fbg = fb.add_mutually_exclusive_group(required=True)
-    fbg.add_argument("--bug")
-    fbg.add_argument("--idea")
+    fbg.add_argument("--bug", help="run or task id of the failure")
+    fbg.add_argument("--idea", help="feature request text")
 
     un = sub.add_parser("uninstall", help="remove agentkit: package, ~/.config + ~/.local/share/agentkit, .agentkit/ + worktrees "
                                         "in every repo it used (dry run unless --yes; never touches your code or git history)")
@@ -206,6 +206,11 @@ def build_parser() -> argparse.ArgumentParser:
     un.add_argument("--this-repo", action="store_true", help="only this repo's .agentkit/ and worktrees; keep package + user config")
     un.add_argument("--keep-package", action="store_true", help="do not pip uninstall the package")
     un.add_argument("--delete-branches", action="store_true", help="also delete agentkit/<task> branches")
+
+    mn = sub.add_parser("manual", help="operating manual for the supervising AI: overview | <command> detail | --all (C-09)")
+    mn.add_argument("words", nargs="*", help="a command or group, e.g. task create")
+    mn.add_argument("--all", action="store_true", help="every command in full (≈4k tokens; may need --budget)")
+    mn.add_argument("--format", choices=["json", "md"], default="json", help="md prints Markdown text (docs/agent-manual.md)")
 
     tr = sub.add_parser("_task-run", help=argparse.SUPPRESS)
     tr.add_argument("id")
@@ -223,7 +228,14 @@ def _handlers():
         "verify": verify.cmd_verify, "memory": memory.cmd_memory, "doctor": doctor.cmd_doctor,
         "task": _task, "model": _model, "_task-run": _task_run,
         "logs": _diag("cmd_logs"), "uninstall": _uninstall, "debug-bundle": _diag("cmd_debug_bundle"), "feedback": _diag("cmd_feedback"),
+        "manual": _manual,
     }
+
+
+def _manual(ctx, a):
+    from . import manual
+
+    return manual.cmd_manual(ctx, a)
 
 
 def _diag(name):
@@ -340,7 +352,8 @@ def run_cli(argv: list) -> tuple[dict, int, bool]:
         if not rest or rest[0] in ("-h", "--help", "help"):
             cmds = sorted(k for k in _handlers() if k not in ("repo-map", "map", "_task-run"))
             return envelope(True, {"usage": "agentkit <command> [args] [--budget N] [--human]",
-                                   "commands": cmds, "help": "agentkit <command> --help", "docs": "llms.txt"}), 0, human
+                                   "commands": cmds, "help": "agentkit <command> --help",
+                                   "manual": "agentkit manual [command]", "docs": "llms.txt"}), 0, human
         if rest == ["--version"]:
             return envelope(True, {"version": __version__}), 0, human
         # argparse --help on subcommands prints text; turn into JSON
@@ -356,6 +369,12 @@ def run_cli(argv: list) -> tuple[dict, int, bool]:
             a.cp_cmd, a.offset = "list", 0
         if a.cmd == "memory" and not a.mem_cmd:
             a.mem_cmd = "brief"
+        if a.cmd == "manual" and (a.format == "md" or human):
+            # C-09: Markdown / --human text, generated from the same source as the JSON manual
+            from . import manual
+
+            return {"_text": manual.markdown(words=a.words or None) if (a.words or a.all or a.format == "md")
+                    else manual.markdown_overview()}, 0, human
         res: Result = _handlers()[a.cmd](ctx, a)
         env = envelope(True, res.data, None, res.truncated, res.next)
         if a.cmd not in ("logs", "_task-run", "feedback", "debug-bundle", "uninstall") and (ctx.root / ".agentkit").is_dir():
@@ -428,7 +447,10 @@ def _fin_noctx(env: dict) -> dict:
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     env, code, human = run_cli(argv)
-    sys.stdout.write((render_human(env) if human else dumps(env)) + "\n")
+    if "_text" in env:
+        sys.stdout.write(env["_text"])
+    else:
+        sys.stdout.write((render_human(env) if human else dumps(env)) + "\n")
     sys.stdout.flush()
     return code
 
