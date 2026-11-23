@@ -443,6 +443,8 @@ class Worker:
             return Outcome("failed", f"invalid or expired key: run `agentkit model test {self.spec.name}`", code=code)
         if e.kind == "rate_limited":
             ra = f", retry after {e.retry_after:g}s" if e.retry_after else ""
+            if e.capacity:  # busy model (concurrency 429) still busy after a few waits: resume later or switch model
+                return Outcome("paused", f"rate limited (429): model at capacity after retries{ra}", code=code)
             return Outcome("paused", f"rate limited (429){ra}", code=code)
         if e.kind in ("timeout", "network", "unavailable"):
             return Outcome("paused", f"model {e.kind} after retries: {str(e)[:120]}", code=code)

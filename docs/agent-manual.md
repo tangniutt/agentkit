@@ -6,7 +6,7 @@ AgentKit: token-frugal coding tools for AI agents + optional cheap worker with i
 
 Global options: --budget N (output tokens, default 2000), --human (text), --root DIR; anywhere on the line.
 
-JSON form: `agentkit manual` (overview, ~1693 tokens), `agentkit manual <command>` (one command), `agentkit manual --all` (everything, ~3737 tokens).
+JSON form: `agentkit manual` (overview, ~1693 tokens), `agentkit manual <command>` (one command), `agentkit manual --all` (everything, ~3766 tokens).
 
 ## Quick start (supervisor)
 
@@ -417,17 +417,18 @@ self check with fix hints
 
 ### `agentkit model add`
 
-register an OpenAI-compatible worker model (stores the key's env var NAME only)
+register an OpenAI-compatible worker model (stores the key's env var NAME only); --preset nvidia|gemini|openrouter|agnes|amd-cn fills base URL, key var, pacing
 
 | arg | type | default | notes |
 |---|---|---|---|
 | `name` | str |  |  |
-| `--preset` | str |  | provider defaults: nvidia \| gemini \| openrouter (explicit flags win) |
+| `--preset` | str |  | provider defaults: nvidia \| gemini \| openrouter \| agnes \| amd-cn (explicit flags win) |
 | `--base-url` | str |  | OpenAI-compatible base URL (required unless --preset) |
 | `--model` | str |  | provider model id (default: NAME) |
 | `--key-env` | str |  | NAME of the env var holding the key (never the key itself) |
 | `--context` | int |  | context window, tokens (default 32000 or preset) |
 | `--rpm` | float |  | max requests per minute this worker sends (free-tier pacing) |
+| `--rate-wait` | float |  | seconds to sit out a 429 that has no Retry-After, once per call (0 = pause the task at once) |
 | `--max-wait` | float |  | longest Retry-After (s) to sit out before pausing (default 30) |
 | `--max-tokens` | int |  | max_tokens per call (reasoning models need room) |
 | `--price-in` | float | `0.0` | USD per 1M input tokens |
@@ -458,7 +459,7 @@ one tiny chat call to a model
 | `name` | str |  | optional |
 | `--timeout` | float | `60` |  |
 
-- **Output `data`:** `model,ok,latency_s,reply,usage`
+- **Output `data`:** `model,ok,latency_s,reply,usage,reasoning_only?`
 - **Errors:** `AK-MODEL-NONE` (no worker model configured (direct mode)), `AK-MODEL-KEYENV` (the model's key environment variable is not set), `AK-MODEL-AUTH` (model rejected the key (401/403)), `AK-MODEL-429` (model rate limit / quota exhausted (429)), `AK-MODEL-TIMEOUT` (model did not answer after 2 retries), `AK-MODEL-NETWORK` (cannot reach the model endpoint), `AK-MODEL-UNAVAILABLE` (model endpoint overloaded / server error (500/502/503) after 2 retries), `AK-MODEL-HTTP` (model endpoint returned an HTTP error (e.g. 400/404 bad model id)), `AK-MODEL-BAD-RESPONSE` (model endpoint did not return an OpenAI chat completion)
 - **Side effects:** tokens, net
 - **Example:** `agentkit model test cheap`

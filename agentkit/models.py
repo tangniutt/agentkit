@@ -43,7 +43,21 @@ PRESETS = {
                "note": "Gemini OpenAI-compatible endpoint; free tier has low per-minute and per-day limits"},
     "openrouter": {"base_url": "https://openrouter.ai/api/v1", "key_env": "OPENROUTER_API_KEY", "context": 32000,
                    "max_wait": 65, "note": "use a ':free' model id or pass prices"},
+    # Agnes AI (international): flash models zero-priced as a vendor promotion; per-minute limits per account,
+    # unpublished -> conservative pacing. Pro models (agnes-2.5-pro-*, agnes-3.0-pro) may be paid: don't default to them.
+    "agnes": {"base_url": "https://apihub.agnes-ai.com/v1", "key_env": "AGNES_API_KEY", "context": 128000,
+              "rpm": 6, "max_wait": 65, "max_tokens": 8192, "rate_wait": 60,
+              "note": "Agnes AI: use a flash model (agnes-3.0-flash); flash is promotional zero price, per-minute limits unpublished"},
+    # AMD Radeon Cloud Token Factory (China site): daily points quota resets 00:00 Asia/Shanghai; typical ~20 RPM and
+    # 8 concurrent requests per key; busy models answer 429 model_concurrency_rate_limit_exceeded (retried, then pause).
+    "amd-cn": {"base_url": "https://developer.amd.com.cn/radeon/api/v1", "key_env": "AMD_CN_API_KEY", "context": 128000,
+               "rpm": 15, "max_wait": 65, "max_tokens": 8192,
+               "note": "AMD Token Factory (China): daily points reset 00:00 Beijing; ~20 RPM, 8 concurrent per key"},
 }
+
+# 429 codes that mean "this model is busy right now" (not "your quota is used up"): worth a few short waits.
+CAPACITY_CODES = ("model_concurrency_rate_limit_exceeded", "concurrency", "at capacity", "overloaded")
+CAPACITY_RETRIES = 3
 
 
 class ModelError(Exception):
@@ -52,6 +66,34 @@ class ModelError(Exception):
         self.kind = kind  # auth | rate_limited | timeout | network | unavailable | bad_response | http
         self.retry_after = retry_after
         self.status = status
+        self.capacity = False  # 429 because the model is busy (concurrency), not because a quota is used up
+
+
+def _capacity(code, msg: str) -> bool:
+    t = f"{code or ''} {msg or ''}".lower()
+    return any(c in t for c in CAPACITY_CODES)
+
+
+def error_obj(data) -> Optional[dict]:
+    """The provider's error object, wherever it nests: {"error": {...}} (OpenAI / OpenRouter) or
+    {"detail": {"error": {...}}} (AMD Token Factory, FastAPI style), or {"detail": "text"}."""
+    if not isinstance(data, dict):
+        return None
+    err = data.get("error")
+    det = data.get("detail")
+    if not err and isinstance(det, dict):
+        err = det.get("error") or (det if det.get("message") or det.get("code") else None)
+    elif not err and isinstance(det, str) and det:
+        err = {"message": det}
+    if err and not isinstance(err, dict):
+        err = {"message": str(err)}
+    return err or None
+
+
+def _rate_limited(msg: str, retry_after, code=None, text: str = "") -> ModelError:
+    e = ModelError("rate_limited", msg, retry_after, status=429)
+    e.capacity = _capacity(code, text or msg)
+    return e
 
 
 @dataclass
@@ -68,6 +110,8 @@ class ModelSpec:
     rpm: float = 0.0          # >0: space calls at least 60/rpm s apart (free-tier pacing)
     max_wait: float = RETRY_AFTER_CAP_S  # longest Retry-After sat out (once per call) before pausing
     max_tokens: int = 0       # >0: sent as max_tokens (reasoning models need room to think AND call a tool)
+    rate_wait: float = 0.0    # >0: a 429 WITHOUT Retry-After is sat out this long once (per-minute limits that
+                              # don't say when they reset, e.g. Agnes free tier); 0 = pause at once (old behaviour)
 
     def key(self) -> Optional[str]:
         if not self.key_env:
@@ -92,7 +136,7 @@ def all_models(cfg: dict) -> dict:
             price_in=float(m.get("price_in", 0)), price_out=float(m.get("price_out", 0)),
             tier=str(m.get("tier", "low")), timeout=float(m.get("timeout", 120)),
             rpm=float(m.get("rpm", 0) or 0), max_wait=float(m.get("max_wait", RETRY_AFTER_CAP_S)),
-            max_tokens=int(m.get("max_tokens", 0) or 0),
+            max_tokens=int(m.get("max_tokens", 0) or 0), rate_wait=float(m.get("rate_wait", 0) or 0),
         )
     return out
 
@@ -157,7 +201,7 @@ def _raise_body_error(data, raw: str) -> None:
     (finish_reason "error"). Map them like the equivalent HTTP status."""
     if not isinstance(data, dict):
         return
-    err = data.get("error")
+    err = error_obj(data)
     if not err:
         for ch in data.get("choices") or []:
             if isinstance(ch, dict) and (ch.get("error") or ch.get("finish_reason") == "error"):
@@ -167,19 +211,23 @@ def _raise_body_error(data, raw: str) -> None:
         return
     if not isinstance(err, dict):
         err = {"message": str(err)}
-    code = err.get("code")
+    code = raw_code = err.get("code")
     try:
         code = int(code)
     except (TypeError, ValueError):
         code = None
     msg = redact_text(str(err.get("message") or ""))[:200]
+    if code is None and (("rate_limit" in str(err.get("type") or "").lower())
+                         or (isinstance(raw_code, str) and ("rate_limit" in raw_code.lower() or _capacity(raw_code, "")))):
+        code = 429  # string codes (AMD: type rate_limit_error, code model_concurrency_rate_limit_exceeded)
     meta = err.get("metadata") or {}
     prov = meta.get("provider_name") if isinstance(meta, dict) else None
     where = f" [provider {prov}]" if prov else ""
     if code in (401, 403):
         raise ModelError("auth", f"{code} in body: {msg}{where}", status=code)
     if code == 429:
-        raise ModelError("rate_limited", f"429 in body: {msg}{where}", _retry_after({}, raw), status=429)
+        tag = f" [{raw_code}]" if isinstance(raw_code, str) and raw_code else ""
+        raise _rate_limited(f"429 in body: {msg}{tag}{where}", _retry_after({}, raw), raw_code, msg)
     if code == 408:
         raise ModelError("timeout", f"{code} in body: {msg}{where}", status=code)
     if code in (500, 502, 503, 504) or code is None:
@@ -192,8 +240,10 @@ def _raise_body_error(data, raw: str) -> None:
 class ChatClient:
     """Minimal OpenAI-compatible /chat/completions client (urllib only)."""
 
-    def __init__(self, spec: ModelSpec, retries: int = 2, backoff: float = 1.0, sleep=time.sleep):
+    def __init__(self, spec: ModelSpec, retries: int = 2, backoff: float = 1.0, sleep=time.sleep,
+                 capacity_retries: int = CAPACITY_RETRIES):
         self.spec = spec
+        self.capacity_retries = capacity_retries
         self.retries = retries
         self.backoff = backoff
         self.sleep = sleep
@@ -229,10 +279,17 @@ class ChatClient:
             except Exception:
                 pass
             short = redact_text(body)[:300]
+            try:
+                eo = error_obj(json.loads(body)) or {}
+            except ValueError:
+                eo = {}
+            if eo.get("message"):  # nested errors (detail.error) -> say the provider's words, not raw JSON
+                c = eo.get("code") or eo.get("type")
+                short = redact_text(str(eo.get("message")))[:240] + (f" [{c}]" if c else "")
             if e.code in (401, 403):
                 raise ModelError("auth", f"HTTP {e.code}: invalid or expired key ({short})", status=e.code)
             if e.code == 429:
-                raise ModelError("rate_limited", f"HTTP 429: {short}", _retry_after(e.headers, body), status=429)
+                raise _rate_limited(f"HTTP 429: {short}", _retry_after(e.headers, body), eo.get("code"), short)
             if e.code == 408:
                 raise ModelError("timeout", f"HTTP {e.code}", status=e.code)
             if e.code == 504:  # gateway timeout: the upstream model is slow / down, not our socket
@@ -271,6 +328,7 @@ class ChatClient:
         timeout = timeout or self.spec.timeout
         attempt = 0
         waited_429 = False
+        busy = 0
         while True:
             try:
                 self._pace()
@@ -280,16 +338,22 @@ class ChatClient:
                     self.sleep(self.backoff * (2 ** attempt))
                     attempt += 1
                     continue
-                if e.kind == "rate_limited" and not waited_429 and e.retry_after is not None and e.retry_after <= self.spec.max_wait:
-                    self.sleep(e.retry_after)
+                if e.kind == "rate_limited" and e.capacity and busy < self.capacity_retries:
+                    # model busy (concurrency 429, Retry-After ~1 s): a few growing waits, then pause the task
+                    self.sleep(min(self.spec.max_wait, max(e.retry_after or 0, 5.0 * (2 ** busy))))
+                    busy += 1
+                    continue
+                ra = e.retry_after if e.retry_after is not None else (self.spec.rate_wait or None)
+                if e.kind == "rate_limited" and not waited_429 and ra is not None and ra <= self.spec.max_wait:
+                    self.sleep(ra)
                     waited_429 = True
                     continue
                 raise
 
 
 def reasoning_text(msg: dict) -> str:
-    """Reasoning models (NVIDIA NIM nemotron, DeepSeek, ...) put their thinking in reasoning_content /
-    reasoning. It is never sent back to the model (the worker keeps only content / tool_calls)."""
+    """Reasoning models put their thinking in reasoning_content (NVIDIA NIM, DeepSeek, Agnes 2.5) or
+    reasoning (AMD Token Factory Qwen3.8). It is never sent back to the model (the worker keeps only content / tool_calls)."""
     return str(msg.get("reasoning_content") or msg.get("reasoning") or "")
 
 
@@ -334,7 +398,7 @@ def cmd_model(ctx: Ctx, a) -> Result:
         vals = {"base_url": base_url, "model": a.model or a.name, "key_env": a.key_env,
                 "context": a.context or pre.get("context", 32000),
                 "price_in": a.price_in, "price_out": a.price_out, "tier": a.tier}
-        for k in ("rpm", "max_wait", "max_tokens"):
+        for k in ("rpm", "max_wait", "max_tokens", "rate_wait"):
             v = getattr(a, k, None)
             v = v if v is not None else pre.get(k)
             if v is not None:
@@ -372,7 +436,7 @@ def cmd_model(ctx: Ctx, a) -> Result:
                           f"export {m.key_env}=... then agentkit model test {m.name}")
         t0 = time.monotonic()
         try:
-            cl = ChatClient(m, retries=0)
+            cl = ChatClient(m, retries=0, capacity_retries=0)
             resp = cl.chat([{"role": "user", "content": "Reply with the single word: ok"}], timeout=a.timeout, max_tokens=16)
         except ModelError as e:
             raise AKError(f"model test failed: {e.kind}", str(e)[:300],

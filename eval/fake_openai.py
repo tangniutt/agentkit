@@ -154,7 +154,7 @@ def _message(step: dict, idx: int) -> dict:
     if "call" not in step and "calls" not in step and ("text" in step or "reasoning" in step):
         msg = {"role": "assistant", "content": step.get("text")}
         if "reasoning" in step:  # reasoning model (NVIDIA NIM style): thinking outside content
-            msg["reasoning_content"] = step["reasoning"]
+            msg[step.get("reasoning_key", "reasoning_content")] = step["reasoning"]  # AMD Qwen3.8: "reasoning"
         return msg
     calls = step.get("calls") or [step]
     tcs = []
@@ -166,7 +166,7 @@ def _message(step: dict, idx: int) -> dict:
         tcs.append(tc)
     msg = {"role": "assistant", "content": step.get("text"), "tool_calls": tcs}
     if "reasoning" in step:
-        msg["reasoning_content"] = step["reasoning"]
+        msg[step.get("reasoning_key", "reasoning_content")] = step["reasoning"]
     if step.get("sig"):
         msg["extra_content"] = {"google": {"thought_signature": step["sig"]}}
     return msg

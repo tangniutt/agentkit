@@ -55,6 +55,27 @@ _SKIP_MARK = re.compile(
 )
 _HARDCODE_IF = re.compile(r"^\s*if\s*\(?\s*[\w.\[\]'\"]+\s*={2,3}\s*(-?\d[\w.]*|'[^']*'|\"[^\"]*\")")
 _RETURN_LIT = re.compile(r"\breturn\s+(-?\d[\w.]*|'[^']*'|\"[^\"]*\"|True|False|true|false)\s*;?\s*$")
+# `if n == 0: return "0 B"` is a base case, not a test-input special case: one comparison against a boundary
+# value whose returned literal is itself trivial or spelled out in the goal. Anything else stays suspect.
+_BOUNDARY = {"0", "0.0", "1", "-1", "''", '""'}
+_TRIVIAL_RET = _BOUNDARY | {"True", "False", "true", "false"}
+
+
+def _hardcode_suspect(line: str, nxt: str, goal: str) -> bool:
+    m = _HARDCODE_IF.search(line)
+    if not m:
+        return False
+    r = _RETURN_LIT.search(line) or _RETURN_LIT.search(nxt or "")
+    if not r:
+        return False
+    cond = line.split(":", 1)[0] if ":" in line else line
+    single = not re.search(r"\b(and|or)\b|&&|\|\|", cond)
+    if single and m.group(1) in _BOUNDARY:
+        ret = r.group(1)
+        lit = ret[1:-1] if ret[:1] in "'\"" else ret
+        if ret in _TRIVIAL_RET or (lit and lit in (goal or "")):
+            return False
+    return True
 
 
 # ---------------------------------------------------------------- store
@@ -572,7 +593,7 @@ def task_flags(root: Path, t: dict, wt: Path, changes: dict, checks: list, verdi
             skipped.append(p)
         if not is_test:
             for i, l in enumerate(added):
-                if _HARDCODE_IF.search(l) and (_RETURN_LIT.search(l) or (i + 1 < len(added) and _RETURN_LIT.search(added[i + 1]))):
+                if _hardcode_suspect(l, added[i + 1] if i + 1 < len(added) else "", t.get("goal") or ""):
                     hard.append(p)
                     break
     if skipped:

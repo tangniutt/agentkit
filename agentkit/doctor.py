@@ -68,7 +68,7 @@ def cmd_doctor(ctx: Ctx, a) -> Result:
         fix = f"export {m.key_env}=...  (the key is read from this variable; never put it in config)"
         if key_ok and getattr(a, "online", False):
             try:
-                ChatClient(m, retries=0).chat([{"role": "user", "content": "Reply: ok"}], timeout=30, max_tokens=8)
+                ChatClient(m, retries=0, capacity_retries=0).chat([{"role": "user", "content": "Reply: ok"}], timeout=30, max_tokens=8)
                 val += "; reachable"
             except ModelError as e:
                 key_ok, fix = False, f"agentkit model test {m.name}  ({e.kind})"
