@@ -67,6 +67,9 @@ def tool_schemas() -> list:
     return out
 
 
+STYLE_MIN_FILES = 40       # auto style: repos with at least this many tracked files get the note from round 1
+STYLE_AFTER_CHARS = 4000   # auto style: otherwise append it once the transcript beyond the prefix is this long
+
 STYLE_TERSE = """- Output style: terse; text between tool calls at most one short sentence. Keep code, paths, errors exact.
 - Tool results are compressed: old ones become one-line [aged] summaries, repeats say same_as_turn; run again
   if you need the text. `run` output is filtered; `filtered.raw` names the command that shows the raw log.
@@ -235,13 +238,23 @@ class Worker:
         self.cc = TranscriptCompressor(self.ccfg)
         on = bool(self.ccfg.get("enabled", True))
         self.run_filters = on and bool(self.ccfg.get("run_filters", True))
-        self.style = str(self.ccfg.get("style", "terse")) if on else "normal"
+        # C-08 follow-up: the terse-style note costs ~70 tokens on every request, which made tiny tasks
+        # +5.7% worker tokens offline. "auto" (default) puts it in the system prompt only for a big repo
+        # (decided once at start, so the prefix stays byte-stable), otherwise appends it once, as a user
+        # message at the end of the transcript, when the task turns out long (transcript beyond the prefix
+        # >= style_after_chars) or compression first rewrites a result. "terse" = always at start; "normal" = never.
+        self.style = str(self.ccfg.get("style", "auto")) if on else "normal"
+        if self.style not in ("auto", "terse", "normal"):
+            self.style = "auto"
+        self.style_min_files = int(self.ccfg.get("style_min_files", STYLE_MIN_FILES))
+        self.style_after_chars = int(self.ccfg.get("style_after_chars", STYLE_AFTER_CHARS))
+        self.style_at: Optional[str] = None  # "start" | "round N" | None (never sent)
 
     # ---------------------------------------------------------- helpers
     def stats(self) -> dict:
         return {"rounds": self.rounds, "tokens_in": self.tokens_in, "tokens_out": self.tokens_out,
                 "usd": round(self.usd, 6), "compactions": self.compactions, "repairs": self.repairs,
-                "compression": self.cc.stats()}
+                "compression": dict(self.cc.stats(), style=self.style_at or "off")}
 
     def _ev(self, event: str, component: str, duration=None, error_code=None, **extra):
         self.last_component, self.last_step = component, self.rounds
@@ -370,6 +383,32 @@ class Worker:
                     pass
         return _err(f"unknown tool {name}")
 
+    # ---------------------------------------------------------- style note (C-08 follow-up)
+    def _tracked_files(self) -> int:
+        try:
+            out = subprocess.run(["git", "-C", str(self.wt), "ls-files", "-z"], capture_output=True, timeout=60).stdout
+        except (OSError, subprocess.SubprocessError):
+            return 0
+        return sum(1 for e in out.split(b"\0") if e and not e.startswith(b".agentkit/"))
+
+    def _style_at_start(self) -> bool:
+        if self.style == "terse" or (self.style == "auto" and self._tracked_files() >= self.style_min_files):
+            self.style_at = "start"
+            return True
+        return False
+
+    def _maybe_late_style(self):
+        """Append the style note once (append-only: messages[0..1] and earlier turns stay byte-identical)."""
+        if self.style != "auto" or self.style_at or len(self.messages) < 3:
+            return
+        st = self.cc.stats()
+        tail = sum(len(str(m.get("content") or "")) + len(dumps(m.get("tool_calls") or [])) for m in self.messages[2:])
+        if tail < self.style_after_chars and not st.get("deduped") and not st.get("aged"):
+            return
+        self.style_at = f"round {self.rounds + 1}"
+        self._add({"role": "user", "content": "Note (this task is getting long):\n" + STYLE_TERSE})
+        self._ev("style_note", "worker", chars=tail)
+
     # ---------------------------------------------------------- compaction
     def maybe_compact(self):
         limit = int(self.spec.context * COMPACT_AT)
@@ -414,7 +453,7 @@ class Worker:
         t = self.task
         sysmsg = SYSTEM.format(goal=t["goal"], checks="\n".join(f"- {c}" for c in t.get("checks") or []) or "- (none given)",
                                allow=", ".join(t.get("allow") or []) or "(any)", brief=brief or "(none)",
-                               style=STYLE_TERSE if self.style == "terse" else "")
+                               style=STYLE_TERSE if self._style_at_start() else "")
         if resume:
             self._log({"role": "_resume", "content": f"resumed at round {self.rounds}"})
         self._add({"role": "system", "content": sysmsg})
@@ -433,6 +472,7 @@ class Worker:
             if self.rounds - self.start_round >= self.max_rounds:
                 return Outcome("stopped", f"max rounds ({self.max_rounds})", stopped="rounds")
             self.cc.age(self.messages)  # C-08 progressive aging (batched; never touches the prefix)
+            self._maybe_late_style()
             self.maybe_compact()
             if self.budget_tokens and self.tokens_in + self.tokens_out + self.est_tokens() > self.budget_tokens:
                 return Outcome("stopped", "token budget would be exceeded by the next call", stopped="budget")

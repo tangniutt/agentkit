@@ -212,7 +212,10 @@ def test_worker_compression_end_to_end_stable_prefix(ak, repo, fake):
     for b in bodies[1:]:
         assert json.dumps(b["messages"][:2]) == json.dumps(first["messages"][:2])
         assert json.dumps(b["tools"]) == json.dumps(first["tools"])
-    assert "Output style: terse" in first["messages"][0]["content"]
+    # small repo, style=auto: the note is not in the prefix; it is appended once, when compression kicks in
+    assert "Output style: terse" not in first["messages"][0]["content"]
+    notes = [i for i, m in enumerate(bodies[-1]["messages"]) if "Output style: terse" in str(m.get("content"))]
+    assert len(notes) == 1 and notes[0] >= 2 and bodies[-1]["messages"][notes[0]]["role"] == "user"
     last = bodies[-1]["messages"]
     assert any("same_as_turn" in str(m.get("content")) for m in last)
     assert any(str(m.get("content", "")).startswith(AGED) for m in last)
@@ -220,6 +223,74 @@ def test_worker_compression_end_to_end_stable_prefix(ak, repo, fake):
     assert ids == [m["tool_call_id"] for m in last if m["role"] == "tool"]
     st = tjson(repo, tid)["compression"]
     assert st["deduped"] >= 1 and st["aged"] >= 1 and st["saved_chars"] > 0, st
+    assert st["style"].startswith("round "), st
+
+
+def _style_hits(body) -> list:
+    return [i for i, m in enumerate(body["messages"]) if "Output style: terse" in str(m.get("content"))]
+
+
+def test_style_note_costs_tiny_tasks_nothing(ak, repo, fake):
+    """C-08 follow-up: the ~70-token style note made tiny tasks +5.7% worker tokens. With style=auto a short
+    task in a small repo never gets it (not in the prefix, never appended)."""
+    project(repo, ak, fake)
+    fake.add("[TINY]", [{"call": "read", "args": {"spec": "calc.py"}}] + FIX)
+    tid = create(ak, "fix add [TINY]")
+    assert wait(ak, tid)["verdict"] == "pass"
+    for r in fake.requests_for("[TINY]"):
+        assert _style_hits(r["body"]) == []
+    assert tjson(repo, tid)["compression"]["style"] == "off"
+
+
+def test_style_note_appended_once_when_transcript_grows(ak, repo, fake):
+    project(repo, ak, fake, cfg="\n[compress]\naging = false\ndedup = false\nstyle_after_chars = 1500\n")
+    (repo / "big.py").write_text("".join(f"VALUE_{i} = {i}  # filler line to make the file large\n" for i in range(120)))
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "big")
+    fake.add("[GROW]", [{"call": "read", "args": {"spec": "big.py:1-40"}}, {"call": "read", "args": {"spec": "big.py:41-80"}}] + FIX)
+    tid = create(ak, "fix add [GROW]")
+    assert wait(ak, tid)["verdict"] == "pass"
+    bodies = [r["body"] for r in fake.requests_for("[GROW]")]
+    assert _style_hits(bodies[0]) == []
+    hits = [_style_hits(b) for b in bodies]
+    k = next(i for i, h in enumerate(hits) if h)
+    at = hits[k][0]
+    for b in bodies[k:]:  # appended once, then carried unchanged at the same position (append-only)
+        assert _style_hits(b) == [at]
+        assert json.dumps(b["messages"][:at + 1]) == json.dumps(bodies[k]["messages"][:at + 1])
+    for b in bodies[1:]:
+        assert json.dumps(b["messages"][:2]) == json.dumps(bodies[0]["messages"][:2])
+    assert bodies[k]["messages"][-1]["role"] == "user"
+    assert tjson(repo, tid)["compression"]["style"] == f"round {k + 1}"
+
+
+def test_style_note_in_prefix_for_big_repo_or_when_forced(ak, repo, fake):
+    project(repo, ak, fake, cfg="\n[compress]\nstyle_min_files = 5\n")
+    for i in range(5):
+        (repo / f"mod{i}.py").write_text(f"X = {i}\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "more files")
+    fake.add("[BIGREPO]", [{"call": "read", "args": {"spec": "calc.py"}}] + FIX)
+    tid = create(ak, "fix add [BIGREPO]")
+    assert wait(ak, tid)["verdict"] == "pass"
+    for r in fake.requests_for("[BIGREPO]"):
+        assert _style_hits(r["body"]) == [0]  # in the system prompt from round 1, never appended again
+    assert tjson(repo, tid)["compression"]["style"] == "start"
+
+
+def test_style_terse_forces_note_and_normal_disables_it(ak, repo, fake):
+    project(repo, ak, fake, cfg="\n[compress]\nstyle = \"terse\"\n")
+    fake.add("[FORCE]", FIX)
+    tid = create(ak, "fix add [FORCE]")
+    assert wait(ak, tid)["verdict"] == "pass"
+    assert all(_style_hits(r["body"]) == [0] for r in fake.requests_for("[FORCE]"))
+    (repo / ".agentkit" / "config.toml").write_text((repo / ".agentkit" / "config.toml").read_text()
+                                                    .replace('style = "terse"', 'style = "normal"\nstyle_after_chars = 1'))
+    fake.add("[NORMAL]", [{"call": "read", "args": {"spec": "calc.py"}}] + FIX)
+    tid = create(ak, "fix add [NORMAL]")
+    assert wait(ak, tid)["verdict"] == "pass"
+    assert all(_style_hits(r["body"]) == [] for r in fake.requests_for("[NORMAL]"))
+    assert tjson(repo, tid)["compression"]["style"] == "off"
 
 
 def test_worker_compression_can_be_switched_off(ak, repo, fake):
