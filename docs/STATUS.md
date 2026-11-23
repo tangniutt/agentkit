@@ -35,7 +35,7 @@
 | M-19 实测 | 完成 | `eval/llms_check.py`：只读 llms.txt，在全新 venv + 空 HOME 里按「第一条成功的」执行安装行，再跑 `agentkit doctor`（须 healthy）和 Direct mode 一节示例的 `agentkit verify`；`--scenario bare` 模拟 PEP 668 发行版（系统 Python 无 pip、只有 git/uv/pipx）。实测：旧 llms.txt 在 bare 场景失败（`pip: command not found`）→ 修正为 pip → pipx → uv → venv 四选一 + PATH 提示（C-07）；修正后两个场景都通过。从 GitHub 安装、空 pip 缓存：3.5 s；本地源码：2.3 s；uv：1.0 s | `test_llms_install.py`（解析规则 + venv 场景 + bare 场景；无网络时跳过后两项） |
 | OpenRouter 适配 | 完成（离线测试），真实调用未做 | 自动带 `HTTP-Referer` / `X-Title`；HTTP 200 里的 `error`（顶层或 choice 上 `finish_reason:error`）按 code 映射（401/403 → auth 不重试，429 → rate_limited，5xx / 无 code → 暂时不可用重试，402 → http）；429 读 `X-RateLimit-Reset`（毫秒时间戳，也从 body metadata 读）；`model add` 对无单价的非 `:free` OpenRouter 模型给警告；`eval.run --real` 拒绝非 `:free` 的 OpenRouter 模型（`--allow-paid` 才放行） | `test_m2_models.py` 新增 3 个 |
 
-测试：`pytest -q` **172 个全绿**（M1 的 107 + M2 49 + 本轮 16）；CI（Python 3.10 / 3.12）见提交记录。Dogfood：`docs/dogfood-m2.md`（离线派活通过；真实 Gemini 任务暴露并修复了 503 处理 bug）。
+测试：`pytest -q` **172 个全绿**（M1 的 107 + M2 49 + 本轮 16）；CI（Python 3.10 / 3.12）通过（cdda359）。Dogfood：`docs/dogfood-m2.md`（离线派活通过；真实 Gemini 任务暴露并修复了 503 处理 bug）。
 
 ## M2 未完成/偏差
 
