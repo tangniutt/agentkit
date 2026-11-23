@@ -43,11 +43,13 @@ PRESETS = {
                "note": "Gemini OpenAI-compatible endpoint; free tier has low per-minute and per-day limits"},
     "openrouter": {"base_url": "https://openrouter.ai/api/v1", "key_env": "OPENROUTER_API_KEY", "context": 32000,
                    "max_wait": 65, "note": "use a ':free' model id or pass prices"},
-    # Agnes AI (international): flash models zero-priced as a vendor promotion; per-minute limits per account,
-    # unpublished -> conservative pacing. Pro models (agnes-2.5-pro-*, agnes-3.0-pro) may be paid: don't default to them.
+    # Agnes AI (international): flash models zero-priced as a vendor promotion (vendor statement); free tier measured
+    # 2026-11-23 at ~10 requests per rolling minute, 429 has no Retry-After -> rpm 6 + rate_wait 60.
+    # Pro models (agnes-2.5-pro-*, agnes-3.0-pro) may be paid: don't default to them.
     "agnes": {"base_url": "https://apihub.agnes-ai.com/v1", "key_env": "AGNES_API_KEY", "context": 128000,
               "rpm": 6, "max_wait": 65, "max_tokens": 8192, "rate_wait": 60,
-              "note": "Agnes AI: use a flash model (agnes-3.0-flash); flash is promotional zero price, per-minute limits unpublished"},
+              "note": "Agnes AI: use a flash model (agnes-3.0-flash; promotional zero price); free tier ~10 requests "
+                      "per rolling minute, 429 without Retry-After"},
     # AMD Radeon Cloud Token Factory (China site): daily points quota resets 00:00 Asia/Shanghai; typical ~20 RPM and
     # 8 concurrent requests per key; busy models answer 429 model_concurrency_rate_limit_exceeded (retried, then pause).
     "amd-cn": {"base_url": "https://developer.amd.com.cn/radeon/api/v1", "key_env": "AMD_CN_API_KEY", "context": 128000,

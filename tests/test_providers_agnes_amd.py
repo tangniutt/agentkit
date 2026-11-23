@@ -172,3 +172,14 @@ def test_hardcode_base_case_end_to_end_no_flag(ak, repo, fake):
     rep = json.loads((repo / ".agentkit" / "tasks" / tid / "report.json").read_text())
     assert "hardcoded_return_suspect" not in [f["flag"] for f in rep.get("suspicious", [])], rep
     assert tjson(repo, tid)["verdict"] == "pass"
+
+
+def test_same_error_in_parallel_calls_counts_once(ak, repo, fake):
+    """Agnes real run (ev-rename, compression on): one reply carried 3 edits whose old text was not found; they were
+    counted as 'same error 3x' and the task failed (not resumable) although the fix was already in place."""
+    project(repo, ak, fake)
+    bad = {"call": "edit", "args": {"path": "calc.py", "old": "nonexistent text", "new": "x"}}
+    fake.add("[PARERR]", [FIX[0], {"calls": [bad, bad, bad]}, FIX[1], FIX[2], FIX[3]])
+    tid = create(ak, "fix add [PARERR]")
+    s = wait(ak, tid)
+    assert s["status"] == "done" and s["verdict"] == "pass", s

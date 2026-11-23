@@ -468,7 +468,7 @@ class Worker:
         changed_once = bool(resume)  # a resumed task usually carries a diff already
         seen_results: set = set()
         no_change = 0
-        last_err, same_err = None, 0
+        last_err, same_err, err_round = None, 0, -1
         while True:
             stop = self.check_stop()
             if stop:
@@ -595,10 +595,14 @@ class Worker:
                 self._add({"role": "tool", "tool_call_id": tc["id"], "content": content})
                 sig = _error_sig(name, env)
                 if sig:
+                    # count repeats across rounds only: parallel calls in one reply never saw each other's result
+                    # (Agnes: 3 failing edits in one reply were failed as "same error 3x" with the fix already done)
                     if sig == last_err:
-                        same_err += 1
+                        if err_round != self.rounds:
+                            same_err += 1
                     else:
                         last_err, same_err = sig, 1
+                    err_round = self.rounds
                     if same_err >= self.same_error_limit:
                         return Outcome("failed", f"stuck: same error {same_err}x: {sig[:120]}", stopped="stuck")
             if finished is not None:
