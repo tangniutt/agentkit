@@ -42,7 +42,7 @@
 | C-10 ② NVIDIA NIM + 预设 + 节流 | 完成；真实运行见「真实压缩 A/B」 | `model add --preset nvidia\|gemini\|openrouter`（base URL、Key 变量名、上下文、节流，显式参数优先；无 preset 时必须 `--base-url`）；模型配置 `rpm`（每个工人每分钟最多请求数）、`max_wait`（Retry-After 最长等待，默认 30 s，预设 65 s）、`max_tokens`；HTTP / body 504 → 上游不可用（重试 2 次后暂停）；推理模型 `reasoning_content` 从不回传，`finish_reason=length` 且无工具调用 → 明确提示「输出 token 上限截断」；`model test` 返回 `reasoning_only`；`eval.run --real` 加 `--rpm / --max-wait / --max-tokens` | `test_providers.py`（6 个：预设与覆盖、504 两种形态、Retry-After ≤ max_wait 才等、rpm 节流 + max_tokens、推理模型 model test、工人端到端推理模型 + 截断提示 + 不回传 reasoning） |
 | C-10 ③ 卡住检测修正 | 完成 | NVIDIA dogfood 发现：首次改动前 10 轮探索（每轮读到新内容）被判「卡住」→ failed（不可续跑）。改为首次改动之前、本轮有新结果（`context.result_key` 没见过）的轮不计入「无新 diff」；重复同样调用仍计入；`max_rounds` 封顶 | `test_exploring_before_first_edit_is_not_stuck`（旧代码失败）；`test_stuck_no_new_diff` 改为 4 次请求（第 1 次读是新信息） |
 
-测试：`pytest -q` **258 个全绿**（M1 的 107 + M2 66 + C-08 22 + C-09 57 + C-10 6）；CI 结果见文末。Dogfood：`docs/dogfood-m2.md`（离线派活通过；真实 Gemini 任务暴露并修复了 503 处理 bug）。
+测试：`pytest -q` **258 个全绿**（M1 的 107 + M2 66 + C-08 22 + C-09 57 + C-10 6）；CI（Python 3.10 / 3.12）通过（7050665，run 45144538566）。Dogfood：`docs/dogfood-m2.md`（离线派活通过；真实 Gemini 任务暴露并修复了 503 处理 bug）。
 
 ## C-08 实测（2026-11-23，诚实记录，含接近 0 的情况）
 
