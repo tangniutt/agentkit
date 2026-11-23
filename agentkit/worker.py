@@ -463,6 +463,8 @@ class Worker:
             self._add({"role": "user", "content": f"Task {t['id']}: {t['goal']}\nStart with the memory brief above, then explore with repo_map/search/read."})
         format_errors = 0
         last_fp = self.diff_fingerprint()
+        changed_once = bool(resume)  # a resumed task usually carries a diff already
+        seen_results: set = set()
         no_change = 0
         last_err, same_err = None, 0
         while True:
@@ -564,6 +566,7 @@ class Worker:
             format_errors = 0
 
             finished = None
+            new_info = False
             for tc, name, args in prepared:
                 stop = self.check_stop()
                 if stop:
@@ -579,6 +582,13 @@ class Worker:
                 self._ev("tool", f"tool:{name}", time.monotonic() - tt,
                          None if env.get("ok") else (env.get("error") or {}).get("code"))
                 content = redact_text(dumps(env))
+                from .context import result_key
+
+                rk = result_key(name, args, env)
+                if (rk is None and env.get("ok")) or (rk is not None and rk not in seen_results):
+                    new_info = True
+                if rk is not None:
+                    seen_results.add(rk)
                 content = self.cc.tool_result(self.messages, self.rounds, tc["id"], name, args, env, content)
                 self._add({"role": "tool", "tool_call_id": tc["id"], "content": content})
                 sig = _error_sig(name, env)
@@ -593,8 +603,13 @@ class Worker:
                 return Outcome("submitted", "worker called finish", claim=finished)
             fp = self.diff_fingerprint()
             if fp != last_fp:
-                last_fp, no_change = fp, 0
+                last_fp, no_change, changed_once = fp, 0, True
                 last_err, same_err = None, 0
+            elif not changed_once and new_info:
+                # still exploring before the first edit and this round learned something new (a file range or
+                # search not seen before): not stuck. Found on NVIDIA NIM dogfood: a 10-round exploration of a
+                # 200-line file was failed as "stuck" (not resumable); max_rounds still bounds exploration.
+                pass
             else:
                 no_change += 1
                 if no_change >= self.stuck_rounds:

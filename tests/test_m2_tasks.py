@@ -183,7 +183,22 @@ def test_stuck_no_new_diff(ak, repo, fake):
     tid = create(ak, "fix add [LOOP]")
     s = wait(ak, tid)
     assert s["status"] == "failed" and "no new diff" in s["why"]
-    assert len(fake.requests_for("[LOOP]")) == 3
+    assert len(fake.requests_for("[LOOP]")) == 4  # the first read is new information; the 3 repeats count
+
+
+def test_exploring_before_first_edit_is_not_stuck(ak, repo, fake):
+    """NVIDIA NIM dogfood: the worker read new parts of the repo for 10 rounds before its first edit and was failed
+    as stuck (failed is not resumable). Rounds that return results not seen before don't count until the first
+    change; repeating the same calls still does (test_stuck_no_new_diff)."""
+    project(repo, ak, fake, cfg="stuck_rounds = 3\n")
+    (repo / "notes.txt").write_text("".join(f"line {i}\n" for i in range(40)))
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "notes")
+    explore = [{"call": "read", "args": {"spec": f"notes.txt:{i * 5 + 1}-{i * 5 + 5}"}} for i in range(6)]
+    fake.add("[EXPLORE]", explore + FIX)
+    tid = create(ak, "fix add [EXPLORE]")
+    s = wait(ak, tid)
+    assert s["verdict"] == "pass", s
 
 
 def test_stuck_same_error(ak, repo, fake):
