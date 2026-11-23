@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from .core import dumps
-from .models import ChatClient, ModelError, ModelSpec, usage_of
+from .models import ChatClient, ModelError, ModelSpec, reasoning_text, usage_of
 from .redact import redact, redact_text
 
 COMPACT_AT = 0.70
@@ -514,7 +514,15 @@ class Worker:
                     if format_errors >= self.max_format_errors:
                         self._ev("malformed", "worker", error_code="AK-WORKER-MALFORMED")
                         return Outcome("failed", f"malformed tool calls: {format_errors} consecutive", code="AK-WORKER-MALFORMED")
-                    self._add({"role": "user", "content": "Error: no tool call. Respond with a tool call (use `finish` when done)."})
+                    finish = resp["choices"][0].get("finish_reason")
+                    if finish == "length":
+                        # reasoning models (reasoning_content) can spend the whole output budget thinking:
+                        # say so, instead of the generic error (the reasoning itself is never sent back)
+                        self._ev("output_cut", "model", what=f"finish_reason=length, reasoning {len(reasoning_text(msg))} chars")
+                        self._add({"role": "user", "content": "Error: your reply hit the output token limit before any tool "
+                                   "call. Think briefly, then respond with one tool call (use `finish` when done)."})
+                    else:
+                        self._add({"role": "user", "content": "Error: no tool call. Respond with a tool call (use `finish` when done)."})
                     continue
 
             # validate / repair every call before executing any

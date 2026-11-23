@@ -6,7 +6,7 @@ AgentKit: token-frugal coding tools for AI agents + optional cheap worker with i
 
 Global options: --budget N (output tokens, default 2000), --human (text), --root DIR; anywhere on the line.
 
-JSON form: `agentkit manual` (overview, ~1693 tokens), `agentkit manual <command>` (one command), `agentkit manual --all` (everything, ~3731 tokens).
+JSON form: `agentkit manual` (overview, ~1693 tokens), `agentkit manual <command>` (one command), `agentkit manual --all` (everything, ~3737 tokens).
 
 ## Quick start (supervisor)
 
@@ -422,19 +422,23 @@ register an OpenAI-compatible worker model (stores the key's env var NAME only)
 | arg | type | default | notes |
 |---|---|---|---|
 | `name` | str |  |  |
-| `--base-url` | str |  | required |
+| `--preset` | str |  | provider defaults: nvidia \| gemini \| openrouter (explicit flags win) |
+| `--base-url` | str |  | OpenAI-compatible base URL (required unless --preset) |
 | `--model` | str |  | provider model id (default: NAME) |
 | `--key-env` | str |  | NAME of the env var holding the key (never the key itself) |
-| `--context` | int | `32000` | context window, tokens |
+| `--context` | int |  | context window, tokens (default 32000 or preset) |
+| `--rpm` | float |  | max requests per minute this worker sends (free-tier pacing) |
+| `--max-wait` | float |  | longest Retry-After (s) to sit out before pausing (default 30) |
+| `--max-tokens` | int |  | max_tokens per call (reasoning models need room) |
 | `--price-in` | float | `0.0` | USD per 1M input tokens |
 | `--price-out` | float | `0.0` | USD per 1M output tokens |
 | `--tier` | str | `low` | low\|mid\|high |
 | `--default` | bool |  |  |
 
-- **Output `data`:** `added,config,key_env_set,warning?`
+- **Output `data`:** `added,config,key_env_set,preset?,warning?`
 - **Errors:** `AK-USAGE` (bad command line arguments)
 - **Side effects:** state
-- **Example:** `agentkit model add cheap --base-url https://openrouter.ai/api/v1 --model google/gemma-4-31b-it:free --key-env OPENROUTER_API_KEY`
+- **Example:** `agentkit model add nim --preset nvidia --model nvidia/nemotron-3.5-lightning-30b-a3b`
 
 ### `agentkit model list`
 

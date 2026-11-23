@@ -118,6 +118,9 @@ def add_model(h: Host, model: dict):
             "--price-in", str(model.get("price_in", 0)), "--price-out", str(model.get("price_out", 0))]
     if model.get("key_env"):
         args += ["--key-env", model["key_env"]]
+    for k in ("rpm", "max_wait", "max_tokens"):
+        if model.get(k):
+            args += ["--" + k.replace("_", "-"), str(model[k])]
     r = h(*args)
     assert r.get("ok"), r
 
@@ -193,6 +196,9 @@ def main(argv=None) -> int:
     ap.add_argument("--context", type=int, default=32000)
     ap.add_argument("--price-in", type=float, default=0.0)
     ap.add_argument("--price-out", type=float, default=0.0)
+    ap.add_argument("--rpm", type=float, help="free-tier pacing: max requests per minute per worker")
+    ap.add_argument("--max-wait", type=float, help="longest Retry-After (s) a worker sits out before pausing")
+    ap.add_argument("--max-tokens", type=int, help="max_tokens per call (reasoning models)")
     ap.add_argument("--tasks", help="comma-separated task ids")
     ap.add_argument("--limit", type=int)
     ap.add_argument("--size", choices=["tiny", "large"], help="only tiny (one 5-line file) or large (multi-file) tasks")
@@ -225,7 +231,8 @@ def main(argv=None) -> int:
         if is_openrouter(a.base_url) and not a.model_id.endswith(":free") and not a.allow_paid:
             ap.error("OpenRouter model id must end with ':free' (pass --allow-paid to spend money)")
         model = {"name": "evalmodel", "base_url": a.base_url, "model_id": a.model_id, "key_env": a.key_env,
-                 "tier": a.tier, "context": a.context, "price_in": a.price_in, "price_out": a.price_out}
+                 "tier": a.tier, "context": a.context, "price_in": a.price_in, "price_out": a.price_out,
+                 "rpm": a.rpm, "max_wait": a.max_wait, "max_tokens": a.max_tokens}
         jobs = 1  # be gentle with free tiers
     else:
         server = FakeOpenAI().start()

@@ -76,7 +76,7 @@ def test_args_come_from_the_parser():
     assert names["--timeout"]["type"] == "float" and names["--timeout"]["default"] == 300
     assert names["--no-report"]["type"] == "bool" and names["ids"]["nargs"] == "*"
     ma = {a["name"]: a for a in M.detail("model add", M.walk()["model add"])["args"]}
-    assert ma["--base-url"]["required"] and ma["--context"]["default"] == 32000
+    assert "--preset" in ma and "required" not in ma["--base-url"] and ma["--context"]["type"] == "int"
     assert M.compact_arg({"name": "--offset", "type": "int", "default": 0}) == "--offset:int=0"
     assert "--fixed:bool" not in M.full()["commands"]["search"]["args"] and "--fixed" in M.full()["commands"]["search"]["args"]
 

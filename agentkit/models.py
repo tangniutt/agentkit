@@ -31,6 +31,20 @@ TIERS = ("low", "mid", "high")
 NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
 RETRY_AFTER_CAP_S = 30.0
 
+# `agentkit model add NAME --preset P --model ID`: provider defaults; any explicit flag wins.
+# rpm / max_wait are pacing for free tiers (requests per minute this worker sends; longest Retry-After
+# it sits out once per call before pausing the task). Values are conservative, not provider promises.
+PRESETS = {
+    "nvidia": {"base_url": "https://integrate.api.nvidia.com/v1", "key_env": "NVIDIA_API_KEY", "context": 128000,
+               "rpm": 30, "max_wait": 65, "max_tokens": 8192,
+               "note": "NVIDIA NIM (build.nvidia.com) free trial: ~40 RPM, testing use only"},
+    "gemini": {"base_url": "https://generativelanguage.googleapis.com/v1beta/openai/", "key_env": "GEMINI_API_KEY",
+               "context": 128000, "max_wait": 65,
+               "note": "Gemini OpenAI-compatible endpoint; free tier has low per-minute and per-day limits"},
+    "openrouter": {"base_url": "https://openrouter.ai/api/v1", "key_env": "OPENROUTER_API_KEY", "context": 32000,
+                   "max_wait": 65, "note": "use a ':free' model id or pass prices"},
+}
+
 
 class ModelError(Exception):
     def __init__(self, kind: str, msg: str, retry_after: Optional[float] = None, status: Optional[int] = None):
@@ -51,6 +65,9 @@ class ModelSpec:
     price_out: float = 0.0
     tier: str = "low"
     timeout: float = 120.0
+    rpm: float = 0.0          # >0: space calls at least 60/rpm s apart (free-tier pacing)
+    max_wait: float = RETRY_AFTER_CAP_S  # longest Retry-After sat out (once per call) before pausing
+    max_tokens: int = 0       # >0: sent as max_tokens (reasoning models need room to think AND call a tool)
 
     def key(self) -> Optional[str]:
         if not self.key_env:
@@ -74,6 +91,8 @@ def all_models(cfg: dict) -> dict:
             key_env=m.get("key_env") or None, context=int(m.get("context", 32000)),
             price_in=float(m.get("price_in", 0)), price_out=float(m.get("price_out", 0)),
             tier=str(m.get("tier", "low")), timeout=float(m.get("timeout", 120)),
+            rpm=float(m.get("rpm", 0) or 0), max_wait=float(m.get("max_wait", RETRY_AFTER_CAP_S)),
+            max_tokens=int(m.get("max_tokens", 0) or 0),
         )
     return out
 
@@ -161,9 +180,9 @@ def _raise_body_error(data, raw: str) -> None:
         raise ModelError("auth", f"{code} in body: {msg}{where}", status=code)
     if code == 429:
         raise ModelError("rate_limited", f"429 in body: {msg}{where}", _retry_after({}, raw), status=429)
-    if code in (408, 504):
+    if code == 408:
         raise ModelError("timeout", f"{code} in body: {msg}{where}", status=code)
-    if code in (500, 502, 503) or code is None:
+    if code in (500, 502, 503, 504) or code is None:
         raise ModelError("unavailable", f"provider error in body: {msg}{where}", status=code)
     if code == 402:
         raise ModelError("http", f"402 in body (credits / paid model): {msg}{where}", status=402)
@@ -178,6 +197,14 @@ class ChatClient:
         self.retries = retries
         self.backoff = backoff
         self.sleep = sleep
+        self._last_call = 0.0
+
+    def _pace(self):
+        if self.spec.rpm and self.spec.rpm > 0:
+            gap = 60.0 / self.spec.rpm - (time.monotonic() - self._last_call)
+            if self._last_call and gap > 0:
+                self.sleep(gap)
+        self._last_call = time.monotonic()
 
     def _post(self, payload: dict, timeout: float) -> dict:
         url = self.spec.base_url.rstrip("/") + "/chat/completions"
@@ -206,8 +233,11 @@ class ChatClient:
                 raise ModelError("auth", f"HTTP {e.code}: invalid or expired key ({short})", status=e.code)
             if e.code == 429:
                 raise ModelError("rate_limited", f"HTTP 429: {short}", _retry_after(e.headers, body), status=429)
-            if e.code in (408, 504):
+            if e.code == 408:
                 raise ModelError("timeout", f"HTTP {e.code}", status=e.code)
+            if e.code == 504:  # gateway timeout: the upstream model is slow / down, not our socket
+                raise ModelError("unavailable", f"HTTP 504 (upstream gateway timeout): {short[:120]}",
+                                 _retry_after(e.headers, body), status=504)
             if e.code in (500, 502, 503):
                 raise ModelError("unavailable", f"HTTP {e.code}: {short[:120]}", _retry_after(e.headers, body), status=e.code)
             raise ModelError("http", f"HTTP {e.code}: {short}", status=e.code)
@@ -235,6 +265,7 @@ class ChatClient:
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
+        max_tokens = max_tokens or self.spec.max_tokens
         if max_tokens:
             payload["max_tokens"] = max_tokens
         timeout = timeout or self.spec.timeout
@@ -242,17 +273,24 @@ class ChatClient:
         waited_429 = False
         while True:
             try:
+                self._pace()
                 return self._post(payload, timeout)
             except ModelError as e:
                 if e.kind in ("timeout", "network", "unavailable") and attempt < self.retries:
                     self.sleep(self.backoff * (2 ** attempt))
                     attempt += 1
                     continue
-                if e.kind == "rate_limited" and not waited_429 and e.retry_after is not None and e.retry_after <= RETRY_AFTER_CAP_S:
+                if e.kind == "rate_limited" and not waited_429 and e.retry_after is not None and e.retry_after <= self.spec.max_wait:
                     self.sleep(e.retry_after)
                     waited_429 = True
                     continue
                 raise
+
+
+def reasoning_text(msg: dict) -> str:
+    """Reasoning models (NVIDIA NIM nemotron, DeepSeek, ...) put their thinking in reasoning_content /
+    reasoning. It is never sent back to the model (the worker keeps only content / tool_calls)."""
+    return str(msg.get("reasoning_content") or msg.get("reasoning") or "")
 
 
 def usage_of(resp: dict, messages: list) -> tuple:
@@ -279,12 +317,34 @@ def cmd_model(ctx: Ctx, a) -> Result:
         if a.key_env and not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", a.key_env):
             raise AKError("--key-env takes the NAME of an environment variable, not a key",
                           "keys are never stored in config (M-17)", "export MY_KEY=...; agentkit model add NAME --key-env MY_KEY ...")
-        vals = {"base_url": a.base_url, "model": a.model or a.name, "key_env": a.key_env, "context": a.context,
+        pre = {}
+        if getattr(a, "preset", None):
+            if a.preset not in PRESETS:
+                raise AKError(f"unknown preset '{a.preset}'", f"presets: {', '.join(PRESETS)}", None)
+            pre = PRESETS[a.preset]
+        base_url = a.base_url or pre.get("base_url")
+        if not base_url:
+            raise AKError("--base-url is required (or --preset)", f"presets: {', '.join(PRESETS)}",
+                          f"agentkit model add {a.name} --preset nvidia --model nvidia/nemotron-3.5-lightning-30b-a3b")
+        a.base_url = base_url
+        a.key_env = a.key_env or pre.get("key_env")
+        if a.key_env and not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", a.key_env):
+            raise AKError("--key-env takes the NAME of an environment variable, not a key",
+                          "keys are never stored in config (M-17)", "export MY_KEY=...; agentkit model add NAME --key-env MY_KEY ...")
+        vals = {"base_url": base_url, "model": a.model or a.name, "key_env": a.key_env,
+                "context": a.context or pre.get("context", 32000),
                 "price_in": a.price_in, "price_out": a.price_out, "tier": a.tier}
+        for k in ("rpm", "max_wait", "max_tokens"):
+            v = getattr(a, k, None)
+            v = v if v is not None else pre.get(k)
+            if v is not None:
+                vals[k] = v
         p = set_table(ctx.root, f"models.{a.name}", vals)
         if a.default:
             set_table(ctx.root, "worker", {**(load_config(ctx.root).get("worker") or {}), "default_model": a.name})
         data = {"added": a.name, "config": ctx.rel(p), "key_env_set": bool(a.key_env and os.environ.get(a.key_env))}
+        if pre:
+            data["preset"] = {"name": a.preset, "note": pre["note"]}
         if a.key_env and not data["key_env_set"]:
             data["hint"] = f"environment variable {a.key_env} is not set in this shell"
         mid = a.model or a.name
@@ -318,7 +378,13 @@ def cmd_model(ctx: Ctx, a) -> Result:
             raise AKError(f"model test failed: {e.kind}", str(e)[:300],
                           "check base_url / model id / key" if e.kind != "rate_limited" else "rate limited; retry later",
                           data={"model": m.name, "kind": e.kind, "retry_after": e.retry_after})
-        msg = resp["choices"][0]["message"]
-        return Result({"model": m.name, "ok": True, "latency_s": round(time.monotonic() - t0, 2),
-                       "reply": str(msg.get("content") or "")[:60], "usage": resp.get("usage")})
+        ch = resp["choices"][0]
+        msg = ch["message"]
+        out = {"model": m.name, "ok": True, "latency_s": round(time.monotonic() - t0, 2),
+               "reply": str(msg.get("content") or "")[:60], "usage": resp.get("usage")}
+        if not msg.get("content") and reasoning_text(msg):
+            # reasoning model: the short test budget went to thinking; the endpoint works
+            out["reasoning_only"] = True
+            out["finish_reason"] = ch.get("finish_reason")
+        return Result(out)
     raise AKError(f"unknown model subcommand {sub}", "", "agentkit model list")

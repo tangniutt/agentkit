@@ -147,12 +147,15 @@ class FakeOpenAI:
                                                 "retryDelay": f"{pre['retry_delay']}s"}]
             return code, payload, headers
         msg = _message(step, idx)
-        return 200, _completion(body, msg, step.get("usage")), {}
+        return 200, _completion(body, msg, step.get("usage"), step.get("finish")), {}
 
 
 def _message(step: dict, idx: int) -> dict:
-    if "text" in step and "call" not in step and "calls" not in step:
-        return {"role": "assistant", "content": step["text"]}
+    if "call" not in step and "calls" not in step and ("text" in step or "reasoning" in step):
+        msg = {"role": "assistant", "content": step.get("text")}
+        if "reasoning" in step:  # reasoning model (NVIDIA NIM style): thinking outside content
+            msg["reasoning_content"] = step["reasoning"]
+        return msg
     calls = step.get("calls") or [step]
     tcs = []
     for j, c in enumerate(calls):
@@ -162,12 +165,14 @@ def _message(step: dict, idx: int) -> dict:
             tc["extra_content"] = {"google": {"thought_signature": step["sig"]}}
         tcs.append(tc)
     msg = {"role": "assistant", "content": step.get("text"), "tool_calls": tcs}
+    if "reasoning" in step:
+        msg["reasoning_content"] = step["reasoning"]
     if step.get("sig"):
         msg["extra_content"] = {"google": {"thought_signature": step["sig"]}}
     return msg
 
 
-def _completion(body: dict, msg: dict, usage: Optional[dict] = None) -> dict:
+def _completion(body: dict, msg: dict, usage: Optional[dict] = None, finish: Optional[str] = None) -> dict:
     pt = len(json.dumps(body.get("messages") or [])) // 4 + len(json.dumps(body.get("tools") or [])) // 4
     ct = max(1, len(json.dumps(msg)) // 4)
     u = {"prompt_tokens": pt, "completion_tokens": ct, "total_tokens": pt + ct}
@@ -175,7 +180,7 @@ def _completion(body: dict, msg: dict, usage: Optional[dict] = None) -> dict:
         u.update(usage)
         u["total_tokens"] = u["prompt_tokens"] + u["completion_tokens"]
     return {"id": "fake-1", "object": "chat.completion", "model": body.get("model"),
-            "choices": [{"index": 0, "message": msg, "finish_reason": "tool_calls" if msg.get("tool_calls") else "stop"}],
+            "choices": [{"index": 0, "message": msg, "finish_reason": finish or ("tool_calls" if msg.get("tool_calls") else "stop")}],
             "usage": u}
 
 
