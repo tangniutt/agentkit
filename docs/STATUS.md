@@ -1,13 +1,13 @@
 # 进度
 
-更新：2026-11-23 晚（M2 补完 + C-08 上下文压缩 + C-09 主管操作手册 + C-10：第 3 家 NVIDIA NIM、真实压缩 A/B、小任务开销修正）
+更新：2026-11-23 夜（M2 补完 + C-08 上下文压缩 + C-09 主管操作手册 + C-10：第 3 家 NVIDIA NIM、真实压缩 A/B、小任务开销修正 + C-11：第 4、5 家 Agnes AI、AMD Token Factory 中国站）
 
 | 阶段 | 状态 |
 |---|---|
-| M0 调研 + 需求基线 | 完成（基线冻结，变更 C-01 至 C-10 已登记） |
+| M0 调研 + 需求基线 | 完成（基线冻结，变更 C-01 至 C-11 已登记） |
 | 阶段二 接口契约 | 与 M1 合并完成：CLI 输出 schema 即契约（`{ok,data,error{what,why,next,code,run},truncated,next}`；C-03 增加 code、run） |
 | M1 Python 原型（直接模式工具集） | **完成**（见下表；偏差见「M1 未完成/偏差」） |
-| M2 工人 + 派活 + 验收器 | **完成**（含 C-03 / C-04；补完 C-05 续跑、C-06 输出瘦身 + 多文件评测、C-07 llms.txt 安装修正、C-08 上下文压缩、C-09 主管操作手册、uninstall、日志 7 天清理；真实模型实测 3 家（Gemini、OpenRouter、NVIDIA NIM，满足 M-12），真实压缩 A/B 每格 1 次，仍是小样本，见「M2 未完成/偏差」） |
+| M2 工人 + 派活 + 验收器 | **完成**（含 C-03 / C-04；补完 C-05 续跑、C-06 输出瘦身 + 多文件评测、C-07 llms.txt 安装修正、C-08 上下文压缩、C-09 主管操作手册、uninstall、日志 7 天清理；真实模型实测 5 家（Gemini、OpenRouter、NVIDIA NIM、Agnes AI、AMD Token Factory 中国站，满足 M-12），真实压缩 A/B：NVIDIA / Gemini 每格 1 次，Agnes / AMD 每格 2 次，仍是小样本，见「M2 未完成/偏差」） |
 | M3 防作弊与安全 | 部分提前完成（M-15 基础规则 + 14 例作弊库 100% 检出、M-17 Key 引用与扫描测试）；沙箱仍在 V1.1 |
 | M4 Rust/Go 正式版 | 未开始 |
 | M5 评测与发布 | 未开始 |
@@ -16,7 +16,7 @@
 
 | 编号 | 状态 | 实现 | 测试 |
 |---|---|---|---|
-| M-12 工人循环 | 完成；真实接口实测 **3 家**（Gemini OpenAI 兼容、OpenRouter `:free`、NVIDIA NIM `integrate.api.nvidia.com/v1`），满足验收标准 | `agentkit/worker.py`（mini-swe-agent 式循环，只用 M1 工具 + finish）；`agentkit/models.py`（标准库 OpenAI 兼容客户端）。工具调用格式错误本地修复（JSON 修补 / Python 字面量 / 文本里的调用 / 工具名别名），修不了把错误回给模型，连续 3 次失败 → 任务失败；卡住检测（N 轮无新 diff、同一错误重复 3 次）；上下文到 70% 时折叠旧工具输出（保留目标、记忆摘要、最近几轮）；开工先读 `memory brief`；回传 Gemini `extra_content.thought_signature` | `test_m2_tasks.py`（修复、3 次失败、纯文本、卡住×2、压缩、签名回传） |
+| M-12 工人循环 | 完成；真实接口实测 **5 家**（Gemini OpenAI 兼容、OpenRouter `:free`、NVIDIA NIM `integrate.api.nvidia.com/v1`、Agnes AI `apihub.agnes-ai.com/v1`、AMD Token Factory 中国站 `developer.amd.com.cn/radeon/api/v1`），满足验收标准 | `agentkit/worker.py`（mini-swe-agent 式循环，只用 M1 工具 + finish）；`agentkit/models.py`（标准库 OpenAI 兼容客户端）。工具调用格式错误本地修复（JSON 修补 / Python 字面量 / 文本里的调用 / 工具名别名），修不了把错误回给模型，连续 3 次失败 → 任务失败；卡住检测（N 轮无新 diff、同一错误重复 3 次）；上下文到 70% 时折叠旧工具输出（保留目标、记忆摘要、最近几轮）；开工先读 `memory brief`；回传 Gemini `extra_content.thought_signature` | `test_m2_tasks.py`（修复、3 次失败、纯文本、卡住×2、压缩、签名回传） |
 | 模型配置 | 完成 | `agentkit model add/list/test/remove`，`.agentkit/config.toml` `[models.NAME]`（base_url、model、key_env、context、price_in/out、tier）；超时 / 网络 / 5xx 重试 2 次指数退避；429 读 Retry-After（≤30 s 时等一次）后暂停上报；401/403 立即失败 | `test_m2_models.py` |
 | M-13 任务系统 | 完成（无常驻守护进程，见偏差） | `agentkit/tasks.py`：create（目标、--check、--allow、三种预算、--tier/--model）/ status（<100 token，含排队位置）/ wait（多 ID + 超时）/ report（≤300 token，与 verify 同格式）/ cancel / clean；状态落盘；进程消失 → interrupted；内容哈希去重；全局并发上限 + 排队；无模型时保持 M1 直接模式提示 | 端到端、去重 + 排队、取消、kill -9 后恢复 |
 | M-14 隔离 | 完成 | 每任务分支 `agentkit/<id>` + worktree `.agentkit/worktrees/<id>`；工人的 run 拒绝 commit/push（M-22）+ `core.hooksPath` 指向永远拒绝的钩子 + 验收时检查分支是否被提交（`worker_committed`）；非 git / 无提交仓库拒绝并提示 `git init`；`task clean` 清理 worktree 与分支 | 端到端隔离 + 作弊库 |
@@ -41,8 +41,9 @@
 | C-10 ① 小任务开销 | 完成 | `[compress] style = "auto"`（默认）：仓库跟踪文件 ≥ `style_min_files`（40）→ 开工即在系统提示（整个任务字节不变）；否则转录（系统 + 任务之外）≥ `style_after_chars`（4000 字符）或压缩首次生效 → 以一条 user 消息**追加一次**（只追加，前缀与之前各轮不变）；`terse` 恒放、`normal` 不放；task.json `compression.style` 记录 `start` / `round N` / `off`。离线：小题 0%（原 +5.7%），多文件 −12.4%（原 −11.6%） | `test_compress.py` 新增 4 个（小题从不收到、转录变长追加一次且位置不变、大仓库在前缀、terse / normal 开关）+ 原端到端测试改断言 |
 | C-10 ② NVIDIA NIM + 预设 + 节流 | 完成；真实运行见「真实压缩 A/B」 | `model add --preset nvidia\|gemini\|openrouter`（base URL、Key 变量名、上下文、节流，显式参数优先；无 preset 时必须 `--base-url`）；模型配置 `rpm`（每个工人每分钟最多请求数）、`max_wait`（Retry-After 最长等待，默认 30 s，预设 65 s）、`max_tokens`；HTTP / body 504 → 上游不可用（重试 2 次后暂停）；推理模型 `reasoning_content` 从不回传，`finish_reason=length` 且无工具调用 → 明确提示「输出 token 上限截断」；`model test` 返回 `reasoning_only`；`eval.run --real` 加 `--rpm / --max-wait / --max-tokens` | `test_providers.py`（6 个：预设与覆盖、504 两种形态、Retry-After ≤ max_wait 才等、rpm 节流 + max_tokens、推理模型 model test、工人端到端推理模型 + 截断提示 + 不回传 reasoning） |
 | C-10 ③ 卡住检测修正 | 完成 | NVIDIA dogfood 发现：首次改动前 10 轮探索（每轮读到新内容）被判「卡住」→ failed（不可续跑）。改为首次改动之前、本轮有新结果（`context.result_key` 没见过）的轮不计入「无新 diff」；重复同样调用仍计入；`max_rounds` 封顶 | `test_exploring_before_first_edit_is_not_stuck`（旧代码失败）；`test_stuck_no_new_diff` 改为 4 次请求（第 1 次读是新信息） |
+| C-11 第 4、5 家 + 修正 | 完成；真实运行见「第 4、5 家实测」 | `--preset agnes`（`https://apihub.agnes-ai.com/v1`、`AGNES_API_KEY`、rpm 6、`rate_wait` 60、max_wait 65、max_tokens 8192）、`--preset amd-cn`（`https://developer.amd.com.cn/radeon/api/v1`、`AMD_CN_API_KEY`、rpm 15、max_wait 65、max_tokens 8192）；`models.error_obj` 读 `error` / `detail.error` / `detail` 文本，HTTP 错误与 200 body 都报服务商原话；429 `model_concurrency_rate_limit_exceeded`（`ModelError.capacity`）→ 等 5 / 10 / 20 s（≤ max_wait）后仍忙则暂停（原因写明「model at capacity」，可续跑），配额类 429 仍按旧规则；模型配置 `rate_wait`（`model add --rate-wait`、`eval.run --rate-wait`）：429 无 Retry-After 时等一次；`model test` / `doctor --online` 不做忙等；`reasoning` 字段与 `reasoning_content` 同样不回传；`hardcoded_return_suspect` 跳过基例（单个比较 + 边界字面量 + 返回平凡字面量或目标原文里的字面量）；同一回复里并行调用的同一错误只算 1 次 | `test_providers_agnes_amd.py`（13 个：两个预设、嵌套错误解析、忙 429 等待后成功 / 暂停且信息可读、配额 429 不当忙、无 Retry-After 的 429 按 `rate_wait` 等一次、200 body 嵌套错误与 401、工人忙模型暂停、`reasoning` 字段 model test 与工人不回传、基例不误报（单元 + 端到端，旧代码失败）、并行同错只算一次（旧代码失败）） |
 
-测试：`pytest -q` **258 个全绿**（M1 的 107 + M2 66 + C-08 22 + C-09 57 + C-10 6）；CI（Python 3.10 / 3.12）通过（7050665，run 45144538566）。Dogfood：`docs/dogfood-m2.md`（离线派活通过；真实 Gemini 任务暴露并修复了 503 处理 bug）。
+测试：`pytest -q` **271 个全绿**（M1 的 107 + M2 66 + C-08 22 + C-09 57 + C-10 6 + C-11 13）；CI 见下「C-11 提交」。Dogfood：`docs/dogfood-m2.md`（离线派活通过；真实 Gemini 任务暴露并修复了 503 处理 bug）。
 
 ## C-08 实测（2026-11-23，诚实记录，含接近 0 的情况）
 
@@ -100,6 +101,20 @@
 - 续跑：今天 Gemini 上午的任务所在临时目录已不存在（沙箱 /tmp 已重置），无可续跑；本轮被 429 暂停的任务实际续跑 2 个：gemini-3-flash-preview ev-csv（1 → 15 轮，pass，随后日配额停止）、gemini-3.5-flash-lite ev-shop（8 → 19 轮，pass）。其余 5 个 gemini-3-flash-preview 任务保持 paused（日配额，Retry-After ≈ 23 小时；其中 ev-shop（开）验收已 pass，只差 finish）。
 - NVIDIA dogfood（`human_bytes()`，12 轮上限）：首次被误判卡住（已修，C-10 ③）；修复后 12 轮用满、实现正确、检查通过，needs_review（预期的 `check_script_modified` + `hardcoded_return_suspect` 误报）。59,729 token（下午 OpenRouter 同族模型 102,578）。
 
+## 第 4、5 家实测（C-11，2026-11-23 夜，真实模型，每格 2 次）
+
+详见 `docs/dogfood-m2.md` 第 8 节。工人 token = 服务商 usage；主管 token = 字符 / 4。
+
+| 服务商 / 模型 | 多文件 3 题 压缩开：通过 / 轮 / 工人 token | 压缩关 | 变化 | 每轮工人 token 开 / 关 | dogfood（human_bytes，12 轮上限） |
+|---|---|---|---|---|---|
+| Agnes `agnes-3.0-flash`（`--preset agnes`） | 6/6 / 37 / 110,480 | 6/6 / 33 / 109,537 | +0.9% | 2,986 / 3,319（−10.0%） | finish，6 轮，26,312 token，检查通过（needs_review：预期的 `check_script_modified`） |
+| AMD `DeepSeek-V4-Flash`（`--preset amd-cn`） | 6/6 / 35 / 109,368 | 6/6 / 38 / 141,023 | **−22.4%** | 3,125 / 3,711（−15.8%） | finish，10 轮，42,293 token，同上 |
+
+- 主管 token 每题 181–185（两次慢任务因多轮询到 239 / 359）。
+- 工具调用探测：Agnes agnes-3.0-flash、agnes-2.5-flash 通过；AMD DeepSeek-V4-Flash、Gemma-4-31B-IT、MiMo-V2.6-Flash（90 s）通过，Qwen3.8-27B 带工具超时 / 504，GLM-5.3-Flash 只拿到忙 429 / 502，DeepSeek-V4.1-Flash 带工具 502。
+- 限制：Agnes 免费档实测约每滚动分钟 10 次、429 无 Retry-After（首轮因此 4 题暂停 → `rate_wait`）；AMD 网关间歇 502（几分钟后恢复），单次调用偶尔 60–214 s。
+- 结论仍是「方向为省、幅度不稳」：每轮输入稳定降 10–16%，总量看轮数；Agnes 开压缩一次出现「凭记忆写 old 文本」的并行失败（已修计数，现象记录）。
+
 ## OpenRouter 实测（2026-11-23）
 
 - 接入：沙箱代理在网络层注入 Key（环境变量里只放占位值，Key 从未进入命令、日志或仓库）；免费档 `free_model_daily_requests` 开始前 0/50。
@@ -117,7 +132,7 @@
 | M-13 | 没有常驻守护进程：每个任务是独立的后台进程，状态全部落盘；任何 task 命令先「恢复」（进程已不在的 running → interrupted）再「调度」（按并发上限启动排队任务），工人结束时也会调度 | 满足「重启后状态不丢」且更轻 |
 | M-13 / C-05 | 续跑只用「压缩历史 + 当前 diff」重开对话，不还原完整对话；时间预算按每次续跑单独计算（token / 金额累计）；共享 `events.jsonl` 过期行清理与并发追加之间无锁，极端情况下可能丢一行日志 | 取舍：省 token、跨服务商安全 |
 | M-14 | 「只读 .git 引用」改为：命令拦截 + 拒绝型 git 钩子 + 验收时检测分支被提交（`worker_committed`）。混淆写法 + `--no-verify` 仍可能提交成功，但一定被标记为 needs_review | 真正只读需沙箱（V1.1） |
-| M-15 | `hardcoded_return_suspect` 是启发式（新增 `if x == 字面量: return 字面量`），可能误报 | 误报只会降为 needs_review |
+| M-15 | `hardcoded_return_suspect` 是启发式（新增 `if x == 字面量: return 字面量`），可能误报；C-11 起跳过基例（单个比较 + 0 / 1 / -1 / 空串，返回平凡字面量或目标原文里的字面量），代价：只特判边界值的作弊（如测试只测 0）不再标记 | 误报只会降为 needs_review |
 | M-16 | 若主线程 4 s 内没响应停止信号，看门狗直接记 stopped 并退出，报告在 `task report` 时补做验收 | 兜底路径 |
 | M-17 | 发给模型的消息统一脱敏：源码里若有形似密钥的字面量，模型看到的是 `[REDACTED]` | 与 M1 输出脱敏一致的取舍 |
 | M-20 | 真实模型评测仍是小样本。本轮（2026-11-23 上午）：gemini-3.5-flash-lite 1 次连通调用成功后，第一道评测题即 429（日配额，Retry-After ≈ 20,000 s）；gemini-3-flash-preview 跑通多文件题 ev-shop（verdict pass，7 轮，工人 17,385 token，主管 228 token vs 直接模式 2,178；工人在调用 finish 前被 429 暂停，验收器独立重跑通过），下一题 ev-csv 即 429 日配额，按要求停止。累计真实结果：4 题通过（ev-add、ev-max、ev-pal、ev-shop），其余都被免费档配额挡住，没有一题是模型做错。下午 OpenRouter（nemotron-3.5-lightning:free）：3 道多文件题 3/3 通过（ev-shop、ev-csv、ev-rename），dogfood 1 个 12 轮未完成（7/8）；累计真实评测题 7 道全过 | 配额重置后（约北京时间 16:00）用 `task resume` 续跑被暂停的任务，或 `python -m eval.run --real ... --size large` |
@@ -174,6 +189,6 @@
 
 ## 下一步
 1. 真实 A/B 加样本：NVIDIA NIM（免费试用约 40 RPM、每天 1 万次）每格跑 3–5 次取中位数，再看老化导致的重读是否值得调 `keep_turns` / `age_min_chars`；Gemini 日配额重置后续跑 5 个 paused 任务（临时目录 /tmp/agentkit-eval-*，沙箱重置即丢失）；OpenRouter 额度重置后补一组。
-2. `hardcoded_return_suspect` 对 `if n == 0: return "0 B"` 这类边界分支误报，考虑对与目标里出现的字面量匹配时降权。
+2. ~~`hardcoded_return_suspect` 基例误报~~（C-11 已修）。新：观察老化后模型「凭记忆」写 edit 的 old 文本（Agnes 1/12 次）；若再现，考虑对最近被 edit 的文件不老化其 read 结果。AMD 积分日配额与网关 502 下的长任务续跑再多跑几组。
 3. C-08 调整：diff 过滤考虑「代码行里的 error 字样」不算诊断行（需先变更登记，因与「严重行永不删」冲突）。
 4. M4：Rust/Go 单二进制（安装、卸载随之简化）。

@@ -72,7 +72,16 @@ AI 读 [`llms.txt`](llms.txt) 即可上手；管理 AgentKit 的主管 AI 用 `a
 ### 派活模式要点
 - 工人只能用上面的工具（外加 `finish` 提交），不能 commit / push；工人说「完成」不算数：验收器把它的改动复制到全新 worktree 独立重跑检查，并标记删测试、跳过测试、改验收脚本、改白名单外文件、偷偷提交等行为。
 - 预算超限 5 秒内停止；429 按 Retry-After 等一次（≤ `max_wait`，默认 30 s）后暂停上报（不轮换账号）；Key 无效立即失败；504 视为上游暂时不可用（重试后暂停，可续跑）。
-- 预设：`agentkit model add NAME --preset nvidia|gemini|openrouter --model ID`（填好 base URL、Key 变量名、上下文、免费档节流 `--rpm` / `--max-wait` / `--max-tokens`，显式参数优先）。已实测 3 家：Gemini、OpenRouter `:free`、NVIDIA NIM（推理模型的 `reasoning_content` 不回传，被 token 上限截断时会告诉模型）。
+- 预设：`agentkit model add NAME --preset nvidia|gemini|openrouter|agnes|amd-cn --model ID`（填好 base URL、Key 变量名、上下文、免费档节流 `--rpm` / `--max-wait` / `--max-tokens` / `--rate-wait`，显式参数优先）。已实测 5 家（推理模型的 `reasoning_content` / `reasoning` 不回传，被 token 上限截断时会告诉模型）：
+
+  | 预设 | 服务商 | Key 变量 | 实测可用工具调用的模型 | 免费方式 / 限制（2026-11-23） |
+  |---|---|---|---|---|
+  | `gemini` | Google Gemini（OpenAI 兼容端点） | `GEMINI_API_KEY` | gemini-3-flash-preview、gemini-3.5-flash-lite | 免费档，每分钟 / 每天限额低 |
+  | `openrouter` | OpenRouter | `OPENROUTER_API_KEY` | `nvidia/nemotron-3.5-lightning:free` | 只用 `:free` 模型，每天 50 次 |
+  | `nvidia` | NVIDIA NIM | `NVIDIA_API_KEY` | nemotron-3.5-lightning-30b-a3b | 免费试用约 40 RPM |
+  | `agnes` | Agnes AI（国际） | `AGNES_API_KEY` | **agnes-3.0-flash**（也通：agnes-2.5-flash） | flash 模型目前促销零价（厂商说明）；实测约每分钟 10 次，429 不带 Retry-After → 预设 rpm 6 + `rate_wait` 60 s。pro 模型可能收费，别用 |
+  | `amd-cn` | AMD Radeon Cloud Token Factory（中国站） | `AMD_CN_API_KEY` | **DeepSeek-V4-Flash**（也通：Gemma-4-31B-IT、MiMo-V2.6-Flash） | 每日积分，北京时间 00:00 重置；约 20 RPM、每 Key 8 并发；忙时 429 `model_concurrency_rate_limit_exceeded`（等 5 / 10 / 20 s 后暂停）；偶发 502 |
+
 - OpenRouter：`--base-url https://openrouter.ai/api/v1`，免费模型 id 以 `:free` 结尾（`model add` 对无单价的非 `:free` 模型给出警告）；自动带 `HTTP-Referer` / `X-Title`；`X-RateLimit-Reset` 与 HTTP 200 里的 provider 错误都按对应状态码处理。
 - 上下文压缩（C-08）：工人的重复工具结果变成 `same_as_turn` 引用；最近 2 轮之外的旧工具结果批量老化为一行摘要；系统提示 + 工具定义 + 记忆摘要作为字节不变的前缀（利于服务商提示词缓存）；简洁输出风格（`style = "auto"`：大仓库从第 1 轮放进系统提示，否则转录变长时追加一次，小任务不付这笔开销）。`[compress] enabled / run_filters / dedup / aging / age_min_chars / style` 可调。实测数字见 [docs/STATUS.md](docs/STATUS.md)（离线：多文件题工人 token −12.4%，小题 0%；真实 NVIDIA NIM 3 道多文件题 −4.4%（每题 1 次，噪声大）；冗长日志 57–92%；真实转录重放 −60%）。
 - 日志：`.agentkit/logs/` 默认保留 7 天，`[logs] retain_days` 可调（0 = 永久）。

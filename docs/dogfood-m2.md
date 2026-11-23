@@ -176,3 +176,62 @@ agentkit logs t95aeaf --tail 12
 4. HTTP 504 原归为本地超时 → 归为上游不可用（重试 2 次后暂停，可续跑），状态码与 200 body 两种都覆盖。
 5. 卡住检测误判探索（7.4）。
 
+
+## 8. 第 4、5 家：Agnes AI + AMD Token Factory 中国站（C-11，2026-11-23 夜）
+
+所有数字都是**真实模型**（标注「离线」的除外）。Key 由沙箱代理在网络层注入，命令里只有占位值。工人 token = 服务商返回的 usage（输入 + 输出）；主管 token = 字符 / 4。多文件题 `max_rounds=20`，dogfood `max_rounds=12`；按服务商顺序跑（同一服务商同一时间只有 1 个任务）。
+
+### 8.1 工具调用探测（`/v1/models` + 带 `read` / `finish` 两个工具的两轮请求）
+
+| 服务商 | 模型 | 结果 |
+|---|---|---|
+| Agnes | agnes-3.0-flash | 200，0.6 s，`tool_calls` 正确（content 空，无推理字段）；响应 model 名为 `agnes-3.0-flash-angel` → **选用** |
+| Agnes | agnes-2.5-flash | 200，1.5 s，`tool_calls` 正确，带 `reasoning_content` |
+| Agnes | agnes-2.5-pro-alpha / -theta、agnes-3.0-pro | 未测（可能收费） |
+| AMD | DeepSeek-V4-Flash | 200，6 s，`tool_calls` 正确（带 `reasoning_content`）；`/models` 标 tools + reasoning、上下文 1M → **选用** |
+| AMD | Gemma-4-31B-IT | 200，3–4.5 s，`tool_calls` 正确 |
+| AMD | MiMo-V2.6-Flash | 200 但 90 s；`tool_calls` 正确，思考在 `reasoning` 字段 |
+| AMD | Qwen3.8-27B | 无工具时文本在 `reasoning`、content 空（`model test` → `reasoning_only`）；带工具：一次 >110 s 客户端超时、一次 504 |
+| AMD | GLM-5.3-Flash | 多次 429 `model_concurrency_rate_limit_exceeded`（`detail.error`，Retry-After 1）或 502，未拿到工具调用结果 |
+| AMD | DeepSeek-V4.1-Flash | 纯文本 200（17 s）；带工具时 502 |
+
+观察：AMD 网关这段时间对多个模型间歇返回 502 `upstream request failed`（约 10 s，纯文本 body），几分钟后恢复；MiniCPM5-2B 同时 200。
+
+### 8.2 Agnes 限速实测
+- 首轮（`rpm 10`，无 `rate_wait`）：ev-shop、ev-csv 各 5 轮 pass（14,652 / 14,231 token），第 11 次请求起 HTTP 429 `{"error":{"code":"","message":"You’ve reached the API rate limit for free users. …"}}`，**不带 Retry-After** → 旧逻辑立即暂停，ev-rename 与关压缩的 3 题都在第 1 轮暂停。
+- 每 6 s 一次请求：第 1–10 次 200，第 11 次（60.2 s）429，之后恢复 → 约「每滚动 60 s 10 次」。
+- 修复：模型配置 `rate_wait`（429 无 Retry-After 时等一次），Agnes 预设 `rpm 6` + `rate_wait 60`。之后 4 组共 12 题无一暂停。
+
+### 8.3 多文件题（压缩开 / 关，每格 2 次）
+
+| 服务商 / 模型 | 题 | 开：结果 / 轮 / 工人 token（第 1 次；第 2 次） | 关：结果 / 轮 / 工人 token（第 1 次；第 2 次） |
+|---|---|---|---|
+| Agnes `agnes-3.0-flash` | ev-shop | pass / 6 / 17,223；pass / 6 / 18,581 | pass / 6 / 21,857；pass / 6 / 22,774 |
+| | ev-csv | pass / 5 / 13,550；pass / 5 / 13,955 | pass / 5 / 14,612；pass / 5 / 14,680 |
+| | ev-rename | pass / 9 / 30,231；pass\* / 6 / 16,940 | pass / 6 / 19,964；pass / 5 / 15,650 |
+| | **合计** | **6/6，37 轮，110,480** | **6/6，33 轮，109,537（开 +0.9%）** |
+| AMD `DeepSeek-V4-Flash` | ev-shop | pass / 5 / 16,508；pass / 5 / 17,442 | pass / 6 / 23,777；pass / 7 / 31,530 |
+| | ev-csv | pass / 7 / 19,350；pass / 6 / 16,655 | pass / 5 / 14,733；pass / 5 / 14,395 |
+| | ev-rename | pass / 5 / 15,410；pass / 7 / 24,003 | pass / 7 / 23,880；pass / 8 / 32,708 |
+| | **合计** | **6/6，35 轮，109,368** | **6/6，38 轮，141,023（开 −22.4%）** |
+
+- 主管 token 每题 181–185（12 组里 2 组更高：Agnes ev-rename\* 239，AMD 关压缩 ev-shop 359——任务慢，`task wait` 多轮询了几次）。
+- 每轮工人 token：Agnes 开 2,986 vs 关 3,319（−10.0%），AMD 3,125 vs 3,711（−15.8%）。总量差别主要来自轮数：Agnes 开压缩时 ev-rename 一次用了 9 轮（一次只改一个文件，不是老化后重读），把总量拉平；AMD 关压缩时多了 3 轮。
+- \* Agnes 第 2 次开压缩 ev-rename：工人在一次回复里并行发了 3 个 `edit`，改的是它**记错内容**的测试文件（测试本来就用新名字；该任务老化了 6 个旧结果，第 3 轮读到的测试文件很可能已只剩一行摘要——推断），3 个都「old text not found」→ 被判「卡住：同一错误 3 次」→ failed（不可续跑），但改动其实已完成，独立验收判 pass。→ 修复：同一回复里的并行调用报同一错误只算 1 次（回归测试旧代码失败）。模型「凭记忆」写 old 文本（疑与老化有关），这一现象记录在案，暂不改老化策略（12 组里只出现 1 次）。
+- AMD：工人里有几次单次模型调用 60–214 s（502 / 超时后重试成功），无任务暂停；没有遇到忙模型 429（DeepSeek-V4-Flash）。
+
+### 8.4 dogfood（`fsutil.human_bytes()` + 测试，本仓库克隆，`max_rounds=12`）
+
+| 服务商 | 结果 | 轮 | 工人 token（入 / 出） | 用时 | 验收 |
+|---|---|---|---|---|---|
+| Agnes `agnes-3.0-flash` | worker finish | 6 | 26,312（25,686 / 626） | 51 s | 检查 pass；needs_review：`check_script_modified`（目标要求新建测试文件，预期） |
+| AMD `DeepSeek-V4-Flash` | worker finish | 10 | 42,293（41,130 / 1,163） | 244 s | 同上 |
+
+两家都一次写对、测试 5 / 5 覆盖目标里的值；对比 NVIDIA（12 轮未 finish，59,729）和 OpenRouter（12 轮 7/8，102,578）。两份实现都用 `if n < 1024: return f"{n} B"`，没有触发 `hardcoded_return_suspect`；该误报（NVIDIA 的 `if n == 0: return "0 B"`）由单元 + 端到端回归测试覆盖（旧代码失败）。
+
+### 8.5 本轮发现并修复
+1. Agnes 429 不带 Retry-After → 旧逻辑立即暂停：新增 `rate_wait`，预设 rpm 6 + 60 s（8.2）。
+2. AMD 错误嵌套在 `detail.error`，429 / 401 原来只给原始 JSON；忙模型 429（Retry-After 1）原来只等 1 s 一次就暂停：解析嵌套错误、忙 429 等 5 / 10 / 20 s 再暂停，与配额 429 区分。
+3. 推理文本在 `reasoning` 字段（AMD Qwen3.8 / MiMo）：确认从不回传（测试）。
+4. 并行调用同一错误被算作 3 次「卡住」（8.3 \*）。
+5. `hardcoded_return_suspect` 基例误报（C-10 dogfood 记录的问题）。

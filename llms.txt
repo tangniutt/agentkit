@@ -48,8 +48,10 @@ agentkit memory list | search "words" | show ID | forget ID   # anchored memorie
 ## Dispatch mode (a cheap model does the work, you read a ≤300-token verdict)
 agentkit model add cheap --base-url https://openrouter.ai/api/v1 --model google/gemma-4-31b-it:free --key-env OPENROUTER_API_KEY \
     --context 32000 --tier low       # stores only the env var NAME, never the key; ':free' ids cost nothing (paid ids: set --price-in/--price-out)
-agentkit model add nim --preset nvidia --model nvidia/nemotron-3.5-lightning-30b-a3b   # presets: nvidia | gemini | openrouter
-    # (base URL, key env var, context, free-tier pacing --rpm / --max-wait / --max-tokens; explicit flags win)
+agentkit model add nim --preset nvidia --model nvidia/nemotron-3.5-lightning-30b-a3b   # presets: nvidia | gemini | openrouter | agnes | amd-cn
+    # (base URL, key env var, context, free-tier pacing --rpm / --max-wait / --max-tokens / --rate-wait; explicit flags win)
+    # tested tool-capable free models: agnes -> agnes-3.0-flash (AGNES_API_KEY); amd-cn -> DeepSeek-V4-Flash (AMD_CN_API_KEY,
+    # daily points reset 00:00 Beijing); busy-model 429s are retried a few times, then the task pauses (task resume)
 agentkit model list | test [NAME] | remove NAME
 agentkit task create "fix the failing test in calc.py" --check "pytest -q" [--allow src/] \
     [--budget-tokens N] [--budget-usd X] [--budget-minutes M] [--tier low|mid|high] [--model NAME]
