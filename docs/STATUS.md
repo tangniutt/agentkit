@@ -39,7 +39,7 @@
 | C-09 主管操作手册 | 完成 | `agentkit/manual.py` + `agentkit manual`：默认 JSON 总览（快速上手流程、直接 / 派活模式取舍与实测 token、预算与安全规则、15 个常见错误码的修复（取自 `events.ERRORS`）、C-08 压缩说明、39 个命令一行索引带副作用标记）；`agentkit manual <命令或组>` 单命令详情（参数类型 / 默认值 / 说明从 `cli.build_parser()` 实时读取，输出字段、错误码、副作用、示例来自 SPEC）；`--all`（超出 `--budget` 时给 `next`）；`--human` / `--format md` 输出 Markdown；`docs/agent-manual.md` 为生成产物；`cli.py` 给 task create / verify / run / logs / feedback / edit 等补了参数说明（手册和 `--help` 同时受益）。大小（字符 / 4）：总览 ≈1.7k token（默认 2000 预算内），全部 ≈3.7k，单命令 88–365（平均 ≈150），task 组 ≈840 | `test_manual.py`（57 个：覆盖每个注册命令且新增命令缺条目即失败、39 个示例逐个解析回自己的命令、错误码在登记表与 docs/errors.md、副作用标记、参数来自解析器、JSON 合法与预算、`--all` 翻页、单命令大小、文档无漂移、`--human`、入口文档链接、无密钥样式字符串） |
 | C-08 修正 | 完成 | 做 C-09 时全量测试发现 `test_worker_compression_end_to_end_stable_prefix` 偶发失败（基线代码上 3/14）：`TranscriptCompressor._window_start` 在助手轮数 ≤ `keep_turns` 时把全部历史当作「旧」，`age_min_chars` 较小时工人刚读的文件在下一轮就被老化，测试只靠两次 pytest 打印相同耗时才通过。改为此时不老化任何内容；默认 `age_min_chars=4000` 下离线评测数字不变（小题 127,303 → 127,301、多文件 74,680 → 74,677 工人 token） | `test_recent_turns_never_aged_early`（旧代码失败、新代码通过）；端到端测试 8/8 稳定通过 |
 
-测试：`pytest -q` **247 个全绿**（M1 的 107 + M2 65 + C-08 18 + C-09 57）；CI 见下行。上一次 CI（Python 3.10 / 3.12）通过：ec5c3f7，run 45104300124。Dogfood：`docs/dogfood-m2.md`（离线派活通过；真实 Gemini 任务暴露并修复了 503 处理 bug）。
+测试：`pytest -q` **247 个全绿**（M1 的 107 + M2 65 + C-08 18 + C-09 57）；CI（Python 3.10 / 3.12）通过（98e272a，run 45121845041）。Dogfood：`docs/dogfood-m2.md`（离线派活通过；真实 Gemini 任务暴露并修复了 503 处理 bug）。
 
 ## C-08 实测（2026-11-23，诚实记录，含接近 0 的情况）
 
