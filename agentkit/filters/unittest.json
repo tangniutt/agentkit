@@ -1,0 +1,45 @@
+{
+ "id": "unittest",
+ "description": "python unittest: drop ok lines, keep FAIL/ERROR blocks and summary.",
+ "source": "own rules (AgentKit, Apache-2.0)",
+ "priority": 85,
+ "commands": [
+  "^python\\d?(?:\\.\\d+)?\\s+-m\\s+unittest\\b"
+ ],
+ "detect": [
+  "^Ran \\d+ tests? in [\\d.]+s$"
+ ],
+ "drop": [
+  " \\.\\.\\. ok$",
+  "^[.sx]+$",
+  " \\.\\.\\. skipped "
+ ],
+ "protect": [
+  "^Ran \\d+ tests?",
+  "^(?:OK|FAILED)\\b",
+  "^(?:FAIL|ERROR): ",
+  "^-{20,}$",
+  "^={20,}$",
+  "^\\s+File \""
+ ],
+ "head": 10,
+ "tail": 60,
+ "max_lines": 160,
+ "tests": [
+  {
+   "name": "verbose",
+   "command": "python -m unittest -v",
+   "input": "test_ok_0 (t.T.test_ok_0) ... ok\ntest_ok_1 (t.T.test_ok_1) ... ok\ntest_ok_2 (t.T.test_ok_2) ... ok\ntest_ok_3 (t.T.test_ok_3) ... ok\ntest_ok_4 (t.T.test_ok_4) ... ok\ntest_ok_5 (t.T.test_ok_5) ... ok\ntest_ok_6 (t.T.test_ok_6) ... ok\ntest_ok_7 (t.T.test_ok_7) ... ok\ntest_ok_8 (t.T.test_ok_8) ... ok\ntest_ok_9 (t.T.test_ok_9) ... ok\ntest_ok_10 (t.T.test_ok_10) ... ok\ntest_ok_11 (t.T.test_ok_11) ... ok\ntest_ok_12 (t.T.test_ok_12) ... ok\ntest_ok_13 (t.T.test_ok_13) ... ok\ntest_ok_14 (t.T.test_ok_14) ... ok\ntest_ok_15 (t.T.test_ok_15) ... ok\ntest_ok_16 (t.T.test_ok_16) ... ok\ntest_ok_17 (t.T.test_ok_17) ... ok\ntest_ok_18 (t.T.test_ok_18) ... ok\ntest_ok_19 (t.T.test_ok_19) ... ok\ntest_bad (t.T.test_bad) ... FAIL\n\n======================================================================\nFAIL: test_bad (t.T.test_bad)\n----------------------------------------------------------------------\nTraceback (most recent call last):\n  File \"/r/t.py\", line 9, in test_bad\n    self.assertEqual(1, 2)\nAssertionError: 1 != 2\n\n----------------------------------------------------------------------\nRan 21 tests in 0.002s\n\nFAILED (failures=1)\n",
+   "expect": [
+    "FAIL: test_bad",
+    "AssertionError: 1 != 2",
+    "Ran 21 tests",
+    "FAILED (failures=1)",
+    "File \"/r/t.py\", line 9"
+   ],
+   "absent": [
+    "test_ok_3 (t.T.test_ok_3) ... ok"
+   ]
+  }
+ ]
+}

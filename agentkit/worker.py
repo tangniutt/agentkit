@@ -67,6 +67,11 @@ def tool_schemas() -> list:
     return out
 
 
+STYLE_TERSE = """- Output style: terse; text between tool calls at most one short sentence. Keep code, paths, errors exact.
+- Tool results are compressed: old ones become one-line [aged] summaries, repeats say same_as_turn; run again
+  if you need the text. `run` output is filtered; `filtered.raw` names the command that shows the raw log.
+"""
+
 SYSTEM = """You are an AgentKit worker: a coding agent working alone in an isolated git worktree.
 Use ONLY the provided tools (always via tool calls). Every tool returns compact JSON {{ok,data,error,truncated,next}}.
 Rules:
@@ -76,7 +81,8 @@ Rules:
 - Run the checks yourself with `run` before calling `finish`. Your claim is not trusted: the verifier re-runs
   the checks in a clean worktree and flags suspicious changes.
 - Be frugal: prefer search / read with line ranges over reading whole files.
-
+- Commands run from the worktree root: use relative paths; never cd to an absolute path.
+{style}
 GOAL:
 {goal}
 
@@ -223,11 +229,19 @@ class Worker:
         self.denied: list = []
         self.messages: list = []
         self.tools = tool_schemas()
+        from .context import TranscriptCompressor
+
+        self.ccfg = dict(cfg.get("compress") or {})
+        self.cc = TranscriptCompressor(self.ccfg)
+        on = bool(self.ccfg.get("enabled", True))
+        self.run_filters = on and bool(self.ccfg.get("run_filters", True))
+        self.style = str(self.ccfg.get("style", "terse")) if on else "normal"
 
     # ---------------------------------------------------------- helpers
     def stats(self) -> dict:
         return {"rounds": self.rounds, "tokens_in": self.tokens_in, "tokens_out": self.tokens_out,
-                "usd": round(self.usd, 6), "compactions": self.compactions, "repairs": self.repairs}
+                "usd": round(self.usd, 6), "compactions": self.compactions, "repairs": self.repairs,
+                "compression": self.cc.stats()}
 
     def _ev(self, event: str, component: str, duration=None, error_code=None, **extra):
         self.last_component, self.last_step = component, self.rounds
@@ -336,6 +350,8 @@ class Worker:
                 return self._cli(["rename", str(s("src", "")), str(s("dst", ""))])
             if name == "run":
                 argv = ["run", str(s("command", ""))]
+                if not self.run_filters:
+                    argv.append("--raw")
                 if s("timeout"):
                     argv += ["--timeout", str(float(s("timeout")))]
                 env = self._cli(argv)
@@ -397,7 +413,8 @@ class Worker:
     def run(self, brief: str, resume: Optional[str] = None) -> Outcome:
         t = self.task
         sysmsg = SYSTEM.format(goal=t["goal"], checks="\n".join(f"- {c}" for c in t.get("checks") or []) or "- (none given)",
-                               allow=", ".join(t.get("allow") or []) or "(any)", brief=brief or "(none)")
+                               allow=", ".join(t.get("allow") or []) or "(any)", brief=brief or "(none)",
+                               style=STYLE_TERSE if self.style == "terse" else "")
         if resume:
             self._log({"role": "_resume", "content": f"resumed at round {self.rounds}"})
         self._add({"role": "system", "content": sysmsg})
@@ -415,6 +432,7 @@ class Worker:
                 return Outcome("stopped", stop, stopped=stop)
             if self.rounds - self.start_round >= self.max_rounds:
                 return Outcome("stopped", f"max rounds ({self.max_rounds})", stopped="rounds")
+            self.cc.age(self.messages)  # C-08 progressive aging (batched; never touches the prefix)
             self.maybe_compact()
             if self.budget_tokens and self.tokens_in + self.tokens_out + self.est_tokens() > self.budget_tokens:
                 return Outcome("stopped", "token budget would be exceeded by the next call", stopped="budget")
@@ -513,6 +531,7 @@ class Worker:
                 self._ev("tool", f"tool:{name}", time.monotonic() - tt,
                          None if env.get("ok") else (env.get("error") or {}).get("code"))
                 content = redact_text(dumps(env))
+                content = self.cc.tool_result(self.messages, self.rounds, tc["id"], name, args, env, content)
                 self._add({"role": "tool", "tool_call_id": tc["id"], "content": content})
                 sig = _error_sig(name, env)
                 if sig:

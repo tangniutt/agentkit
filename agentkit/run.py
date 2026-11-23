@@ -111,10 +111,11 @@ def tail(p: Path, max_chars: int) -> tuple[str, bool, int]:
     return "…" + t, True, total
 
 
-def fit_tails(err_p: Path, out_p: Path, room: int) -> tuple[str, str, bool, bool, int, int]:
-    """Split room between stderr (priority) and stdout. Sizes are measured as JSON-escaped chars."""
-    err_raw = err_p.read_bytes().decode("utf-8", "replace")
-    out_raw = out_p.read_bytes().decode("utf-8", "replace")
+def fit_tails(err_p, out_p, room: int, head_first: bool = False) -> tuple[str, str, bool, bool, int, int]:
+    """Split room between stderr (priority) and stdout. Sizes are measured as JSON-escaped chars.
+    err_p / out_p: log paths or already-filtered text."""
+    err_raw = err_p if isinstance(err_p, str) else err_p.read_bytes().decode("utf-8", "replace")
+    out_raw = out_p if isinstance(out_p, str) else out_p.read_bytes().decode("utf-8", "replace")
     def jlen(s):
         return len(dumps(s))
     e_need, o_need = jlen(err_raw), jlen(out_raw)
@@ -126,6 +127,11 @@ def fit_tails(err_p: Path, out_p: Path, room: int) -> tuple[str, str, bool, bool
             return raw, False, total
         # shrink by escaped length
         lo = max(0, r - 10)
+        if head_first:  # C-08 filters whose most useful part is the start (diffs: file summary first)
+            t = raw[:lo] if lo else ""
+            while t and jlen(t) + 3 > r:
+                t = t[: len(t) - len(t) // 8 - 1]
+            return (t + "…") if t else "", True, total
         t = raw[-lo:] if lo else ""
         while t and jlen(t) + 3 > r:
             t = t[len(t) // 8 + 1:]
@@ -158,9 +164,16 @@ def cmd_run(ctx: Ctx, a) -> Result:
     }
     if r["timed_out"]:
         data["note"] = f"killed process group after {timeout:g}s"
+    err_txt, out_txt, filt = filter_streams(a.command, r["stderr_log"], r["stdout_log"],
+                                            enabled=compression_on(ctx.config, "run_filters") and not getattr(a, "raw", False))
+    if filt:
+        # C-08: command-aware filter; the raw output stays in the logs (agentkit logs ID --raw)
+        data["filtered"] = filt
     room = room_for(ctx, data, reserve=len(ctx.next_cmd("read", f"{so}:1-999999")) + 60)
-    e, o, e_cut, o_cut, e_total, o_total = fit_tails(r["stderr_log"], r["stdout_log"], room)
+    e, o, e_cut, o_cut, e_total, o_total = fit_tails(err_txt, out_txt, room, head_first=bool(filt and filt.pop("_head", False)))
     data["stderr_tail"], data["stdout_tail"] = e, o
+    if filt:
+        e_total, o_total = _lines(r["stderr_log"]), _lines(r["stdout_log"])
     truncated = e_cut or o_cut
     nxt = None
     if e_cut:
@@ -168,6 +181,38 @@ def cmd_run(ctx: Ctx, a) -> Result:
     elif o_cut:
         nxt = ctx.next_cmd("read", f"{so}:1-{o_total}")
     return Result(data, truncated, nxt)
+
+
+def _lines(p: Path) -> int:
+    t = p.read_bytes().decode("utf-8", "replace")
+    return t.count("\n") + (0 if t.endswith("\n") or not t else 1)
+
+
+def compression_on(config: dict, part: str) -> bool:
+    c = config.get("compress") or {}
+    return bool(c.get("enabled", True)) and bool(c.get(part, True))
+
+
+def filter_streams(command: str, err_p: Path, out_p: Path, enabled: bool = True):
+    """C-08: apply the command-aware filter to stderr and stdout. Returns (err, out, info|None)."""
+    err = err_p.read_bytes().decode("utf-8", "replace")
+    out = out_p.read_bytes().decode("utf-8", "replace")
+    if not enabled:
+        return err, out, None
+    from .compress import compress, select_filter
+
+    f = select_filter(command, out + "\n" + err)
+    e2, ei = compress(command, err, filt=f)
+    o2, oi = compress(command, out, filt=f)
+    if not (ei["applied"] or oi["applied"]):
+        return err, out, None
+    raw = ei["raw_lines"] + oi["raw_lines"]
+    shown = (ei["lines"] if ei["applied"] else ei["raw_lines"]) + (oi["lines"] if oi["applied"] else oi["raw_lines"])
+    run_id = err_p.name.replace(".stderr.log", "")
+    info = {"filter": f["id"], "lines": f"{shown}/{raw}", "raw": f"agentkit logs {run_id} --raw"}
+    if f.get("fit") == "head":
+        info["_head"] = True
+    return e2, o2, info
 
 
 _ = tail

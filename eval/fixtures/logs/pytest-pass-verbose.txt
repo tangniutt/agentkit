@@ -1,0 +1,90 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.16, pytest-9.2.0, pluggy-1.7.0 -- /usr/local/bin/python
+rootdir: /workspace/work/agentkit
+configfile: pyproject.toml
+plugins: xdist-3.8.0, anyio-4.16.0
+collecting ... collected 43 items
+
+tests/test_compress.py::test_every_filter_has_passing_inline_samples PASSED [  2%]
+tests/test_compress.py::test_filter_selection_by_command_and_by_output PASSED [  4%]
+tests/test_compress.py::test_severity_lines_survive_every_filter PASSED  [  6%]
+tests/test_compress.py::test_validator_rejects_lost_code_paths_urls_versions_and_errors PASSED [  9%]
+tests/test_compress.py::test_compress_falls_back_to_original_when_validation_fails PASSED [ 11%]
+tests/test_compress.py::test_small_output_untouched PASSED               [ 13%]
+tests/test_compress.py::test_pytest_300_repeated_warnings_shrink_and_keep_failure PASSED [ 16%]
+tests/test_compress.py::test_best_why_prefers_summary_over_trailing_noise PASSED [ 18%]
+tests/test_compress.py::test_run_filters_output_and_raw_is_recoverable PASSED [ 20%]
+tests/test_compress.py::test_logs_raw_rejects_bad_ids PASSED             [ 23%]
+tests/test_compress.py::test_verify_why_uses_summary_line PASSED         [ 25%]
+tests/test_compress.py::test_session_dedup_and_aging_keep_pairs_and_prefix PASSED [ 27%]
+tests/test_compress.py::test_aging_is_batched PASSED                     [ 30%]
+tests/test_compress.py::test_worker_compression_end_to_end_stable_prefix FAILED [ 32%]
+tests/test_compress.py::test_worker_compression_can_be_switched_off PASSED [ 34%]
+tests/test_read_search.py::test_read_range_and_single_line PASSED        [ 37%]
+tests/test_read_search.py::test_read_symbol_treesitter[m.py] PASSED      [ 39%]
+tests/test_read_search.py::test_read_symbol_treesitter[m.js] PASSED      [ 41%]
+tests/test_read_search.py::test_read_symbol_treesitter[m.ts] PASSED      [ 44%]
+tests/test_read_search.py::test_read_symbol_treesitter[m.go] PASSED      [ 46%]
+tests/test_read_search.py::test_read_symbol_treesitter[m.rs] PASSED      [ 48%]
+tests/test_read_search.py::test_read_symbol_treesitter[M.java] PASSED    [ 51%]
+tests/test_read_search.py::test_read_symbol_regex_fallback PASSED        [ 53%]
+tests/test_read_search.py::test_read_binary_rejected PASSED              [ 55%]
+tests/test_read_search.py::test_read_over_1mb_is_chunked PASSED          [ 58%]
+tests/test_read_search.py::test_read_secret_file_refused PASSED          [ 60%]
+tests/test_read_search.py::test_search_respects_gitignore[True-rg] PASSED [ 62%]
+tests/test_read_search.py::test_search_respects_gitignore[True-python] PASSED [ 65%]
+tests/test_read_search.py::test_search_respects_gitignore[False-rg] PASSED [ 67%]
+tests/test_read_search.py::test_search_respects_gitignore[False-python] PASSED [ 69%]
+tests/test_read_search.py::test_ls_glob_respect_gitignore PASSED         [ 72%]
+tests/test_read_search.py::test_repo_map_languages_and_fallback PASSED   [ 74%]
+tests/test_read_search.py::test_repo_map_10k_files_within_budget PASSED  [ 76%]
+tests/test_cli_budget.py::test_schema_on_success_error_and_usage PASSED  [ 79%]
+tests/test_cli_budget.py::test_human_flag_is_text PASSED                 [ 81%]
+tests/test_cli_budget.py::test_read_large_file_budget_and_continuation[60] PASSED [ 83%]
+tests/test_cli_budget.py::test_read_large_file_budget_and_continuation[150] PASSED [ 86%]
+tests/test_cli_budget.py::test_read_large_file_budget_and_continuation[500] PASSED [ 88%]
+tests/test_cli_budget.py::test_read_large_file_budget_and_continuation[2000] PASSED [ 90%]
+tests/test_cli_budget.py::test_huge_single_line_never_exceeds PASSED     [ 93%]
+tests/test_cli_budget.py::test_search_ls_glob_repo_map_budget PASSED     [ 95%]
+tests/test_cli_budget.py::test_fuzz_budgets_across_commands PASSED       [ 97%]
+tests/test_cli_budget.py::test_finalize_safety_net_never_exceeds PASSED  [100%]
+
+=================================== FAILURES ===================================
+_______________ test_worker_compression_end_to_end_stable_prefix _______________
+
+ak = <conftest.AK object at 0xffffa90f1e20>
+repo = PosixPath('/tmp/pytest-of-sandbox/pytest-19/test_worker_compression_end_to0/repo')
+fake = <eval.fake_openai.FakeOpenAI object at 0xffffa90f1f10>
+
+    def test_worker_compression_end_to_end_stable_prefix(ak, repo, fake):
+        project(repo, ak, fake, cfg="\n[compress]\nage_min_chars = 500\n")
+        (repo / "big.py").write_text("".join(f"VALUE_{i} = {i}  # filler line to make the file large\n" for i in range(120)))
+        git(repo, "add", "-A")
+        git(repo, "commit", "-qm", "big")
+        steps = [{"call": "read", "args": {"spec": "big.py"}}, {"call": "read", "args": {"spec": "big.py"}},
+                 {"call": "run", "args": {"command": CHECK}}, {"call": "run", "args": {"command": CHECK}}] + FIX
+        fake.add("[CC]", steps)
+        tid = create(ak, "fix add [CC]")
+        s = wait(ak, tid)
+        assert s["verdict"] == "pass"
+        reqs = fake.requests_for("[CC]")
+        bodies = [r["body"] for r in reqs]
+        # byte-stable prefix: system prompt (with memory brief), task message, tool schemas
+        first = bodies[0]
+        for b in bodies[1:]:
+            assert json.dumps(b["messages"][:2]) == json.dumps(first["messages"][:2])
+            assert json.dumps(b["tools"]) == json.dumps(first["tools"])
+        assert "Output style: terse" in first["messages"][0]["content"]
+        last = bodies[-1]["messages"]
+        assert any("same_as_turn" in str(m.get("content")) for m in last)
+        assert any(str(m.get("content", "")).startswith(AGED) for m in last)
+        ids = [c["id"] for m in last if m["role"] == "assistant" for c in m.get("tool_calls") or []]
+        assert ids == [m["tool_call_id"] for m in last if m["role"] == "tool"]
+        st = tjson(repo, tid)["compression"]
+>       assert st["deduped"] >= 1 and st["aged"] >= 1 and st["saved_chars"] > 0
+E       assert (0 >= 1)
+
+tests/test_compress.py:207: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_compress.py::test_worker_compression_end_to_end_stable_prefix
+=================== 1 failed, 42 passed in 79.67s (0:01:19) ====================

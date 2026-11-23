@@ -207,8 +207,9 @@ def run_checks(cmds: list, where: Path, timeout: float, log_dir: Path, env=None)
         if r["exit_code"] == 5 and re.search(r"\bpytest\b", c):
             item["why"] = "no tests collected"
         if res != "pass":
-            last = [l for l in (err.strip() or out.strip()).splitlines() if l.strip()][-1:] or [""]
-            item.setdefault("why", last[0][-140:])
+            from .compress import best_why  # C-08: the summary / diagnostic line, not trailing noise
+
+            item.setdefault("why", best_why(err if err.strip() else out))
         item["log"] = r["stderr_log"].name.replace(".stderr.log", "")
         checks.append(item)
     return checks

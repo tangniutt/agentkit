@@ -1,0 +1,55 @@
+{
+ "id": "tsc",
+ "description": "TypeScript compiler: dedup identical diagnostics, keep every TSxxxx error and the count.",
+ "source": "own rules; some match / drop / keep regexes adapted from OmniRoute (MIT) open-sse/services/compression/engines/rtk/filters/build-typescript.json — see NOTICE",
+ "priority": 80,
+ "commands": [
+  "^(?:tsc|vue-tsc)\\b",
+  "^(?:npm|pnpm|yarn)\\s+(?:run\\s+)?(?:typecheck|type-check|tsc)\\b"
+ ],
+ "detect": [
+  "error TS\\d{4}:"
+ ],
+ "drop": [
+  "^\\s*~+\\s*$",
+  "^Errors\\s+Files$",
+  "^\\s+\\d+\\s+\\S+:\\d+$"
+ ],
+ "protect": [
+  "TS\\d{4}",
+  "^Found \\d+ errors?"
+ ],
+ "head": 10,
+ "tail": 40,
+ "max_lines": 200,
+ "tests": [
+  {
+   "name": "errors",
+   "command": "npx tsc --noEmit",
+   "input": "src/a0.ts(3,7): error TS2322: Type 'string' is not assignable to type 'number'.\n\n3 const x: number = 'a';\n        ~\n\nsrc/a1.ts(3,7): error TS2322: Type 'string' is not assignable to type 'number'.\n\n3 const x: number = 'a';\n        ~\n\nsrc/a2.ts(3,7): error TS2322: Type 'string' is not assignable to type 'number'.\n\n3 const x: number = 'a';\n        ~\n\nsrc/a3.ts(3,7): error TS2322: Type 'string' is not assignable to type 'number'.\n\n3 const x: number = 'a';\n        ~\n\nsrc/a4.ts(3,7): error TS2322: Type 'string' is not assignable to type 'number'.\n\n3 const x: number = 'a';\n        ~\n\nsrc/a5.ts(3,7): error TS2322: Type 'string' is not assignable to type 'number'.\n\n3 const x: number = 'a';\n        ~\n\nFound 6 errors in 6 files.\n",
+   "expect": [
+    "src/a5.ts(3,7): error TS2322",
+    "Found 6 errors"
+   ],
+   "absent": [
+    "        ~"
+   ]
+  },
+  {
+   "name": "continuation + table",
+   "command": "tsc",
+   "input": "src/w0.tsx(1,1): error TS2322: Type 'a' is not assignable to type 'b'.\n  Type 'undefined' is not assignable to type 'string'.\nsrc/w1.tsx(1,1): error TS2322: Type 'a' is not assignable to type 'b'.\n  Type 'undefined' is not assignable to type 'string'.\nsrc/w2.tsx(1,1): error TS2322: Type 'a' is not assignable to type 'b'.\n  Type 'undefined' is not assignable to type 'string'.\nsrc/w3.tsx(1,1): error TS2322: Type 'a' is not assignable to type 'b'.\n  Type 'undefined' is not assignable to type 'string'.\nsrc/w4.tsx(1,1): error TS2322: Type 'a' is not assignable to type 'b'.\n  Type 'undefined' is not assignable to type 'string'.\n\nFound 5 errors in 5 files.\n\nErrors  Files\n     1  src/w0.tsx:1\n     1  src/w1.tsx:1\n     1  src/w2.tsx:1\n     1  src/w3.tsx:1\n     1  src/w4.tsx:1\n",
+   "expect": [
+    "src/w4.tsx(1,1): error TS2322",
+    "Type 'undefined' is not assignable to type 'string'.  [×5]",
+    "Found 5 errors"
+   ],
+   "absent": [
+    "     1  src/w3.tsx:1"
+   ]
+  }
+ ],
+ "dedup": [
+  "^\\s{2,}\\S"
+ ]
+}

@@ -1,0 +1,39 @@
+{
+ "id": "mypy",
+ "description": "mypy: keep every error / note line and the summary.",
+ "source": "own rules; some match / drop / keep regexes adapted from OmniRoute (MIT) open-sse/services/compression/engines/rtk/filters/mypy.json — see NOTICE",
+ "priority": 80,
+ "commands": [
+  "^mypy\\b",
+  "^python\\d?\\s+-m\\s+mypy\\b",
+  "^dmypy\\b"
+ ],
+ "detect": [
+  "^Found \\d+ errors? in \\d+ files?",
+  "^Success: no issues found"
+ ],
+ "protect": [
+  ": (?:error|note): ",
+  "^Found \\d+ errors?",
+  "^Success: "
+ ],
+ "dedup": [
+  ": note: "
+ ],
+ "head": 10,
+ "tail": 40,
+ "max_lines": 200,
+ "tests": [
+  {
+   "name": "errors",
+   "command": "mypy pkg",
+   "input": "pkg/m.py:0: note: See https://mypy.readthedocs.io/en/stable/running_mypy.html#missing-imports\npkg/m.py:1: note: See https://mypy.readthedocs.io/en/stable/running_mypy.html#missing-imports\npkg/m.py:2: note: See https://mypy.readthedocs.io/en/stable/running_mypy.html#missing-imports\npkg/m.py:3: note: See https://mypy.readthedocs.io/en/stable/running_mypy.html#missing-imports\npkg/m.py:4: note: See https://mypy.readthedocs.io/en/stable/running_mypy.html#missing-imports\npkg/m.py:5: note: See https://mypy.readthedocs.io/en/stable/running_mypy.html#missing-imports\npkg/m.py:6: note: See https://mypy.readthedocs.io/en/stable/running_mypy.html#missing-imports\npkg/m.py:7: note: See https://mypy.readthedocs.io/en/stable/running_mypy.html#missing-imports\npkg/m.py:8: note: See https://mypy.readthedocs.io/en/stable/running_mypy.html#missing-imports\npkg/m.py:9: note: See https://mypy.readthedocs.io/en/stable/running_mypy.html#missing-imports\npkg/m.py:3: error: Incompatible types in assignment (expression has type \"str\", variable has type \"int\")  [assignment]\nFound 1 error in 1 file (checked 4 source files)\n",
+   "expect": [
+    "pkg/m.py:3: error: Incompatible types",
+    "Found 1 error in 1 file",
+    "https://mypy.readthedocs.io/en/stable/running_mypy.html#missing-imports"
+   ],
+   "compresses": false
+  }
+ ]
+}

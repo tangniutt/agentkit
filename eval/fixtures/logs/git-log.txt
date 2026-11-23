@@ -1,0 +1,118 @@
+commit 12e6a236dd606690fe69f100a55e2f6b191534e3
+Author: tangniutt <216576622+tangniutt@users.noreply.github.com>
+Date:   Mon Nov 23 02:35:06 2026 +0000
+
+    docs: STATUS records CI result for cdda359
+    
+    Signed-off-by: tangniutt <216576622+tangniutt@users.noreply.github.com>
+
+commit cdda3594d5ba12e18f0a10825c9d97d42aad3b4e
+Author: tangniutt <216576622+tangniutt@users.noreply.github.com>
+Date:   Mon Nov 23 02:30:22 2026 +0000
+
+    feat(m2): uninstall, 7-day log retention, task resume, lean host outputs, multi-file eval, llms.txt install check, OpenRouter handling
+    
+    - M-01: agentkit uninstall (dry run by default; package, user config/data, every registered repo's .agentkit/ and worktrees; never code or git history)
+    - C-03 / baseline 5.3: logs pruned after [logs] retain_days (default 7)
+    - C-05: agentkit task resume ID reuses the worktree with a compacted transcript; cumulative budgets
+    - C-06: task create/wait/report trimmed; wait inlines the report; 3 multi-file eval tasks, per-size table
+    - M-19 / C-07: eval/llms_check.py follows llms.txt alone in a fresh venv or bare PEP 668 python; llms.txt install ladder pip -> pipx -> uv -> venv
+    - M-12: OpenRouter attribution headers, provider errors inside HTTP 200, X-RateLimit-Reset, paid-model guard
+    - docs: STATUS, dogfood-m2, baseline change log C-05..C-07, README, llms.txt, AGENTS.md
+    
+    Signed-off-by: tangniutt <216576622+tangniutt@users.noreply.github.com>
+
+commit cf45d1dde374c4ea605ba2b2f933ee64bf9171fa
+Author: tangniutt <216576622+tangniutt@users.noreply.github.com>
+Date:   Sun Nov 22 21:12:15 2026 +0000
+
+    docs(m2): STATUS, dogfood-m2, errors.md, README, llms.txt, AGENTS.md, baseline C-03/C-04
+    
+    Signed-off-by: tangniutt <216576622+tangniutt@users.noreply.github.com>
+
+commit e5bdd62c37b760fb9ac0544b0e81ae312e23ae19
+Author: tangniutt <216576622+tangniutt@users.noreply.github.com>
+Date:   Sun Nov 22 21:12:15 2026 +0000
+
+    feat(m2): built-in worker, task system, independent verification, budgets, eval harness
+    
+    - M-12 worker loop over M1 tools (OpenAI-compatible stdlib client, tool-call repair,
+      stuck detection, 70% context compaction, memory brief, Gemini thought signatures)
+    - model add/list/test/remove (keys only by env var name; retries, 429 Retry-After, 5xx)
+    - M-13 task create/status/wait/report/cancel/clean: detached workers, on-disk state,
+      crash recovery (interrupted), content-hash dedupe, concurrency queue
+    - M-14 per-task worktree/branch, commit/push guard + refusing git hooks
+    - M-15 verifier re-runs checks in a clean worktree; anti-cheat flags -> needs_review
+    - M-16 token/usd/time budgets (stop <5 s), M-17 key scrubbing + redaction
+    - M-21 auto-memory of failure reasons and per-model results
+    - M-20 eval/: 21 tasks, 14 cheat cases (100% detected), offline fake OpenAI server
+    - C-03 run ids, stable error codes, JSONL event logs, logs/debug-bundle, AK-INTERNAL
+    - C-04 issue forms + agentkit feedback (drafts only, never posts)
+    
+    Signed-off-by: tangniutt <216576622+tangniutt@users.noreply.github.com>
+
+commit 99cdca36bace2938db1d31a5c293cf1cbb356f02
+Author: tangniutt <216576622+tangniutt@users.noreply.github.com>
+Date:   Sun Nov 22 19:56:35 2026 +0000
+
+    docs: STATUS reflects CI and test count
+    
+    Signed-off-by: tangniutt <216576622+tangniutt@users.noreply.github.com>
+
+commit ffd0ff7b4eda0847ff7fa6aa1ad88e55f5cacfbd
+Author: tangniutt <216576622+tangniutt@users.noreply.github.com>
+Date:   Sun Nov 22 19:54:52 2026 +0000
+
+    ci: run pytest (JSON schema checks included) on Python 3.10 and 3.12
+    
+    Signed-off-by: tangniutt <216576622+tangniutt@users.noreply.github.com>
+
+commit b151860c498bbb968f6d55351fc5617aa2d33941
+Author: tangniutt <216576622+tangniutt@users.noreply.github.com>
+Date:   Sun Nov 22 19:53:51 2026 +0000
+
+    docs(m1): llms.txt, README usage, STATUS, dogfood report
+    
+    Signed-off-by: tangniutt <216576622+tangniutt@users.noreply.github.com>
+
+commit 249400b645de98389385a00f7e8d6662f55cee3f
+Author: tangniutt <216576622+tangniutt@users.noreply.github.com>
+Date:   Sun Nov 22 19:53:51 2026 +0000
+
+    feat(m1): direct-mode toolkit prototype
+    
+    CLI with fixed JSON envelope and output budget (M-02/M-03), read (M-04),
+    search/ls/glob (M-05), repo_map (M-06), edit/patch/create/delete/rename with
+    syntax check and stale-read guard (M-07), run with process-group timeout
+    (M-08), checkpoints (M-09), verify in clean worktree (M-10), direct-mode task
+    stub (M-11), doctor (M-18), basic project memory (M-21), command permissions
+    (M-22), secret redaction. 107 pytest tests.
+    
+    Reused (MIT, see NOTICE): worker-bridge redaction patterns, mini-swe-agent
+    process-group kill.
+    
+    Signed-off-by: tangniutt <216576622+tangniutt@users.noreply.github.com>
+
+commit ff6936868aa1174aa41796ed14caa6617c6f3fde
+Author: tangniutt <216576622+tangniutt@users.noreply.github.com>
+Date:   Sun Nov 22 19:28:05 2026 +0000
+
+    docs: competitor gap (C-02), process, AGENTS.md handoff, STATUS
+    
+    Signed-off-by: tangniutt <216576622+tangniutt@users.noreply.github.com>
+
+commit 9e74c6de818b62a65d3686b00140bc2086a1fad6
+Author: tangniutt <216576622+tangniutt@users.noreply.github.com>
+Date:   Sun Nov 22 19:25:48 2026 +0000
+
+    docs: feature-source map, memory design (C-01 / M-21)
+    
+    Signed-off-by: tangniutt <216576622+tangniutt@users.noreply.github.com>
+
+commit c6509b65fcd529acf129ad8ff56867923737c06b
+Author: tangniutt <216576622+tangniutt@users.noreply.github.com>
+Date:   Sun Nov 22 19:14:04 2026 +0000
+
+    docs: initial README, PRD v0.2, V1.0 baseline, Apache-2.0
+    
+    Signed-off-by: tangniutt <216576622+tangniutt@users.noreply.github.com>

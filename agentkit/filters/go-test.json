@@ -1,0 +1,44 @@
+{
+ "id": "go-test",
+ "description": "go test: drop ok / RUN / PASS lines, keep FAIL, panics, file:line.",
+ "source": "own rules; some match / drop / keep regexes adapted from OmniRoute (MIT) open-sse/services/compression/engines/rtk/filters/test-go.json — see NOTICE",
+ "priority": 85,
+ "commands": [
+  "^go\\s+test\\b"
+ ],
+ "detect": [
+  "^--- FAIL: ",
+  "^(?:ok|FAIL)\\s+\\S+\\s+[\\d.]+s$"
+ ],
+ "drop": [
+  "^=== (?:RUN|PAUSE|CONT)\\s",
+  "^\\s*--- PASS: ",
+  "^PASS$"
+ ],
+ "protect": [
+  "^--- FAIL",
+  "^FAIL",
+  "^ok\\s+\\S+",
+  "^panic:",
+  "_test\\.go:\\d+"
+ ],
+ "head": 10,
+ "tail": 50,
+ "max_lines": 160,
+ "tests": [
+  {
+   "name": "one fail",
+   "command": "go test ./...",
+   "input": "=== RUN   TestOk0\n--- PASS: TestOk0 (0.00s)\n=== RUN   TestOk1\n--- PASS: TestOk1 (0.00s)\n=== RUN   TestOk2\n--- PASS: TestOk2 (0.00s)\n=== RUN   TestOk3\n--- PASS: TestOk3 (0.00s)\n=== RUN   TestOk4\n--- PASS: TestOk4 (0.00s)\n=== RUN   TestOk5\n--- PASS: TestOk5 (0.00s)\n=== RUN   TestOk6\n--- PASS: TestOk6 (0.00s)\n=== RUN   TestOk7\n--- PASS: TestOk7 (0.00s)\n=== RUN   TestOk8\n--- PASS: TestOk8 (0.00s)\n=== RUN   TestOk9\n--- PASS: TestOk9 (0.00s)\n=== RUN   TestOk10\n--- PASS: TestOk10 (0.00s)\n=== RUN   TestOk11\n--- PASS: TestOk11 (0.00s)\n=== RUN   TestBad\n    sum_test.go:9: got 3 want 4\n--- FAIL: TestBad (0.00s)\nFAIL\nFAIL\texample.com/m\t0.002s\nok  \texample.com/other\t0.001s\n",
+   "expect": [
+    "--- FAIL: TestBad",
+    "sum_test.go:9: got 3 want 4",
+    "FAIL\texample.com/m",
+    "ok  \texample.com/other"
+   ],
+   "absent": [
+    "=== RUN   TestOk1"
+   ]
+  }
+ ]
+}

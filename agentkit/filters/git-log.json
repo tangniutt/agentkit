@@ -1,0 +1,40 @@
+{
+ "id": "git-log",
+ "description": "git log: drop Author/Date and blank lines; keep commit ids and subjects.",
+ "source": "own rules; some match / drop / keep regexes adapted from OmniRoute (MIT) open-sse/services/compression/engines/rtk/filters/git-log.json — see NOTICE",
+ "priority": 95,
+ "commands": [
+  "^git\\s+log\\b"
+ ],
+ "detect": [
+  "^commit [0-9a-f]{40}"
+ ],
+ "drop": [
+  "^Author: ",
+  "^Date: ",
+  "^Merge: ",
+  "^\\s*$",
+  "^\\s{4}Signed-off-by: "
+ ],
+ "protect": [
+  "^commit [0-9a-f]{7,40}"
+ ],
+ "head": 0,
+ "tail": 0,
+ "max_lines": 0,
+ "tests": [
+  {
+   "name": "log",
+   "command": "git log -3",
+   "input": "commit 0000000000000000000000000000000000000000\nAuthor: Dev <dev@example.com>\nDate:   Mon Nov 23 10:00:00 2026 +0800\n\n    feat: change number 0\n\n    Signed-off-by: Dev <dev@example.com>\n\ncommit 0000000000000000000000000000000000001eef\nAuthor: Dev <dev@example.com>\nDate:   Mon Nov 23 10:01:00 2026 +0800\n\n    feat: change number 1\n\n    Signed-off-by: Dev <dev@example.com>\n\ncommit 0000000000000000000000000000000000003dde\nAuthor: Dev <dev@example.com>\nDate:   Mon Nov 23 10:02:00 2026 +0800\n\n    feat: change number 2\n\n    Signed-off-by: Dev <dev@example.com>\n\n",
+   "expect": [
+    "feat: change number 2",
+    "commit "
+   ],
+   "absent": [
+    "Author: Dev",
+    "Signed-off-by"
+   ]
+  }
+ ]
+}

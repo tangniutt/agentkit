@@ -1,0 +1,1959 @@
+diff --git a/agentkit/models.py b/agentkit/models.py
+new file mode 100644
+index 0000000..0cb5cc4
+--- /dev/null
++++ b/agentkit/models.py
+@@ -0,0 +1,324 @@
++# Copyright 2026 tangniutt and contributors
++# SPDX-License-Identifier: Apache-2.0
++"""M-12 model access: `agentkit model add/list/test` and a stdlib OpenAI-compatible chat client.
++
++Keys are never stored: config holds only the NAME of an environment variable (`key_env`).
++The value is read at call time, registered with the redactor, and sent only in the
++Authorization header (M-17). Failure policy (baseline section 4):
++  timeout / network -> 2 retries with exponential backoff, then ModelError(kind="timeout")
++  429               -> honor Retry-After (header or Gemini RetryInfo) once if short, then kind="rate_limited"
++  401 / 403         -> kind="auth", no retry
++"""
++
++from __future__ import annotations
++
++import json
++import os
++import re
++import socket
++import time
++import urllib.error
++import urllib.parse
++import urllib.request
++from dataclasses import dataclass
++from typing import Optional
++
++from .config import load_config, set_table
++from .core import AKError, Ctx, Result
++from .redact import redact, redact_text, register_secret
++
++TIERS = ("low", "mid", "high")
++NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
++RETRY_AFTER_CAP_S = 30.0
++
++
++class ModelError(Exception):
++    def __init__(self, kind: str, msg: str, retry_after: Optional[float] = None, status: Optional[int] = None):
++        super().__init__(msg)
++        self.kind = kind  # auth | rate_limited | timeout | network | unavailable | bad_response | http
++        self.retry_after = retry_after
++        self.status = status
++
++
++@dataclass
++class ModelSpec:
++    name: str
++    base_url: str
++    model_id: str
++    key_env: Optional[str] = None
++    context: int = 32000
++    price_in: float = 0.0  # USD per 1M input tokens
++    price_out: float = 0.0
++    tier: str = "low"
++    timeout: float = 120.0
++
++    def key(self) -> Optional[str]:
++        if not self.key_env:
++            return None
++        v = os.environ.get(self.key_env)
++        if v:
++            register_secret(v)
++        return v
++
++    def cost(self, tin: int, tout: int) -> float:
++        return (tin * self.price_in + tout * self.price_out) / 1e6
++
++
++def all_models(cfg: dict) -> dict:
++    out = {}
++    for name, m in (cfg.get("models") or {}).items():
++        if not isinstance(m, dict) or not m.get("base_url"):
++            continue
++        out[name] = ModelSpec(
++            name=name, base_url=str(m["base_url"]), model_id=str(m.get("model") or name),
++            key_env=m.get("key_env") or None, context=int(m.get("context", 32000)),
++            price_in=float(m.get("price_in", 0)), price_out=float(m.get("price_out", 0)),
++            tier=str(m.get("tier", "low")), timeout=float(m.get("timeout", 120)),
++        )
++    return out
++
++
++def pick(cfg: dict, name: Optional[str] = None, tier: Optional[str] = None) -> ModelSpec:
++    ms = all_models(cfg)
++    if not ms:
++        raise AKError("no worker model configured", "direct mode", "agentkit model add NAME --base-url URL --key-env VAR")
++    if name:
++        if name not in ms:
++            raise AKError(f"unknown model '{name}'", f"configured: {', '.join(ms)}", "agentkit model list")
++        return ms[name]
++    if tier:
++        for m in ms.values():
++            if m.tier == tier:
++                return m
++        raise AKError(f"no model with tier '{tier}'", f"configured: {', '.join(f'{m.name}({m.tier})' for m in ms.values())}",
++                      f"agentkit model add NAME --tier {tier} ...")
++    default = (cfg.get("worker") or {}).get("default_model")
++    if default in ms:
++        return ms[default]
++    low = [m for m in ms.values() if m.tier == "low"]
++    return (low or list(ms.values()))[0]
++
++
++# ---------------------------------------------------------------- client
++
++
++def _retry_after(headers, body: str) -> Optional[float]:
++    v = headers.get("Retry-After") if headers else None
++    if v:
++        try:
++            return float(v)
++        except ValueError:
++            pass
++    reset = headers.get("X-RateLimit-Reset") if headers else None  # OpenRouter: epoch milliseconds
++    if not reset:
++        m = re.search(r'"X-RateLimit-Reset"\s*:\s*"?(\d{10,13})', body or "")
++        reset = m.group(1) if m else None
++    if reset:
++        try:
++            r = float(reset)
++            r = r / 1000.0 if r > 1e11 else r
++            return max(0.0, round(r - time.time(), 1))
++        except ValueError:
++            pass
++    m = re.search(r'"retryDelay"\s*:\s*"([\d.]+)s"', body or "")
++    if m:
++        return float(m.group(1))
++    m = re.search(r"retry in ([\d.]+)\s*s", body or "", re.I)
++    return float(m.group(1)) if m else None
++
++
++def is_openrouter(base_url: str) -> bool:
++    host = (urllib.parse.urlsplit(base_url).hostname or "").lower()
++    return host == "openrouter.ai" or host.endswith(".openrouter.ai")
++
++
++def _raise_body_error(data, raw: str) -> None:
++    """Gateways such as OpenRouter report upstream/provider failures inside an HTTP 200 body:
++    {"error": {"code": 429, "message": ..., "metadata": {...}}} at the top level or on a choice
++    (finish_reason "error"). Map them like the equivalent HTTP status."""
++    if not isinstance(data, dict):
++        return
++    err = data.get("error")
++    if not err:
++        for ch in data.get("choices") or []:
++            if isinstance(ch, dict) and (ch.get("error") or ch.get("finish_reason") == "error"):
++                err = ch.get("error") or {"message": "provider returned finish_reason=error"}
++                break
++    if not err:
++        return
++    if not isinstance(err, dict):
++        err = {"message": str(err)}
++    code = err.get("code")
++    try:
++        code = int(code)
++    except (TypeError, ValueError):
++        code = None
++    msg = redact_text(str(err.get("message") or ""))[:200]
++    meta = err.get("metadata") or {}
++    prov = meta.get("provider_name") if isinstance(meta, dict) else None
++    where = f" [provider {prov}]" if prov else ""
++    if code in (401, 403):
++        raise ModelError("auth", f"{code} in body: {msg}{where}", status=code)
++    if code == 429:
++        raise ModelError("rate_limited", f"429 in body: {msg}{where}", _retry_after({}, raw), status=429)
++    if code in (408, 504):
++        raise ModelError("timeout", f"{code} in body: {msg}{where}", status=code)
++    if code in (500, 502, 503) or code is None:
++        raise ModelError("unavailable", f"provider error in body: {msg}{where}", status=code)
++    if code == 402:
++        raise ModelError("http", f"402 in body (credits / paid model): {msg}{where}", status=402)
++    raise ModelError("http", f"{code} in body: {msg}{where}", status=code)
++
++
++class ChatClient:
++    """Minimal OpenAI-compatible /chat/completions client (urllib only)."""
++
++    def __init__(self, spec: ModelSpec, retries: int = 2, backoff: float = 1.0, sleep=time.sleep):
++        self.spec = spec
++        self.retries = retries
++        self.backoff = backoff
++        self.sleep = sleep
++
++    def _post(self, payload: dict, timeout: float) -> dict:
++        url = self.spec.base_url.rstrip("/") + "/chat/completions"
++        headers = {"Content-Type": "application/json"}
++        if is_openrouter(self.spec.base_url):  # optional attribution headers (openrouter.ai/docs/api-reference)
++            headers["HTTP-Referer"] = "https://github.com/tangniutt/agentkit"
++            headers["X-Title"] = "AgentKit"
++        key = self.spec.key()
++        if key:
++            headers["Authorization"] = "Bearer " + key
++        req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers=headers, method="POST")
++        host = (urllib.parse.urlsplit(url).hostname or "").lower()
++        opener = (urllib.request.build_opener(urllib.request.ProxyHandler({}))
++                  if host in ("127.0.0.1", "localhost", "::1") else urllib.request.build_opener())
++        try:
++            with opener.open(req, timeout=timeout) as r:
++                raw = r.read().decode("utf-8", "replace")
++        except urllib.error.HTTPError as e:
++            body = ""
++            try:
++                body = e.read().decode("utf-8", "replace")
++            except Exception:
++                pass
++            short = redact_text(body)[:300]
++            if e.code in (401, 403):
++                raise ModelError("auth", f"HTTP {e.code}: invalid or expired key ({short})", status=e.code)
++            if e.code == 429:
++                raise ModelError("rate_limited", f"HTTP 429: {short}", _retry_after(e.headers, body), status=429)
++            if e.code in (408, 504):
++                raise ModelError("timeout", f"HTTP {e.code}", status=e.code)
++            if e.code in (500, 502, 503):
++                raise ModelError("unavailable", f"HTTP {e.code}: {short[:120]}", _retry_after(e.headers, body), status=e.code)
++            raise ModelError("http", f"HTTP {e.code}: {short}", status=e.code)
++        except (socket.timeout, TimeoutError):
++            raise ModelError("timeout", f"no response in {timeout:g}s")
++        except urllib.error.URLError as e:
++            if isinstance(e.reason, (socket.timeout, TimeoutError)):
++                raise ModelError("timeout", f"no response in {timeout:g}s")
++            raise ModelError("network", redact_text(str(e.reason))[:200])
++        try:
++            data = json.loads(raw)
++        except ValueError:
++            raise ModelError("bad_response", "response is not an OpenAI chat completion: " + redact_text(raw)[:200])
++        _raise_body_error(data, raw)
++        try:
++            data["choices"][0]["message"]
++        except (KeyError, IndexError, TypeError):
++            raise ModelError("bad_response", "response is not an OpenAI chat completion: " + redact_text(raw)[:200])
++        return data
++
++    def chat(self, messages: list, tools: Optional[list] = None, timeout: Optional[float] = None,
++             max_tokens: Optional[int] = None) -> dict:
++        # defence in depth (M-17): nothing that looks like a secret, or equals a configured key, leaves in the body
++        payload: dict = {"model": self.spec.model_id, "messages": redact(messages)}
++        if tools:
++            payload["tools"] = tools
++            payload["tool_choice"] = "auto"
++        if max_tokens:
++            payload["max_tokens"] = max_tokens
++        timeout = timeout or self.spec.timeout
++        attempt = 0
++        waited_429 = False
++        while True:
++            try:
++                return self._post(payload, timeout)
++            except ModelError as e:
++                if e.kind in ("timeout", "network", "unavailable") and attempt < self.retries:
++                    self.sleep(self.backoff * (2 ** attempt))
++                    attempt += 1
++                    continue
++                if e.kind == "rate_limited" and not waited_429 and e.retry_after is not None and e.retry_after <= RETRY_AFTER_CAP_S:
++                    self.sleep(e.retry_after)
++                    waited_429 = True
++                    continue
++                raise
++
++
++def usage_of(resp: dict, messages: list) -> tuple:
++    u = resp.get("usage") or {}
++    tin = u.get("prompt_tokens")
++    tout = u.get("completion_tokens")
++    if tin is None:
++        tin = len(json.dumps(messages)) // 4
++    if tout is None:
++        tout = len(json.dumps(resp["choices"][0]["message"])) // 4
++    return int(tin), int(tout)
++
++
++# ---------------------------------------------------------------- CLI
++
++
++def cmd_model(ctx: Ctx, a) -> Result:
++    sub = a.model_cmd or "list"
++    if sub == "add":
++        if not NAME_RE.match(a.name):
++            raise AKError("bad model name", "use letters, digits, - or _ (the provider id goes in --model)", None)
++        if a.tier not in TIERS:
++            raise AKError(f"bad tier {a.tier}", "use low | mid | high", None)
++        if a.key_env and not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", a.key_env):
++            raise AKError("--key-env takes the NAME of an environment variable, not a key",
++                          "keys are never stored in config (M-17)", "export MY_KEY=...; agentkit model add NAME --key-env MY_KEY ...")
++        vals = {"base_url": a.base_url, "model": a.model or a.name, "key_env": a.key_env, "context": a.context,
++                "price_in": a.price_in, "price_out": a.price_out, "tier": a.tier}
++        p = set_table(ctx.root, f"models.{a.name}", vals)
++        if a.default:
++            set_table(ctx.root, "worker", {**(load_config(ctx.root).get("worker") or {}), "default_model": a.name})
++        data = {"added": a.name, "config": ctx.rel(p), "key_env_set": bool(a.key_env and os.environ.get(a.key_env))}
++        if a.key_env and not data["key_env_set"]:
++            data["hint"] = f"environment variable {a.key_env} is not set in this shell"
++        mid = a.model or a.name
++        if is_openrouter(a.base_url) and not mid.endswith(":free") and not (a.price_in or a.price_out):
++            data["warning"] = ("OpenRouter model without ':free' suffix and price 0: --budget-usd cannot protect you; "
++                               "pass --price-in/--price-out, or use a ':free' model id")
++        return Result(data)
++    cfg = load_config(ctx.root)
++    if sub == "list":
++        ms = all_models(cfg)
++        return Result({"models": [
++            {"name": m.name, "model": m.model_id, "tier": m.tier, "context": m.context, "price": [m.price_in, m.price_out],
++             "key_env": m.key_env, "key_set": bool(m.key_env and os.environ.get(m.key_env)) if m.key_env else None,
++             "base_url": m.base_url} for m in ms.values()],
++            "default": pick(cfg).name if ms else None})
++    if sub == "remove":
++        if a.name not in all_models(cfg):
++            raise AKError(f"unknown model '{a.name}'", "", "agentkit model list")
++        set_table(ctx.root, f"models.{a.name}", None)
++        return Result({"removed": a.name})
++    if sub == "test":
++        m = pick(cfg, a.name)
++        if m.key_env and not os.environ.get(m.key_env):
++            raise AKError(f"environment variable {m.key_env} is not set", "the key is read from it at call time",
++                          f"export {m.key_env}=... then agentkit model test {m.name}")
++        t0 = time.monotonic()
++        try:
++            cl = ChatClient(m, retries=0)
++            resp = cl.chat([{"role": "user", "content": "Reply with the single word: ok"}], timeout=a.timeout, max_tokens=16)
++        except ModelError as e:
++            raise AKError(f"model test failed: {e.kind}", str(e)[:300],
++                          "check base_url / model id / key" if e.kind != "rate_limited" else "rate limited; retry later",
++                          data={"model": m.name, "kind": e.kind, "retry_after": e.retry_after})
++        msg = resp["choices"][0]["message"]
++        return Result({"model": m.name, "ok": True, "latency_s": round(time.monotonic() - t0, 2),
++                       "reply": str(msg.get("content") or "")[:60], "usage": resp.get("usage")})
++    raise AKError(f"unknown model subcommand {sub}", "", "agentkit model list")
+diff --git a/agentkit/tasks.py b/agentkit/tasks.py
+new file mode 100644
+index 0000000..a724517
+--- /dev/null
++++ b/agentkit/tasks.py
+@@ -0,0 +1,962 @@
++# Copyright 2026 tangniutt and contributors
++# SPDX-License-Identifier: Apache-2.0
++"""M-13 task system, M-14 worktree isolation, M-15 anti-cheat report, M-16 budgets.
++
++Design (ideas from Grok Workhorse delegate/wait/result + recover-on-restart, worker-bridge
++per-task worktree + independent verification, LooppooL "the verifier assumes the worker
++lies"; all MIT, no code copied):
++
++- No long-lived daemon. Each task runs in its own detached process (`agentkit _task-run ID`).
++  All state is on disk under .agentkit/tasks/<id>/task.json. Any task command first
++  *recovers* (a running task whose process is gone becomes `interrupted`) and then
++  *schedules* (starts queued tasks up to the global concurrency limit). Finishing workers
++  schedule too, so the queue drains without a daemon.
++- Each task gets branch agentkit/<id> checked out at .agentkit/worktrees/<id> from HEAD.
++- When the worker stops (submitted, failed, budget, ...) the verifier copies the worker's
++  diff onto a fresh detached worktree at the base commit and re-runs the checks there.
++"""
++
++from __future__ import annotations
++
++import fcntl
++import fnmatch
++import hashlib
++import json
++import os
++import re
++import secrets
++import shutil
++import signal
++import subprocess
++import sys
++import tempfile
++import threading
++import time
++from contextlib import contextmanager
++from pathlib import Path
++from typing import Optional
++
++from . import verify as V
++from .config import load_config, model_configured
++from .core import AKError, Ctx, Result, dumps
++from .events import EventLog
++from .redact import redact, register_secret
++
++VERDICT_CODES = {"fail": "AK-VERIFY-FAIL", "invalid": "AK-VERIFY-INVALID", "needs_review": "AK-VERIFY-SUSPICIOUS"}
++TERMINAL = {"done", "failed", "stopped", "cancelled", "interrupted", "paused"}
++RESUMABLE = {"paused", "interrupted", "stopped"}
++ACTIVE = {"running", "verifying"}
++STATUS_CHARS = 400  # < 100 tokens
++REPORT_CHARS = 300 * 4
++DEFAULT_CONCURRENCY = 2
++_JUNK = re.compile(r"(^|/)(__pycache__|\.pytest_cache|\.mypy_cache|\.ruff_cache)/|\.pyc$")
++_SKIP_MARK = re.compile(
++    r"pytest\.mark\.(skip|xfail)|@unittest\.skip|\.skipTest\(|pytest\.skip\(|\b(it|test|describe)\.skip\(|\bx(it|describe)\(|t\.Skip\(|#\[ignore\]|@Disabled|@Ignore"
++)
++_HARDCODE_IF = re.compile(r"^\s*if\s*\(?\s*[\w.\[\]'\"]+\s*={2,3}\s*(-?\d[\w.]*|'[^']*'|\"[^\"]*\")")
++_RETURN_LIT = re.compile(r"\breturn\s+(-?\d[\w.]*|'[^']*'|\"[^\"]*\"|True|False|true|false)\s*;?\s*$")
++
++
++# ---------------------------------------------------------------- store
++
++
++def tasks_dir(root: Path) -> Path:
++    d = root / ".agentkit" / "tasks"
++    d.mkdir(parents=True, exist_ok=True)
++    return d
++
++
++@contextmanager
++def locked(root: Path):
++    p = tasks_dir(root) / ".lock"
++    with open(p, "a+") as f:
++        fcntl.flock(f, fcntl.LOCK_EX)
++        try:
++            yield
++        finally:
++            fcntl.flock(f, fcntl.LOCK_UN)
++
++
++def tpath(root: Path, tid: str) -> Path:
++    if not re.match(r"^t[0-9a-f]{6,12}$", tid or ""):
++        raise AKError(f"invalid task id '{str(tid)[:40]}'", "ids look like t1a2b3c", "agentkit task status")
++    return tasks_dir(root) / tid
++
++
++def load(root: Path, tid: str) -> dict:
++    p = tpath(root, tid) / "task.json"
++    try:
++        return json.loads(p.read_text())
++    except FileNotFoundError:
++        raise AKError(f"unknown task '{tid}'", "no such task in this repo", "agentkit task status")
++
++
++def save(root: Path, t: dict):
++    t["updated"] = time.time()
++    d = tpath(root, t["id"])
++    d.mkdir(parents=True, exist_ok=True)
++    tmp = d / f"task.json.{os.getpid()}.{threading.get_ident()}.tmp"
++    tmp.write_text(json.dumps(redact(t), ensure_ascii=False, indent=1))
++    os.replace(tmp, d / "task.json")
++
++
++def update(root: Path, tid: str, **fields) -> dict:
++    with locked(root):
++        t = load(root, tid)
++        t.update(fields)
++        save(root, t)
++        return t
++
++
++def all_tasks(root: Path) -> list:
++    out = []
++    for d in sorted(tasks_dir(root).iterdir()):
++        p = d / "task.json"
++        if d.is_dir() and p.exists():
++            try:
++                out.append(json.loads(p.read_text()))
++            except ValueError:
++                pass
++    return sorted(out, key=lambda t: t.get("created", 0))
++
++
++# ---------------------------------------------------------------- process liveness
++
++
++def pid_alive(pid) -> bool:
++    if not pid:
++        return False
++    try:
++        os.kill(int(pid), 0)
++    except ProcessLookupError:
++        return False
++    except PermissionError:
++        return True
++    try:
++        stat = Path(f"/proc/{pid}/stat").read_text()
++        if stat.rsplit(")", 1)[1].split()[0] == "Z":
++            return False
++        cmd = Path(f"/proc/{pid}/cmdline").read_bytes()
++        return b"_task-run" in cmd  # guards against PID reuse
++    except (OSError, IndexError):
++        return True
++
++
++def recover(root: Path) -> list:
++    """Running tasks whose process is gone -> interrupted (state survives crashes/restarts)."""
++    changed = []
++    for t in all_tasks(root):
++        if t.get("status") in ACTIVE and not pid_alive(t.get("pid")):
++            t["status"] = "interrupted"
++            t["reason"] = "worker process ended unexpectedly (crash / kill / reboot); worktree kept; continue with agentkit task resume ID"
++            t["ended"] = time.time()
++            t["error_code"] = "AK-TASK-INTERRUPTED"
++            t.setdefault("component", "worker")
++            EventLog(root, t["id"], "task").emit("interrupted", step=t.get("rounds"), error_code="AK-TASK-INTERRUPTED")
++            save(root, t)
++            changed.append(t["id"])
++        elif t.get("status") == "starting" and time.time() - t.get("updated", 0) > 30 and not pid_alive(t.get("pid")):
++            t["status"] = "queued"
++            save(root, t)
++    return changed
++
++
++def concurrency(cfg: dict) -> int:
++    try:
++        return max(1, int((cfg.get("tasks") or {}).get("concurrency", DEFAULT_CONCURRENCY)))
++    except (TypeError, ValueError):
++        return DEFAULT_CONCURRENCY
++
++
++def schedule(root: Path) -> None:
++    cfg = load_config(root)
++    with locked(root):
++        recover(root)
++        ts = all_tasks(root)
++        running = sum(1 for t in ts if t.get("status") in ACTIVE | {"starting"})
++        for t in ts:
++            if running >= concurrency(cfg):
++                break
++            if t.get("status") != "queued":
++                continue
++            d = tpath(root, t["id"])
++            logf = open(d / "worker.log", "ab")
++            env = dict(os.environ)
++            env["PYTHONUNBUFFERED"] = "1"
++            proc = subprocess.Popen(
++                [sys.executable, "-m", "agentkit", "--root", str(root), "_task-run", t["id"]],
++                cwd=str(root), stdin=subprocess.DEVNULL, stdout=logf, stderr=logf,
++                start_new_session=True, env=env, close_fds=True,
++            )
++            logf.close()
++            t["status"] = "starting"
++            t["pid"] = proc.pid
++            save(root, t)
++            running += 1
++
++
++def queue_pos(root: Path, tid: str) -> Optional[int]:
++    q = [t["id"] for t in all_tasks(root) if t.get("status") == "queued"]
++    return q.index(tid) + 1 if tid in q else None
++
++
++# ---------------------------------------------------------------- git helpers
++
++
++def _git(root: Path, *args, check=True, env=None) -> str:
++    r = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, timeout=120, env=env)
++    if check and r.returncode != 0:
++        raise AKError(f"git {' '.join(args[:2])} failed", r.stderr.strip()[-300:], "agentkit doctor")
++    return r.stdout
++
++
++def _ensure_state_ignored(root: Path):
++    gi = root / ".agentkit" / ".gitignore"
++    have = gi.read_text() if gi.exists() else ""
++    add = [x for x in ("tasks/", "worktrees/") if x not in have.split()]
++    if not gi.exists():
++        from .core import _AGENTKIT_GITIGNORE
++
++        gi.parent.mkdir(parents=True, exist_ok=True)
++        gi.write_text(_AGENTKIT_GITIGNORE)
++    elif add:
++        gi.write_text(have.rstrip("\n") + "\n" + "\n".join(add) + "\n")
++
++
++def task_changes(wt: Path, base: str) -> dict:
++    ch = V._git_changes(wt, base)
++    return {p: s for p, s in ch.items() if not _JUNK.search(p)}
++
++
++GUARD_HOOK = "#!/bin/sh\necho 'agentkit: workers may not commit or push (M-14)' >&2\nexit 1\n"
++
++
++def guard_env(root: Path) -> dict:
++    """Environment for worker tool processes: a hooks dir whose pre-commit/pre-push always refuse."""
++    hooks = root / ".agentkit" / "state" / "guard-hooks"
++    hooks.mkdir(parents=True, exist_ok=True)
++    for h in ("pre-commit", "pre-push", "commit-msg", "pre-merge-commit"):
++        p = hooks / h
++        if not p.exists():
++            p.write_text(GUARD_HOOK)
++            p.chmod(0o755)
++    return {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "core.hooksPath", "GIT_CONFIG_VALUE_0": str(hooks),
++            "GIT_TERMINAL_PROMPT": "0"}
++
++
++def scrubbed_env(cfg: dict) -> dict:
++    """os.environ minus every configured model key variable (M-17)."""
++    from .models import all_models
++
++    env = dict(os.environ)
++    for m in all_models(cfg).values():
++        if m.key_env:
++            if env.get(m.key_env):
++                register_secret(env[m.key_env])
++            env.pop(m.key_env, None)
++    return env
++
++
++# ---------------------------------------------------------------- create
++
++
++def content_hash(goal, checks, allow, model, tier, budget, base) -> str:
++    blob = json.dumps([goal.strip(), list(checks), sorted(allow), model, tier, budget, base], sort_keys=True)
++    return hashlib.sha256(blob.encode()).hexdigest()[:16]
++
++
++def task_type(goal: str) -> str:
++    g = goal.lower()
++    for typ, words in (("bugfix", ("fix", "bug", "broken", "fail", "error", "修")), ("test", ("test", "测试")),
++                       ("refactor", ("refactor", "rename", "clean", "重构")),
++                       ("feature", ("add", "implement", "support", "create", "new", "实现", "增加"))):
++        if any(w in g for w in words):
++            return typ
++    return "other"
++
++
++def create(ctx: Ctx, a) -> dict:
++    from . import models as M
++
++    cfg = ctx.config
++    if not model_configured(cfg) or not M.all_models(cfg):
++        raise AKError(
++            "direct mode: no worker model configured",
++            "task dispatch needs a worker model; every tool works without one",
++            "do it yourself: agentkit repo_map -> search/read -> edit -> run -> verify --check '<test cmd>'"
++            " (or: agentkit model add NAME --base-url URL --key-env VAR)",
++            data={"mode": "direct", "task_created": False},
++        )
++    if not a.goal or not a.goal.strip():
++        raise AKError("task needs a goal", "", 'agentkit task create "fix the failing test in calc.py" --check "pytest -q"')
++    root = ctx.root
++    if not ctx.is_git or not shutil.which("git"):
++        raise AKError("not a git repository", "dispatch mode isolates each worker in a git worktree (M-14)",
++                      "git init && git add -A && git commit -m init   (direct-mode tools work without git)")
++    head = subprocess.run(["git", "-C", str(root), "rev-parse", "--verify", "HEAD"], capture_output=True, text=True)
++    if head.returncode != 0:
++        raise AKError("repository has no commits", "the worker's worktree starts from HEAD", "git add -A && git commit -m init")
++    base = head.stdout.strip()
++    spec = M.pick(cfg, a.model, a.tier)
++    if spec.key_env and not os.environ.get(spec.key_env):
++        raise AKError(f"environment variable {spec.key_env} is not set", f"model '{spec.name}' reads its key from it",
++                      f"export {spec.key_env}=...  then  agentkit model test {spec.name}")
++    for c in a.check or []:
++        v = V.permissions.check(c, cfg)
++        if not v.allowed:
++            raise AKError(f"check refused by permission rule '{v.rule}'", v.why or "", "use a check command that is allowed")
++    budget = {"tokens": a.budget_tokens or (cfg.get("worker") or {}).get("budget_tokens") or 0,
++              "usd": a.budget_usd or (cfg.get("worker") or {}).get("budget_usd") or 0,
++              "minutes": a.budget_minutes or (cfg.get("worker") or {}).get("budget_minutes") or 30}
++    h = content_hash(a.goal, a.check or [], a.allow or [], spec.name, a.tier, budget, base)
++    warnings = []
++    dirty = [ln for ln in _git(root, "status", "--porcelain").splitlines() if ln[3:].split("/")[0] != ".agentkit"]
++    if dirty:
++        warnings.append(f"{len(dirty)} uncommitted change(s) are NOT visible to the worker (worktree starts at HEAD)")
++    _ensure_state_ignored(root)
++    with locked(root):
++        recover(root)
++        for t in all_tasks(root):
++            if t.get("hash") == h and (t.get("status") in ACTIVE | {"queued", "starting"}
++                                       or (t.get("status") == "done" and t.get("verdict") == "pass")):
++                d = {"id": t["id"], "status": t["status"], "deduped": True}
++                if queue_pos(root, t["id"]):
++                    d["queue_pos"] = queue_pos(root, t["id"])
++                return d
++        free = shutil.disk_usage(str(root)).free // (1024 * 1024)
++        min_free = int((cfg.get("tasks") or {}).get("min_free_mb", 200))
++        if free < min_free:
++            raise AKError(f"disk almost full ({free} MB free)", "refusing to create a new worktree",
++                          "agentkit task clean --all   (removes worktrees of finished tasks)")
++        tid = "t" + secrets.token_hex(3)
++        while (tasks_dir(root) / tid).exists():
++            tid = "t" + secrets.token_hex(3)
++        wt = root / ".agentkit" / "worktrees" / tid
++        branch = f"agentkit/{tid}"
++        wt.parent.mkdir(parents=True, exist_ok=True)
++        _git(root, "worktree", "add", "-q", "-b", branch, str(wt), base)
++        # tool config for the worker: [run]/[output] only, never models
++        sub = {k: cfg[k] for k in ("run", "output") if k in cfg}
++        if sub:
++            from .config import set_table
++
++            for k, v in sub.items():
++                set_table(wt, k, v)
++        t = {
++            "id": tid, "goal": a.goal, "checks": a.check or [], "allow": a.allow or [], "model": spec.name,
++            "tier": spec.tier, "budget": budget, "hash": h, "base": base, "branch": branch,
++            "worktree": str(wt.relative_to(root)), "status": "queued", "created": time.time(),
++            "type": task_type(a.goal), "rounds": 0, "tokens": 0, "usd": 0.0,
++        }
++        save(root, t)
++        EventLog(root, tid, "task").emit("created", step=0, model=spec.name, cli_run=ctx.run_id or None)
++    schedule(root)
++    t = load(root, tid)
++    # C-06: lean output. model / branch are known to the host (branch = agentkit/<id>); next goes in the envelope
++    out = {"id": tid, "status": t["status"]}
++    qp = queue_pos(root, tid)
++    if qp:
++        out["queue_pos"] = qp
++    if a.model is None and len(M.all_models(cfg)) > 1:
++        out["model"] = spec.name
++    if warnings:
++        out["warnings"] = warnings
++    if not a.check:
++        out.setdefault("warnings", []).append("no --check given: the verdict can only be 'invalid'; pass --check '<test cmd>'")
++    return out
++
++
++# ---------------------------------------------------------------- runner (detached process)
++
++
++def run_task(root: Path, tid: str) -> None:
++    """Entry point of the detached worker process."""
++    from . import memory
++    from .models import pick
++    from .run import kill_active
++    from .worker import StopWorker, Worker
++
++    cfg = load_config(root)
++    wcfg = dict(cfg.get("worker") or {})
++    t = update(root, tid, status="running", pid=os.getpid(), started=time.time())
++    events = EventLog(root, tid, "task")
++    events.emit("started", step=0, pid=os.getpid())
++    spec = pick(cfg, t["model"])
++    spec.key()  # read + register the key value for redaction while it is still in the env
++    keyval = os.environ.get(spec.key_env) if spec.key_env else None
++    # M-17: no tool process may see any configured key; the client keeps its own copy
++    clean = scrubbed_env(cfg)
++    for k in list(os.environ):
++        if k not in clean:
++            os.environ.pop(k, None)
++    if spec.key_env and keyval:
++        spec_key_env = spec.key_env
++        spec.key = lambda: keyval  # type: ignore[method-assign]
++        _ = spec_key_env
++    os.environ.update(guard_env(root))
++    os.environ["PYTHONDONTWRITEBYTECODE"] = "1"  # edit+rerun within 1 s must not hit a stale .pyc
++    wt = root / t["worktree"]
++    os.chdir(wt)
++    d = tpath(root, tid)
++    budget = t.get("budget") or {}
++    t0 = time.monotonic()
++    state = {"stop": None, "stop_at": None, "finalizing": False}
++    main_tid = threading.get_ident()
++    lock = threading.Lock()
++
++    def request_stop(reason: str):
++        with lock:
++            if state["stop"] or state["finalizing"]:
++                return
++            state["stop"], state["stop_at"] = reason, time.time()
++        kill_active()
++        try:
++            signal.pthread_kill(main_tid, signal.SIGUSR1)
++        except (ProcessLookupError, OSError):
++            pass
++
++    def on_signal(signum, frame):
++        if state["finalizing"]:
++            return
++        if signum == signal.SIGTERM and not state["stop"]:
++            state["stop"], state["stop_at"] = "cancelled", time.time()
++            kill_active()
++        raise StopWorker(state["stop"] or "cancelled")
++
++    signal.signal(signal.SIGUSR1, on_signal)
++    signal.signal(signal.SIGTERM, on_signal)
++    minutes = float(budget.get("minutes") or 0)
++
++    def watchdog():
++        while not state["finalizing"]:
++            if minutes and time.monotonic() - t0 > minutes * 60:
++                request_stop("budget")
++            if (d / "cancel").exists():
++                request_stop("cancelled")
++            if state["stop"] and state["stop_at"] and time.time() - state["stop_at"] > 4 and not state["finalizing"]:
++                # main thread did not react: record the stop ourselves, report is built lazily
++                try:
++                    code = "AK-TASK-CANCELLED" if state["stop"] == "cancelled" else "AK-BUDGET"
++                    events.emit("forced_stop", component="task", error_code=code)
++                    update(root, tid, status="cancelled" if state["stop"] == "cancelled" else "stopped",
++                           stopped=state["stop"], reason=f"stopped: {state['stop']}", stopped_at=time.time(), ended=time.time(),
++                           error_code=code, component="task")
++                finally:
++                    os._exit(3)
++            time.sleep(0.2)
++
++    threading.Thread(target=watchdog, daemon=True).start()
++
++    def progress(stats):
++        try:
++            update(root, tid, rounds=stats["rounds"], tokens=stats["tokens_in"] + stats["tokens_out"], usd=stats["usd"])
++        except Exception:
++            pass
++
++    worker = Worker(spec, wt, root, t, on_progress=progress, transcript=d / "transcript.jsonl", cfg=wcfg,
++                    check_stop=lambda: state["stop"], events=events)
++    brief_txt = ""
++    try:
++        b = memory.brief(Ctx(root=root, cwd=root, budget=500))
++        brief_txt = dumps(b.data)
++    except Exception:
++        pass
++    resume_txt = None
++    if t.get("resumes"):
++        from .worker import resume_context
++
++        resume_txt = resume_context(d / "transcript.jsonl", wt, t["base"], {**t, "reason": t.get("resumed_from")})
++        events.emit("resumed", step=worker.rounds, resume=t["resumes"])
++    code = None
++    try:
++        outcome = worker.run(brief_txt, resume=resume_txt)
++        status, reason, stopped, claim, code = outcome.status, outcome.reason, outcome.stopped, outcome.claim, outcome.code
++    except StopWorker as e:
++        status, reason, stopped, claim = "stopped", f"stopped: {e.reason}", e.reason, ""
++        code = "AK-TASK-CANCELLED" if e.reason == "cancelled" else "AK-BUDGET"
++    except Exception as e:  # never die silently; traceback to a log file, not to the AI
++        import traceback
++
++        from .redact import redact_text
++
++        (root / ".agentkit" / "logs").mkdir(parents=True, exist_ok=True)
++        (root / ".agentkit" / "logs" / f"crash-{tid}.log").write_text(redact_text(traceback.format_exc()))
++        status, reason, stopped, claim = "failed", f"worker crashed: {type(e).__name__}: {str(e)[:160]}", None, ""
++        code = "AK-WORKER-CRASH"
++        events.emit("crash", step=worker.rounds, component=worker.last_component, error_code=code, log=f"crash-{tid}.log")
++    with lock:
++        state["finalizing"] = True
++    kill_active()
++    if stopped == "cancelled":
++        status = "cancelled"
++        code = "AK-TASK-CANCELLED"
++    elif status == "stopped" and stopped:
++        reason = f"stopped: {stopped}" + (f" ({reason})" if reason and not reason.startswith("stopped") else "")
++    st = worker.stats()
++    fields = dict(status="verifying", worker_status=status, reason=reason, stopped=stopped, claim=claim,
++                  rounds=st["rounds"], tokens=st["tokens_in"] + st["tokens_out"], tokens_in=st["tokens_in"],
++                  tokens_out=st["tokens_out"], usd=st["usd"], compactions=st["compactions"], repairs=st["repairs"],
++                  denied=sorted(set(worker.denied) | set(t.get("denied") or [])),
++                  worker_s=round(time.monotonic() - t0 + float((t.get("prior") or {}).get("worker_s") or 0), 1),
++                  error_code=code, component=worker.last_component if code else None, last_step=worker.last_step)
++    events.emit("worker_end", step=worker.rounds, component=worker.last_component, error_code=code, status=status,
++                duration=time.monotonic() - t0)
++    if state["stop_at"]:
++        fields["stopped_at"] = time.time()
++        fields["stop_requested_at"] = state["stop_at"]
++    update(root, tid, **fields)
++    final = "done" if status == "submitted" else status
++    try:
++        if final != "cancelled":
++            tv = time.monotonic()
++            rep = verify_task(root, tid)
++            final_fields = dict(status=final, verdict=rep["verdict"], ended=time.time())
++            vcode = VERDICT_CODES.get(rep["verdict"])
++            events.emit("verified", component="verifier", duration=time.monotonic() - tv, error_code=vcode, verdict=rep["verdict"])
++            if code is None and vcode:
++                final_fields.update(error_code=vcode, component="verifier")
++        else:
++            final_fields = dict(status=final, ended=time.time())
++    except Exception as e:
++        final_fields = dict(status=final, verdict="invalid", ended=time.time(), reason=(reason + f"; verify error: {e}")[:300])
++    update(root, tid, **final_fields)
++    try:
++        learn(root, load(root, tid))
++    except Exception:
++        pass
++    try:
++        schedule(root)
++    except Exception:
++        pass
++
++
++# ---------------------------------------------------------------- verification (M-15)
++
++
++def _added_lines(old: str, new: str) -> list:
++    import difflib
++
++    return [l[1:] for l in difflib.unified_diff(old.splitlines(), new.splitlines(), lineterm="", n=0)
++            if l.startswith("+") and not l.startswith("+++")]
++
++
++def _base_text(root: Path, base: str, rel: str) -> str:
++    r = subprocess.run(["git", "-C", str(root), "show", f"{base}:{rel}"], capture_output=True)
++    return r.stdout.decode("utf-8", "replace") if r.returncode == 0 else ""
++
++
++def _allowed(path: str, allow: list) -> bool:
++    for pat in allow:
++        p = pat.rstrip("/")
++        if fnmatch.fnmatch(path, pat) or path == p or path.startswith(p + "/") or fnmatch.fnmatch(path, p + "/*"):
++            return True
++    return False
++
++
++def task_flags(root: Path, t: dict, wt: Path, changes: dict, checks: list, verdict: str, clean_base: Path) -> list:
++    flags = V.base_flags(changes, t.get("checks") or [], checks, verdict, [clean_base, wt])
++    base = t["base"]
++    skipped, hard = [], []
++    for p, s in changes.items():
++        if s == "D" or not (wt / p).is_file():
++            continue
++        try:
++            new = (wt / p).read_text(errors="replace")
++        except OSError:
++            continue
++        added = _added_lines(_base_text(root, base, p) if s == "M" else "", new)
++        is_test = bool(V._TEST_PATH.search(p))
++        if is_test and any(_SKIP_MARK.search(l) for l in added):
++            skipped.append(p)
++        if not is_test:
++            for i, l in enumerate(added):
++                if _HARDCODE_IF.search(l) and (_RETURN_LIT.search(l) or (i + 1 < len(added) and _RETURN_LIT.search(added[i + 1]))):
++                    hard.append(p)
++                    break
++    if skipped:
++        flags.append({"flag": "tests_skipped", "paths": skipped[:3]})
++    allow = t.get("allow") or []
++    if allow:
++        outside = sorted(p for p in changes if not _allowed(p, allow))
++        if outside:
++            flags.append({"flag": "outside_allow", "paths": outside[:3]})
++    head = _git(wt, "rev-parse", "HEAD", check=False).strip()
++    if head and head != base:
++        flags.append({"flag": "worker_committed", "paths": [_git(wt, "log", "--oneline", "-1", check=False).strip()[:60]]})
++    escapes = []
++    rw = wt.resolve()
++    for p in changes:
++        q = wt / p
++        if q.is_symlink():
++            real = Path(os.path.realpath(q))
++            if real != rw and rw not in real.parents:
++                escapes.append(p)
++    if escapes:
++        flags.append({"flag": "path_escape", "paths": escapes[:3]})
++    if t.get("denied"):
++        flags.append({"flag": "denied_commands", "paths": [c[:60] for c in t["denied"][:3]]})
++    if hard:
++        flags.append({"flag": "hardcoded_return_suspect", "paths": hard[:3]})
++    return flags
++
++
++def verify_task(root: Path, tid: str) -> dict:
++    """Independent verification: copy the worker's diff onto a fresh worktree at the base commit
++    and re-run the checks there. The worker's own claim is never consulted."""
++    t = load(root, tid)
++    cfg = load_config(root)
++    wt = root / t["worktree"]
++    if not wt.exists():
++        raise AKError("task worktree is gone", "it was cleaned", "agentkit task create ... to run again")
++    t0 = time.monotonic()
++    base = t["base"]
++    changes = task_changes(wt, base)
++    tmp = Path(tempfile.mkdtemp(prefix="agentkit-taskverify-"))
++    clean = tmp / "wt"
++    timeout = float((cfg.get("run") or {}).get("timeout", 120))
++    try:
++        _git(root, "worktree", "add", "-q", "--detach", "--force", str(clean), base)
++        # dependency detection on the pristine tree (before the worker's changes are applied)
++        deps_snapshot = {c: V._check_paths(c, clean) for c in t.get("checks") or []}
++        for rel, st in changes.items():
++            src, dst = wt / rel, clean / rel
++            if st == "D":
++                if dst.exists() or dst.is_symlink():
++                    dst.unlink()
++            elif src.is_file():
++                dst.parent.mkdir(parents=True, exist_ok=True)
++                if dst.exists() or dst.is_symlink():
++                    dst.unlink()
++                shutil.copy2(src, dst)
++        log_dir = root / ".agentkit" / "logs"
++        env = scrubbed_env(cfg)
++        checks = V.run_checks(t.get("checks") or [], clean, timeout, log_dir, env=env) if t.get("checks") else []
++    finally:
++        subprocess.run(["git", "-C", str(root), "worktree", "remove", "--force", str(clean)], capture_output=True)
++        subprocess.run(["git", "-C", str(root), "worktree", "prune"], capture_output=True)
++        shutil.rmtree(tmp, ignore_errors=True)
++    if not checks or any(c["result"] == "invalid" for c in checks):
++        verdict = "invalid"
++    elif all(c["result"] == "pass" for c in checks):
++        verdict = "pass"
++    else:
++        verdict = "fail"
++    # flags: use the pristine dependency set too (a deleted check script must still count)
++    flags = task_flags(root, t, wt, changes, checks, verdict, wt)
++    extra = sorted(p for p in changes if any(p == d or (d.endswith("/") and p.startswith(d)) for ds in deps_snapshot.values() for d in ds))
++    if extra and not any(f["flag"] == "check_script_modified" for f in flags):
++        flags.append({"flag": "check_script_modified", "paths": extra[:3]})
++    if verdict == "pass" and flags:
++        verdict = "needs_review"
++    t = load(root, tid)
++    report = {
++        "task": tid,
++        "verdict": verdict,
++        "status": t.get("worker_status") if t.get("status") == "verifying" else t.get("status"),
++        "checks": checks,
++        "changed": [f"{s} {p}" for p, s in sorted(changes.items())],
++        "suspicious": flags,
++        "cost": {"s": round((t.get("worker_s") or 0) + time.monotonic() - t0, 1), "tokens": t.get("tokens", 0),
++                 "usd": round(t.get("usd", 0.0), 4)},
++        "env": "git-worktree",
++        "branch": t.get("branch"),
++    }
++    if t.get("stopped"):
++        report["stopped"] = t["stopped"]
++    if t.get("reason") and t.get("worker_status") != "submitted":
++        report["why"] = t["reason"][:160]
++    if t.get("claim"):
++        report["claim_untrusted"] = t["claim"][:120]
++    code = t.get("error_code") or VERDICT_CODES.get(verdict)
++    if code:
++        report["error"] = {"code": code, "component": t.get("component") or "verifier",
++                           "step": t.get("last_step", t.get("rounds", 0)), "log": f"agentkit logs {tid} --errors"}
++    (tpath(root, tid) / "report.json").write_text(json.dumps(redact(report), ensure_ascii=False, indent=1))
++    return report
++
++
++# ---------------------------------------------------------------- auto memory (M-21)
++
++
++def learn(root: Path, t: dict) -> None:
++    from . import memory
++
++    ctx = Ctx(root=root, cwd=root)
++    rep_p = tpath(root, t["id"]) / "report.json"
++    rep = json.loads(rep_p.read_text()) if rep_p.exists() else {}
++    if rep.get("suspicious"):
++        return  # never learn from a run that looks like cheating
++    stats_p = ctx.state("state") / "model-stats.json"
++    try:
++        stats = json.loads(stats_p.read_text())
++    except (FileNotFoundError, ValueError):
++        stats = {}
++    passed = t.get("status") == "done" and t.get("verdict") == "pass"
++    s = stats.setdefault(t["model"], {}).setdefault(t.get("type", "other"), {"pass": 0, "fail": 0})
++    s["pass" if passed else "fail"] += 1
++    stats_p.write_text(json.dumps(stats, indent=1))
++    lines = [f"- {m} | {typ}: {c['pass']} pass / {c['fail']} fail" for m, by in sorted(stats.items()) for typ, c in sorted(by.items())]
++    memory.add(ctx, "Worker model results by task type", "\n".join(lines[-20:]), "tools-models", pinned=False,
++               mid="model-stats", source="auto")
++    if not passed:
++        why = t.get("reason") or ""
++        if rep.get("verdict") == "fail":
++            bad = [c for c in rep.get("checks", []) if c.get("result") != "pass"]
++            why = f"check failed: {bad[0]['cmd'][:60]} -> {str(bad[0].get('why', ''))[:80]}" if bad else why
++        elif t.get("status") == "done":
++            why = f"verdict {t.get('verdict')}"
++        known = []
++        try:
++            known = [l for l in memory.get(ctx, "task-failures")["body"].splitlines() if l.startswith("- ")]
++        except AKError:
++            pass
++        known.append(f"- {time.strftime('%Y-%m-%d')} {t.get('type')} via {t['model']}: {why[:140]}")
++        memory.add(ctx, "Recent task failure reasons", "\n".join(known[-8:]), "lessons", pinned=False,
++                   mid="task-failures", source="auto")
++
++
++# ---------------------------------------------------------------- CLI views
++
++
++def compact_status(root: Path, t: dict) -> dict:
++    s = {"id": t["id"], "status": t["status"]}
++    if t["status"] == "queued":
++        s["pos"] = queue_pos(root, t["id"])
++    if t.get("verdict"):
++        s["verdict"] = t["verdict"]
++    if t.get("stopped"):
++        s["stopped"] = t["stopped"]
++    s["rounds"] = t.get("rounds", 0)
++    s["tok"] = t.get("tokens", 0)
++    if t.get("usd"):
++        s["usd"] = round(t["usd"], 4)
++    start = t.get("started") or t.get("created")
++    end = t.get("ended") or time.time()
++    if start:
++        s["s"] = int(end - start)
++    if t.get("error_code") and t["status"] in TERMINAL:
++        s["code"] = t["error_code"]
++        s["at"] = f"{t.get('component') or 'task'}#{t.get('last_step', t.get('rounds', 0))}"
++        s["log"] = f"agentkit logs {t['id']} --errors"
++    if t["status"] in TERMINAL and t.get("reason") and t.get("worker_status") != "submitted":
++        s["why"] = str(t["reason"])[:70]
++    while len(dumps(s)) > STATUS_CHARS - 80 and "why" in s and len(s["why"]) > 10:
++        s["why"] = s["why"][: len(s["why"]) // 2]
++    return s
++
++
++def compact_report(rep: dict) -> tuple:
++    """≤300 tokens. C-06 trims what the host already knows: the check command and log id of a
++    passing check (its index is its identity), the constant env, the task branch (always
++    agentkit/<id>) and the worker's claim when the verifier confirmed a pass."""
++    checks = []
++    for c in rep.get("checks") or []:
++        c = dict(c)
++        if c.get("result") == "pass":
++            c.pop("cmd", None)
++            c.pop("log", None)
++        checks.append(c)
++    base = {k: rep[k] for k in ("verdict", "changed", "suspicious", "cost") if k in rep}
++    base["checks"] = checks
++    base = {k: base[k] for k in ("verdict", "checks", "changed", "suspicious", "cost") if k in base}
++    head = {k: rep[k] for k in ("task", "status", "stopped") if rep.get(k)}
++    tail = {k: str(rep[k])[:80] for k in ("why",) if rep.get(k)}
++    if rep.get("claim_untrusted") and rep.get("verdict") != "pass":
++        tail["claim_untrusted"] = str(rep["claim_untrusted"])[:80]
++    if rep.get("error"):
++        tail["error"] = rep["error"]
++    room = REPORT_CHARS - 200 - len(dumps(head)) - len(dumps(tail))
++    comp, trunc = V._compact(base, room)
++    return {**head, **comp, **tail}, trunc
++
++
++def report_view(ctx: Ctx, tid: str) -> tuple:
++    root = ctx.root
++    t = load(root, tid)
++    rp = tpath(root, tid) / "report.json"
++    if not rp.exists():
++        if t["status"] not in TERMINAL:
++            return {"task": tid, "status": t["status"], "verdict": None, "hint": "not finished yet",
++                    "_next": ctx.next_cmd("task", "wait", tid, "--timeout", "600")}, False
++        verify_task(root, tid)  # interrupted / killed runs: verify lazily
++        t = load(root, tid)
++        if not t.get("verdict"):
++            update(root, tid, verdict=json.loads(rp.read_text())["verdict"])
++    rep = json.loads(rp.read_text())
++    t = load(root, tid)
++    rep["status"] = t["status"]
++    out, trunc = compact_report(rep)
++    nxt = ctx.next_cmd("read", ctx.rel(rp)) if trunc else (
++        ctx.next_cmd("task", "resume", tid) if t["status"] in RESUMABLE and not t.get("cleaned") else None)
++    if nxt:
++        out["_next"] = nxt
++    return out, trunc
++
++
++def _ids(root: Path, ids: list) -> list:
++    return [load(root, i)["id"] for i in ids]
++
++
++def cmd_task(ctx: Ctx, a) -> Result:
++    root = ctx.root
++    sub = a.task_cmd
++    if sub == "create":
++        out = create(ctx, a)
++        nxt = ctx.next_cmd("task", "report" if out.get("status") in TERMINAL else "wait", out["id"],
++                           *([] if out.get("status") in TERMINAL else ["--timeout", "600"]))
++        return Result(out, False, nxt)
++    if not (root / ".agentkit" / "tasks").exists() and sub != "create":
++        if sub == "status" and not a.ids:
++            return Result({"tasks": [], "hint": "no tasks yet: agentkit task create GOAL --check CMD"})
++    if sub == "status":
++        schedule(root)
++        if a.ids:
++            ts = [compact_status(root, load(root, i)) for i in a.ids]
++            return Result(ts[0] if len(ts) == 1 else {"tasks": ts}, budget_chars=STATUS_CHARS * max(1, len(ts)) if len(ts) > 1 else STATUS_CHARS)
++        ts = all_tasks(root)[-8:]
++        return Result({"tasks": [compact_status(root, t) for t in ts], "total": len(all_tasks(root))})
++    if sub == "wait":
++        if not a.ids:
++            raise AKError("wait needs task ids", "", "agentkit task wait ID [ID..] --timeout 600")
++        _ids(root, a.ids)
++        deadline = time.monotonic() + float(a.timeout)
++        while True:
++            schedule(root)
++            ts = [load(root, i) for i in a.ids]
++            if all(t["status"] in TERMINAL for t in ts) or time.monotonic() >= deadline:
++                break
++            time.sleep(0.3)
++        done = all(t["status"] in TERMINAL for t in ts)
++        if done and len(ts) == 1 and not getattr(a, "no_report", False):
++            # C-06: one finished task -> the ≤300-token report inline, saving the host a `task report` round trip
++            rep, trunc = report_view(ctx, ts[0]["id"])
++            nxt = rep.pop("_next", None)
++            return Result({"done": True, **rep}, trunc, nxt, budget_chars=REPORT_CHARS)
++        data = {"done": done, "tasks": [compact_status(root, t) for t in ts]}
++        nxt = ctx.next_cmd("task", "report", a.ids[0]) if done else ctx.next_cmd("task", "wait", *a.ids, "--timeout", str(int(float(a.timeout))))
++        return Result(data, False, nxt)
++    if sub == "report":
++        if not a.ids:
++            raise AKError("report needs a task id", "", "agentkit task report ID")
++        schedule(root)
++        out, trunc = report_view(ctx, a.ids[0])
++        nxt = out.pop("_next", None)
++        return Result(out, trunc, nxt, budget_chars=REPORT_CHARS)
++    if sub == "resume":
++        out = resume(ctx, a)
++        return Result(out, False, ctx.next_cmd("task", "wait", out["id"], "--timeout", "600"))
++    if sub == "cancel":
++        if not a.ids:
++            raise AKError("cancel needs task ids", "", "agentkit task cancel ID")
++        out = []
++        for tid in a.ids:
++            out.append(cancel(root, tid))
++        schedule(root)
++        return Result(out[0] if len(out) == 1 else {"tasks": out})
++    if sub == "clean":
++        targets = a.ids or ([t["id"] for t in all_tasks(root) if t["status"] in TERMINAL] if a.all else [])
++        if not targets:
++            raise AKError("nothing to clean", "give task ids or --all (finished tasks only)", "agentkit task clean --all")
++        cleaned = []
++        for tid in targets:
++            t = load(root, tid)
++            if t["status"] not in TERMINAL:
++                raise AKError(f"task {tid} is {t['status']}", "only finished tasks can be cleaned", f"agentkit task cancel {tid}")
++            wt = root / t["worktree"]
++            subprocess.run(["git", "-C", str(root), "worktree", "remove", "--force", str(wt)], capture_output=True)
++            subprocess.run(["git", "-C", str(root), "worktree", "prune"], capture_output=True)
++            if not a.keep_branch:
++                subprocess.run(["git", "-C", str(root), "branch", "-D", t["branch"]], capture_output=True)
++            update(root, tid, cleaned=True)
++            cleaned.append(tid)
++        return Result({"cleaned": cleaned, "branches_kept": bool(a.keep_branch)})
++    raise AKError(f"unknown task subcommand '{sub}'", "use create|status|wait|report|resume|cancel|clean", "agentkit task --help")
++
++
++def resume(ctx: Ctx, a) -> dict:
++    """Continue a paused / interrupted / stopped task in its own worktree with a compacted transcript."""
++    from . import models as M
++
++    root = ctx.root
++    if not a.ids:
++        raise AKError("resume needs a task id", "", "agentkit task resume ID")
++    tid = a.ids[0]
++    with locked(root):
++        recover(root)
++        t = load(root, tid)
++        if t["status"] not in RESUMABLE:
++            raise AKError(f"task {tid} is {t['status']}", "only paused, interrupted or stopped tasks can be resumed",
++                          "agentkit task create ... for a new attempt" if t["status"] in TERMINAL else f"agentkit task wait {tid}")
++        if t.get("cleaned") or not (root / t["worktree"]).exists():
++            raise AKError("task worktree is gone", "it was cleaned; nothing to resume", "agentkit task create ... to run again")
++        spec = M.pick(ctx.config, t["model"])
++        if spec.key_env and not os.environ.get(spec.key_env):
++            raise AKError(f"environment variable {spec.key_env} is not set", f"model '{spec.name}' reads its key from it",
++                          f"export {spec.key_env}=...  then  agentkit task resume {tid}")
++        budget = dict(t.get("budget") or {})
++        for k, v in (("tokens", a.budget_tokens), ("usd", a.budget_usd), ("minutes", a.budget_minutes)):
++            if v:
++                budget[k] = v
++        prior = {"tokens_in": t.get("tokens_in", t.get("tokens", 0)), "tokens_out": t.get("tokens_out", 0),
++                 "usd": t.get("usd", 0.0), "rounds": t.get("rounds", 0), "worker_s": t.get("worker_s", 0)}
++        if t.get("stopped") == "budget" and budget == (t.get("budget") or {}):
++            raise AKError(f"task {tid} is out of budget", "resuming with the same budget would stop at once",
++                          f"agentkit task resume {tid} --budget-tokens N | --budget-usd X | --budget-minutes M")
++        prev = t.get("reason") or t["status"]
++        for k in ("verdict", "ended", "error_code", "component", "stopped", "claim", "worker_status", "pid", "started",
++                  "stopped_at", "stop_requested_at", "last_step"):
++            t.pop(k, None)
++        t.update(status="queued", budget=budget, prior=prior, resumes=int(t.get("resumes") or 0) + 1,
++                 resumed_from=prev, reason=None)
++        d = tpath(root, tid)
++        for f in ("report.json", "cancel"):
++            (d / f).unlink(missing_ok=True)
++        save(root, t)
++        EventLog(root, tid, "task").emit("resume_requested", step=t.get("rounds", 0), cli_run=ctx.run_id or None)
++    schedule(root)
++    t = load(root, tid)
++    out = {"id": tid, "status": t["status"], "resumes": t["resumes"]}
++    if queue_pos(root, tid):
++        out["queue_pos"] = queue_pos(root, tid)
++    return out
++
++
++def cancel(root: Path, tid: str) -> dict:
++    with locked(root):
++        t = load(root, tid)
++        if t["status"] in TERMINAL:
++            return compact_status(root, t)
++        (tpath(root, tid) / "cancel").write_text("1")
++        if t["status"] == "queued":
++            t.update(status="cancelled", reason="cancelled before start", ended=time.time(), error_code="AK-TASK-CANCELLED",
++                     component="task", last_step=0)
++            save(root, t)
++            return compact_status(root, t)
++        pid = t.get("pid")
++    if pid and pid_alive(pid):
++        try:
++            os.kill(int(pid), signal.SIGTERM)
++        except ProcessLookupError:
++            pass
++    deadline = time.monotonic() + 5
++    while time.monotonic() < deadline:
++        t = load(root, tid)
++        if t["status"] in TERMINAL or t["status"] == "verifying":
++            break
++        time.sleep(0.1)
++    if pid and pid_alive(pid) and load(root, tid)["status"] not in TERMINAL | {"verifying"}:
++        try:
++            os.killpg(int(pid), signal.SIGKILL)
++        except (ProcessLookupError, PermissionError):
++            pass
++        update(root, tid, status="cancelled", reason="cancelled (killed)", ended=time.time(), error_code="AK-TASK-CANCELLED",
++               component="task")
++    t = load(root, tid)
++    if t["status"] == "verifying":
++        # cancelled runner skips verification; wait briefly for it to settle
++        for _ in range(50):
++            t = load(root, tid)
++            if t["status"] in TERMINAL:
++                break
++            time.sleep(0.1)
++    return compact_status(root, t)
+diff --git a/agentkit/worker.py b/agentkit/worker.py
+new file mode 100644
+index 0000000..299b2a2
+--- /dev/null
++++ b/agentkit/worker.py
+@@ -0,0 +1,655 @@
++# Copyright 2026 tangniutt and contributors
++# SPDX-License-Identifier: Apache-2.0
++"""M-12 built-in worker loop.
++
++Shape follows mini-swe-agent's DefaultAgent (MIT): query the model, execute its actions,
++append observations, stop on an exit condition, count consecutive format errors. The code
++is our own: OpenAI tool calling instead of bash blocks, AgentKit's M1 tools as the only
++actions, plus stuck detection, context compaction (idea from LooppooL's compactToolResults,
++MIT) and hard budgets (M-16).
++
++The worker never decides whether the task is done: `finish` only records its claim; the
++verifier re-runs the checks in a clean worktree (tasks.verify_task).
++"""
++
++from __future__ import annotations
++
++import ast
++import hashlib
++import json
++import os
++import re
++import subprocess
++import tempfile
++import time
++from pathlib import Path
++from typing import Callable, Optional
++
++from .core import dumps
++from .models import ChatClient, ModelError, ModelSpec, usage_of
++from .redact import redact, redact_text
++
++COMPACT_AT = 0.70
++KEEP_TURNS = 4
++
++TOOLS_SPEC = [
++    ("read", "Read a file: 'path', 'path:START-END' or 'path#Symbol'. Output is budgeted; follow 'next' to page.",
++     {"spec": "string"}, ["spec"]),
++    ("search", "Regex search in the repo (respects .gitignore). Results path:line:text.",
++     {"pattern": "string", "path": "string", "glob": "string", "fixed": "boolean", "ignore_case": "boolean"}, ["pattern"]),
++    ("ls", "List a directory.", {"path": "string", "recursive": "boolean"}, []),
++    ("glob", "Find files by glob, e.g. '**/*.py'.", {"pattern": "string"}, ["pattern"]),
++    ("repo_map", "Directories + top symbols of the repo (or a sub path).", {"path": "string"}, []),
++    ("edit", "Replace an exact, unique snippet in a file (syntax-checked; 0 or >1 matches returns candidates).",
++     {"path": "string", "old": "string", "new": "string", "all": "boolean"}, ["path", "old", "new"]),
++    ("create", "Create a file with content (set overwrite=true to replace an existing file).",
++     {"path": "string", "content": "string", "overwrite": "boolean"}, ["path", "content"]),
++    ("delete", "Delete files.", {"paths": "array"}, ["paths"]),
++    ("rename", "Rename / move a file.", {"src": "string", "dst": "string"}, ["src", "dst"]),
++    ("run", "Run a shell command in the repo (timeout seconds, default 120). git commit/push are refused.",
++     {"command": "string", "timeout": "number"}, ["command"]),
++    ("memory_search", "Search project memory.", {"query": "string"}, ["query"]),
++    ("memory_show", "Show one project memory by id.", {"id": "string"}, ["id"]),
++    ("finish", "Call when you believe the goal is met. Your claim is NOT trusted: the checks are re-run independently.",
++     {"summary": "string"}, ["summary"]),
++]
++TOOL_NAMES = {t[0] for t in TOOLS_SPEC}
++
++
++def tool_schemas() -> list:
++    out = []
++    for name, desc, props, req in TOOLS_SPEC:
++        p = {}
++        for k, t in props.items():
++            p[k] = {"type": t} if t != "array" else {"type": "array", "items": {"type": "string"}}
++        out.append({"type": "function", "function": {"name": name, "description": desc,
++                                                       "parameters": {"type": "object", "properties": p, "required": req}}})
++    return out
++
++
++SYSTEM = """You are an AgentKit worker: a coding agent working alone in an isolated git worktree.
++Use ONLY the provided tools (always via tool calls). Every tool returns compact JSON {{ok,data,error,truncated,next}}.
++Rules:
++- Make the smallest change that meets the goal. Do not modify, skip or delete tests, test config or check scripts
++  unless the goal explicitly asks for it. Stay inside the allowed paths.
++- You cannot commit or push; leave changes uncommitted.
++- Run the checks yourself with `run` before calling `finish`. Your claim is not trusted: the verifier re-runs
++  the checks in a clean worktree and flags suspicious changes.
++- Be frugal: prefer search / read with line ranges over reading whole files.
++
++GOAL:
++{goal}
++
++CHECKS the verifier will run:
++{checks}
++
++ALLOWED PATHS: {allow}
++
++PROJECT MEMORY (brief):
++{brief}
++"""
++
++
++class StopWorker(BaseException):
++    """Raised in the worker thread to stop at once (budget, cancel). BaseException so tool code can't swallow it."""
++
++    def __init__(self, reason: str):
++        super().__init__(reason)
++        self.reason = reason
++
++
++class Outcome:
++    def __init__(self, status: str, reason: str = "", stopped: Optional[str] = None, claim: str = "",
++                 code: Optional[str] = None):
++        self.status = status  # submitted | failed | stopped | paused
++        self.reason = reason
++        self.stopped = stopped
++        self.claim = claim
++        if code is None and stopped == "budget":
++            code = "AK-BUDGET"
++        elif code is None and stopped == "rounds":
++            code = "AK-WORKER-ROUNDS"
++        elif code is None and stopped == "cancelled":
++            code = "AK-TASK-CANCELLED"
++        elif code is None and stopped == "stuck":
++            code = "AK-WORKER-STUCK"
++        self.code = code
++
++
++# ---------------------------------------------------------------- tool-call repair
++
++
++def repair_args(raw) -> Optional[dict]:
++    """Best-effort repair of a malformed arguments string. Returns a dict or None."""
++    if isinstance(raw, dict):
++        return raw
++    if raw is None:
++        return {}
++    s = str(raw).strip()
++    if not s:
++        return {}
++    try:
++        v = json.loads(s)
++        return v if isinstance(v, dict) else None
++    except ValueError:
++        pass
++    s2 = re.sub(r"^```(?:json)?\s*|\s*```$", "", s)
++    s2 = re.sub(r",\s*([}\]])", r"\1", s2)
++    m = re.search(r"\{.*\}", s2, re.S)
++    if m:
++        s2 = m.group(0)
++    for attempt in (s2, s2.replace("\n", "\\n")):
++        try:
++            v = json.loads(attempt)
++            if isinstance(v, dict):
++                return v
++        except ValueError:
++            pass
++    try:
++        py = re.sub(r"\btrue\b", "True", re.sub(r"\bfalse\b", "False", re.sub(r"\bnull\b", "None", s2)))
++        v = ast.literal_eval(py)
++        if isinstance(v, dict):
++            return {str(k): x for k, x in v.items()}
++    except (ValueError, SyntaxError, MemoryError, RecursionError):
++        pass
++    return None
++
++
++def _norm_name(name: str) -> Optional[str]:
++    n = (name or "").strip()
++    n = n.split(".")[-1].split(":")[-1].strip().lower().replace("-", "_")
++    alias = {"repomap": "repo_map", "read_file": "read", "write_file": "create", "bash": "run", "shell": "run",
++             "submit": "finish", "done": "finish"}
++    n = alias.get(n, n)
++    return n if n in TOOL_NAMES else None
++
++
++def _text_tool_call(content: str):
++    """Some models put a tool call in plain text. Find {"name":..,"arguments":..} JSON."""
++    if not content:
++        return None
++    for m in re.finditer(r"\{.*\}", content, re.S):
++        try:
++            v = json.loads(m.group(0))
++        except ValueError:
++            continue
++        if isinstance(v, dict) and ("name" in v or "tool" in v):
++            name = v.get("name") or v.get("tool")
++            args = v.get("arguments") or v.get("args") or v.get("parameters") or {}
++            if isinstance(args, str):
++                args = repair_args(args)
++            if _norm_name(str(name)) and isinstance(args, dict):
++                return _norm_name(str(name)), args
++    return None
++
++
++# ---------------------------------------------------------------- worker
++
++
++class Worker:
++    def __init__(self, spec: ModelSpec, worktree: Path, main_root: Path, task: dict, *,
++                 on_progress: Callable[[dict], None] = lambda d: None,
++                 transcript: Optional[Path] = None, client: Optional[ChatClient] = None,
++                 cfg: Optional[dict] = None, check_stop: Callable[[], Optional[str]] = lambda: None,
++                 events=None):
++        cfg = cfg or {}
++        self.events = events
++        self.last_component = "worker"
++        self.last_step = 0
++        self.spec = spec
++        self.wt = worktree
++        self.main_root = main_root
++        self.task = task
++        self.on_progress = on_progress
++        self.transcript = transcript
++        self.client = client or ChatClient(spec, backoff=float(cfg.get("backoff_s", 1.0)))
++        self.check_stop = check_stop
++        self.tool_budget = int(cfg.get("tool_budget", 1500))
++        self.max_rounds = int(cfg.get("max_rounds", 40))
++        self.stuck_rounds = int(cfg.get("stuck_rounds", 10))
++        self.same_error_limit = int(cfg.get("same_error_limit", 3))
++        self.max_format_errors = int(cfg.get("max_format_errors", 3))
++        b = task.get("budget") or {}
++        self.budget_tokens = int(b.get("tokens") or 0)
++        self.budget_usd = float(b.get("usd") or 0)
++        prior = task.get("prior") or {}  # resumed task: budgets cover the whole task, not one segment
++        self.tokens_in = int(prior.get("tokens_in") or 0)
++        self.tokens_out = int(prior.get("tokens_out") or 0)
++        self.usd = float(prior.get("usd") or 0.0)
++        self.rounds = int(prior.get("rounds") or 0)
++        self.start_round = self.rounds
++        self.compactions = 0
++        self.repairs = 0
++        self.denied: list = []
++        self.messages: list = []
++        self.tools = tool_schemas()
++
++    # ---------------------------------------------------------- helpers
++    def stats(self) -> dict:
++        return {"rounds": self.rounds, "tokens_in": self.tokens_in, "tokens_out": self.tokens_out,
++                "usd": round(self.usd, 6), "compactions": self.compactions, "repairs": self.repairs}
++
++    def _ev(self, event: str, component: str, duration=None, error_code=None, **extra):
++        self.last_component, self.last_step = component, self.rounds
++        if self.events is not None:
++            self.events.emit(event, step=self.rounds, component=component, duration=duration, error_code=error_code, **extra)
++
++    def _log(self, obj: dict):
++        if self.transcript:
++            with open(self.transcript, "a", encoding="utf-8") as f:
++                f.write(dumps(redact(obj)) + "\n")
++
++    def _add(self, msg: dict):
++        self.messages.append(msg)
++        self._log(msg)
++
++    def est_tokens(self) -> int:
++        return (len(dumps(self.messages)) + len(dumps(self.tools))) // 4
++
++    def _over_budget(self) -> Optional[str]:
++        if self.budget_tokens and self.tokens_in + self.tokens_out >= self.budget_tokens:
++            return "budget"
++        if self.budget_usd and self.usd >= self.budget_usd:
++            return "budget"
++        return None
++
++    def diff_fingerprint(self) -> str:
++        try:
++            st = subprocess.run(["git", "-C", str(self.wt), "status", "--porcelain=v1", "-z", "--untracked-files=all"],
++                                capture_output=True, timeout=60).stdout.decode("utf-8", "replace")
++        except (OSError, subprocess.SubprocessError):
++            return ""
++        h = hashlib.sha256()
++        for ent in sorted(e for e in st.split("\0") if e):
++            path = ent[3:]
++            if path.startswith(".agentkit/") or "__pycache__/" in path or path.endswith(".pyc") or ".pytest_cache/" in path:
++                continue
++            h.update(ent.encode())
++            p = self.wt / path
++            if p.is_file():
++                try:
++                    h.update(p.read_bytes())
++                except OSError:
++                    pass
++        return h.hexdigest()
++
++    # ---------------------------------------------------------- tools
++    def _cli(self, argv: list, root: Optional[Path] = None) -> dict:
++        from .cli import run_cli
++
++        full = list(argv) + ["--budget", str(self.tool_budget)]
++        if root is not None:
++            full += ["--root", str(root)]
++        env, _code, _h = run_cli(full)
++        return env
++
++    def run_tool(self, name: str, args: dict) -> dict:
++        def s(k, d=None):
++            v = args.get(k, d)
++            return d if v is None else v
++
++        tmpfiles = []
++
++        def tf(text) -> str:
++            fd, p = tempfile.mkstemp(prefix="ak-arg-")
++            with os.fdopen(fd, "w", encoding="utf-8") as f:
++                f.write(str(text))
++            tmpfiles.append(p)
++            return p
++
++        try:
++            if name == "read":
++                return self._cli(["read", str(s("spec", s("path", "")))])
++            if name == "search":
++                argv = ["search", str(s("pattern", ""))]
++                if s("path"):
++                    argv.append(str(s("path")))
++                if s("glob"):
++                    argv += ["--glob", str(s("glob"))]
++                if s("fixed"):
++                    argv.append("--fixed")
++                if s("ignore_case"):
++                    argv.append("--ignore-case")
++                return self._cli(argv)
++            if name == "ls":
++                return self._cli(["ls"] + ([str(s("path"))] if s("path") else []) + (["--recursive"] if s("recursive") else []))
++            if name == "glob":
++                return self._cli(["glob", str(s("pattern", "*"))])
++            if name == "repo_map":
++                return self._cli(["repo_map"] + ([str(s("path"))] if s("path") else []))
++            if name == "edit":
++                argv = ["edit", str(s("path", "")), "--old-file", tf(s("old", "")), "--new-file", tf(s("new", ""))]
++                if s("all"):
++                    argv.append("--all")
++                return self._cli(argv)
++            if name == "create":
++                argv = ["create", str(s("path", "")), "--content-file", tf(s("content", ""))]
++                if s("overwrite"):
++                    argv.append("--overwrite")
++                return self._cli(argv)
++            if name == "delete":
++                paths = s("paths") or ([s("path")] if s("path") else [])
++                if isinstance(paths, str):
++                    paths = [paths]
++                return self._cli(["delete"] + [str(p) for p in paths]) if paths else _err("delete needs paths")
++            if name == "rename":
++                return self._cli(["rename", str(s("src", "")), str(s("dst", ""))])
++            if name == "run":
++                argv = ["run", str(s("command", ""))]
++                if s("timeout"):
++                    argv += ["--timeout", str(float(s("timeout")))]
++                env = self._cli(argv)
++                if not env.get("ok") and (env.get("data") or {}).get("denied"):
++                    self.denied.append(str(s("command", ""))[:120])
++                return env
++            if name == "memory_search":
++                return self._cli(["memory", "search", str(s("query", ""))], root=self.main_root)
++            if name == "memory_show":
++                return self._cli(["memory", "show", str(s("id", ""))], root=self.main_root)
++        finally:
++            for p in tmpfiles:
++                try:
++                    os.unlink(p)
++                except OSError:
++                    pass
++        return _err(f"unknown tool {name}")
++
++    # ---------------------------------------------------------- compaction
++    def maybe_compact(self):
++        limit = int(self.spec.context * COMPACT_AT)
++        if self.est_tokens() <= limit:
++            return
++        self.compactions += 1
++        asst = [i for i, m in enumerate(self.messages) if m.get("role") == "assistant"]
++        for keep in range(KEEP_TURNS, 0, -1):
++            cut = asst[-keep] if len(asst) >= keep else 0
++            for i in range(2, cut):
++                m = self.messages[i]
++                if m.get("role") == "tool" and not str(m.get("content", "")).startswith("[folded]"):
++                    m["content"] = _fold(m.get("content", ""))
++                elif m.get("role") == "assistant":
++                    if m.get("content") and len(str(m["content"])) > 200:
++                        m["content"] = str(m["content"])[:200] + " …[folded]"
++                    for tc in m.get("tool_calls") or []:
++                        a = tc.get("function", {}).get("arguments", "")
++                        if len(a) > 300:
++                            tc["function"]["arguments"] = json.dumps({"_folded": a[:120]})
++                elif m.get("role") == "user" and len(str(m.get("content", ""))) > 300:
++                    m["content"] = str(m["content"])[:300] + " …[folded]"
++            if self.est_tokens() <= limit:
++                break
++        self._log({"role": "_compaction", "content": f"compacted to ~{self.est_tokens()} tokens (limit {limit})"})
++
++    def _model_fail(self, e: ModelError) -> Outcome:
++        from .events import model_code
++
++        code = model_code(e.kind)
++        if e.kind == "auth":
++            return Outcome("failed", f"invalid or expired key: run `agentkit model test {self.spec.name}`", code=code)
++        if e.kind == "rate_limited":
++            ra = f", retry after {e.retry_after:g}s" if e.retry_after else ""
++            return Outcome("paused", f"rate limited (429){ra}", code=code)
++        if e.kind in ("timeout", "network", "unavailable"):
++            return Outcome("paused", f"model {e.kind} after retries: {str(e)[:120]}", code=code)
++        return Outcome("failed", f"model error: {str(e)[:200]}", code=code)
++
++    # ---------------------------------------------------------- loop
++    def run(self, brief: str, resume: Optional[str] = None) -> Outcome:
++        t = self.task
++        sysmsg = SYSTEM.format(goal=t["goal"], checks="\n".join(f"- {c}" for c in t.get("checks") or []) or "- (none given)",
++                               allow=", ".join(t.get("allow") or []) or "(any)", brief=brief or "(none)")
++        if resume:
++            self._log({"role": "_resume", "content": f"resumed at round {self.rounds}"})
++        self._add({"role": "system", "content": sysmsg})
++        if resume:
++            self._add({"role": "user", "content": resume})
++        else:
++            self._add({"role": "user", "content": f"Task {t['id']}: {t['goal']}\nStart with the memory brief above, then explore with repo_map/search/read."})
++        format_errors = 0
++        last_fp = self.diff_fingerprint()
++        no_change = 0
++        last_err, same_err = None, 0
++        while True:
++            stop = self.check_stop()
++            if stop:
++                return Outcome("stopped", stop, stopped=stop)
++            if self.rounds - self.start_round >= self.max_rounds:
++                return Outcome("stopped", f"max rounds ({self.max_rounds})", stopped="rounds")
++            self.maybe_compact()
++            if self.budget_tokens and self.tokens_in + self.tokens_out + self.est_tokens() > self.budget_tokens:
++                return Outcome("stopped", "token budget would be exceeded by the next call", stopped="budget")
++            self.rounds += 1
++            tq = time.monotonic()
++            try:
++                resp = self.client.chat(self.messages, self.tools)
++            except ModelError as e:
++                from .events import model_code
++
++                self._ev("model_error", "model", time.monotonic() - tq, model_code(e.kind), what=str(e)[:200])
++                return self._model_fail(e)
++            self._ev("model_call", "model", time.monotonic() - tq)
++            tin, tout = usage_of(resp, self.messages)
++            self.tokens_in += tin
++            self.tokens_out += tout
++            self.usd += self.spec.cost(tin, tout)
++            msg = resp["choices"][0]["message"]
++            amsg = {k: v for k, v in msg.items() if v is not None and k in ("role", "content", "tool_calls", "extra_content")}
++            amsg["role"] = "assistant"
++            calls = list(amsg.get("tool_calls") or [])
++            self.on_progress(self.stats())
++            ob = self._over_budget()
++            if ob:
++                self._add(amsg)
++                return Outcome("stopped", "budget exceeded", stopped="budget")
++
++            if not calls:
++                found = _text_tool_call(str(msg.get("content") or ""))
++                if found:
++                    self.repairs += 1
++                    name, args = found
++                    cid = f"repaired_{self.rounds}"
++                    amsg["tool_calls"] = [{"id": cid, "type": "function", "function": {"name": name, "arguments": json.dumps(args)}}]
++                    calls = amsg["tool_calls"]
++                else:
++                    self._add(amsg)
++                    format_errors += 1
++                    if format_errors >= self.max_format_errors:
++                        self._ev("malformed", "worker", error_code="AK-WORKER-MALFORMED")
++                        return Outcome("failed", f"malformed tool calls: {format_errors} consecutive", code="AK-WORKER-MALFORMED")
++                    self._add({"role": "user", "content": "Error: no tool call. Respond with a tool call (use `finish` when done)."})
++                    continue
++
++            # validate / repair every call before executing any
++            prepared, bad = [], []
++            for i, tc in enumerate(calls):
++                fn = tc.get("function") or {}
++                if not tc.get("id"):
++                    tc["id"] = f"call_{self.rounds}_{i}"
++                name = _norm_name(fn.get("name", ""))
++                raw = fn.get("arguments")
++                args = repair_args(raw)
++                ok_json = isinstance(raw, dict) or _is_json_obj(raw)
++                if name and args is not None:
++                    missing = [r for r in _required(name) if r not in args and not (name == "read" and "path" in args)]
++                    if missing:
++                        bad.append((tc, f"missing required argument(s) {missing} for {name}"))
++                        continue
++                    if not ok_json or name != fn.get("name"):
++                        self.repairs += 1
++                        fn["name"] = name
++                    fn["arguments"] = json.dumps(args)
++                    prepared.append((tc, name, args))
++                else:
++                    why = f"unknown tool '{fn.get('name')}'" if not name else "arguments are not valid JSON"
++                    fn["arguments"] = "{}"
++                    fn["name"] = fn.get("name") or "unknown"
++                    bad.append((tc, why))
++            self._add(amsg)
++            for tc, why in bad:
++                self._add({"role": "tool", "tool_call_id": tc["id"], "content": dumps(
++                    {"ok": False, "error": {"what": "malformed tool call", "why": why,
++                                            "next": "re-issue the call with valid JSON arguments; tools: " + ", ".join(sorted(TOOL_NAMES))}})})
++            if bad and not prepared:
++                format_errors += 1
++                if format_errors >= self.max_format_errors:
++                    self._ev("malformed", "worker", error_code="AK-WORKER-MALFORMED")
++                    return Outcome("failed", f"malformed tool calls: {format_errors} consecutive ({bad[0][1]})", code="AK-WORKER-MALFORMED")
++                continue
++            format_errors = 0
++
++            finished = None
++            for tc, name, args in prepared:
++                stop = self.check_stop()
++                if stop:
++                    # still answer the call so the transcript stays well-formed
++                    self._add({"role": "tool", "tool_call_id": tc["id"], "content": '{"ok":false,"error":{"what":"stopped"}}'})
++                    return Outcome("stopped", stop, stopped=stop)
++                if name == "finish":
++                    finished = str(args.get("summary", ""))[:500]
++                    self._add({"role": "tool", "tool_call_id": tc["id"], "content": '{"ok":true,"data":"submitted for independent verification"}'})
++                    continue
++                tt = time.monotonic()
++                env = self.run_tool(name, args)
++                self._ev("tool", f"tool:{name}", time.monotonic() - tt,
++                         None if env.get("ok") else (env.get("error") or {}).get("code"))
++                content = redact_text(dumps(env))
++                self._add({"role": "tool", "tool_call_id": tc["id"], "content": content})
++                sig = _error_sig(name, env)
++                if sig:
++                    if sig == last_err:
++                        same_err += 1
++                    else:
++                        last_err, same_err = sig, 1
++                    if same_err >= self.same_error_limit:
++                        return Outcome("failed", f"stuck: same error {same_err}x: {sig[:120]}", stopped="stuck")
++            if finished is not None:
++                return Outcome("submitted", "worker called finish", claim=finished)
++            fp = self.diff_fingerprint()
++            if fp != last_fp:
++                last_fp, no_change = fp, 0
++                last_err, same_err = None, 0
++            else:
++                no_change += 1
++                if no_change >= self.stuck_rounds:
++                    return Outcome("failed", f"stuck: no new diff in {no_change} rounds", stopped="stuck")
++
++
++# ---------------------------------------------------------------- resume (paused / interrupted / stopped tasks)
++
++RESUME_CHARS = 6000
++
++
++def resume_context(transcript: Optional[Path], wt: Path, base: str, task: dict, max_chars: int = RESUME_CHARS) -> str:
++    """A compacted transcript for `task resume`: what was done so far (one line per tool call with
++    its outcome), the worker's last note, why it stopped, and the current diff of the worktree.
++    Raw assistant turns are NOT replayed: that keeps the context small, avoids dangling tool calls
++    of an interrupted turn, and sidesteps provider-specific state (e.g. Gemini thought signatures
++    are only valid inside the conversation that produced them)."""
++    calls, results, last_text, segments = {}, {}, "", 0
++    order: list = []
++    if transcript and transcript.exists():
++        for line in transcript.read_text(encoding="utf-8", errors="replace").splitlines():
++            try:
++                m = json.loads(line)
++            except ValueError:
++                continue
++            role = m.get("role")
++            if role == "_resume":
++                segments += 1
++            elif role == "assistant":
++                if m.get("content"):
++                    last_text = str(m["content"])
++                for tc in m.get("tool_calls") or []:
++                    fn = tc.get("function") or {}
++                    cid = tc.get("id") or f"_{len(order)}"
++                    calls[cid] = (fn.get("name", "?"), str(fn.get("arguments", ""))[:100])
++                    order.append(cid)
++            elif role == "tool":
++                results[m.get("tool_call_id")] = _outcome(str(m.get("content", "")))
++    lines = []
++    for cid in order:
++        name, args = calls[cid]
++        lines.append(f"- {name} {args} -> {results.get(cid, 'no result (interrupted)')}")
++    if len(lines) > 25:
++        lines = [f"- ... {len(lines) - 25} earlier actions omitted"] + lines[-25:]
++    try:
++        stat = subprocess.run(["git", "-C", str(wt), "status", "--porcelain", "--untracked-files=all"],
++                              capture_output=True, text=True, timeout=60).stdout
++        stat = "\n".join(l for l in stat.splitlines() if ".agentkit/" not in l and "__pycache__" not in l and not l.endswith(".pyc"))
++        diff = subprocess.run(["git", "-C", str(wt), "diff", base, "--", ".", ":(exclude).agentkit"],
++                              capture_output=True, text=True, timeout=60).stdout
++        for l in stat.splitlines():  # new files are untracked: show them too (index left untouched)
++            if l.startswith("?? "):
++                p = wt / l[3:]
++                try:
++                    diff += f"\n+++ new file {l[3:]}\n" + p.read_text(errors="replace")[:1500]
++                except OSError:
++                    pass
++    except (OSError, subprocess.SubprocessError):
++        stat, diff = "", ""
++    head = (f"Resuming task {task['id']} (resume #{segments + 1}) after: {task.get('reason') or task.get('status')}.\n"
++            f"GOAL: {task['goal']}\nThe worktree still holds your earlier changes. Do not redo work that is already in the diff;"
++            f" continue from here, run the checks, then call finish.\n")
++    body = "ACTIONS SO FAR (compacted):\n" + ("\n".join(lines) or "- none") + "\n"
++    if last_text:
++        body += f"YOUR LAST NOTE: {last_text[:300]}\n"
++    body += "CHANGED FILES:\n" + (stat or "(none)") + "\n"
++    room = max(400, max_chars - len(head) - len(body) - 40)
++    d = diff if len(diff) <= room else diff[:room] + "\n...[diff truncated; read the files for the rest]"
++    return redact_text(head + body + "CURRENT DIFF vs base:\n" + (d or "(empty)"))
++
++
++def _outcome(content: str) -> str:
++    try:
++        env = json.loads(content)
++    except ValueError:
++        return content[:80]
++    if not isinstance(env, dict):
++        return content[:80]
++    if not env.get("ok"):
++        return "error: " + str((env.get("error") or {}).get("what", ""))[:80]
++    d = env.get("data")
++    if isinstance(d, dict) and "exit_code" in d:
++        return f"exit {d.get('exit_code')}"
++    return "ok"
++
++
++def _is_json_obj(raw) -> bool:
++    try:
++        return isinstance(json.loads(raw), dict)
++    except (ValueError, TypeError):
++        return False
++
++
++def _required(name: str) -> list:
++    for n, _d, _p, req in TOOLS_SPEC:
++        if n == name:
++            return req
++    return []
++
++
++def _err(what: str) -> dict:
++    return {"ok": False, "data": None, "error": {"what": what, "why": "", "next": None}, "truncated": False, "next": None}
++
++
++def _fold(content: str) -> str:
++    c = str(content)
++    try:
++        env = json.loads(c)
++        ok = env.get("ok")
++        what = (env.get("error") or {}).get("what") if not ok else None
++        head = dumps(env.get("data"))[:140]
++        return f"[folded] ok={ok}" + (f" error={what}" if what else "") + f" {len(c)} chars; head: {head}"
++    except (ValueError, AttributeError):
++        return f"[folded] {len(c)} chars; head: {c[:140]}"
++
++
++def _error_sig(name: str, env: dict) -> Optional[str]:
++    if not env.get("ok"):
++        return f"{name}: {(env.get('error') or {}).get('what', '')}"
++    if name == "run":
++        d = env.get("data") or {}
++        if d.get("exit_code") not in (0, None):
++            tail = (d.get("stderr_tail") or d.get("stdout_tail") or "").strip().splitlines()[-1:] or [""]
++            return f"run exit {d.get('exit_code')}: {tail[0][-160:]}"
++    return None

@@ -378,6 +378,7 @@ def run_task(root: Path, tid: str) -> None:
 
     cfg = load_config(root)
     wcfg = dict(cfg.get("worker") or {})
+    wcfg["compress"] = dict(cfg.get("compress") or {})  # C-08
     t = update(root, tid, status="running", pid=os.getpid(), started=time.time())
     events = EventLog(root, tid, "task")
     events.emit("started", step=0, pid=os.getpid())
@@ -496,6 +497,7 @@ def run_task(root: Path, tid: str) -> None:
     fields = dict(status="verifying", worker_status=status, reason=reason, stopped=stopped, claim=claim,
                   rounds=st["rounds"], tokens=st["tokens_in"] + st["tokens_out"], tokens_in=st["tokens_in"],
                   tokens_out=st["tokens_out"], usd=st["usd"], compactions=st["compactions"], repairs=st["repairs"],
+                  compression=st.get("compression"),
                   denied=sorted(set(worker.denied) | set(t.get("denied") or [])),
                   worker_s=round(time.monotonic() - t0 + float((t.get("prior") or {}).get("worker_s") or 0), 1),
                   error_code=code, component=worker.last_component if code else None, last_step=worker.last_step)

@@ -94,6 +94,7 @@ def build_parser() -> argparse.ArgumentParser:
     ru.add_argument("command")
     ru.add_argument("--timeout", type=float)
     ru.add_argument("--cwd")
+    ru.add_argument("--raw", action="store_true", help="no command-aware output filter (C-08)")
 
     cp = sub.add_parser("checkpoint", help="snapshots: list | diff ID | rollback ID | create FILE..")
     cps = cp.add_subparsers(dest="cp_cmd", parser_class=_Parser)
@@ -190,6 +191,7 @@ def build_parser() -> argparse.ArgumentParser:
     lg.add_argument("id")
     lg.add_argument("--errors", action="store_true")
     lg.add_argument("--tail", type=int)
+    lg.add_argument("--raw", action="store_true", help="raw (redacted) stdout/stderr of a run log id (run-...)")
     db = sub.add_parser("debug-bundle", help="redacted .tar.gz (config sans keys, versions, events, report) for bug reports")
     db.add_argument("id")
     db.add_argument("--with-transcript", action="store_true", help="include the worker transcript (may contain code)")

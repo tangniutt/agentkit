@@ -1,0 +1,43 @@
+{
+ "id": "ruff",
+ "description": "ruff: keep every diagnostic line and summary; drop source excerpts beyond the first of each code.",
+ "source": "own rules; some match / drop / keep regexes adapted from OmniRoute (MIT) open-sse/services/compression/engines/rtk/filters/ruff.json — see NOTICE",
+ "priority": 80,
+ "commands": [
+  "^ruff\\b",
+  "^python\\d?\\s+-m\\s+ruff\\b"
+ ],
+ "detect": [
+  "^Found \\d+ errors?\\.",
+  "^\\S+\\.py:\\d+:\\d+: [A-Z]+\\d+ "
+ ],
+ "protect": [
+  "^\\S+\\.py:\\d+:\\d+: [A-Z]+\\d+",
+  "^Found \\d+",
+  "^\\[\\*\\] \\d+ fixable",
+  "^\\s*--> \\S+\\.py:\\d+:\\d+",
+  "^[A-Z]+\\d+ "
+ ],
+ "drop": [
+  "^\\s*\\|\\s*$",
+  "^\\s*\\|\\s+\\^+"
+ ],
+ "head": 10,
+ "tail": 40,
+ "max_lines": 200,
+ "tests": [
+  {
+   "name": "concise",
+   "command": "ruff check .",
+   "input": "pkg/m0.py:1:8: F401 [*] `os` imported but unused\n  |\n1 | import os\n  |        ^^ F401\n  |\npkg/m1.py:1:8: F401 [*] `os` imported but unused\n  |\n1 | import os\n  |        ^^ F401\n  |\npkg/m2.py:1:8: F401 [*] `os` imported but unused\n  |\n1 | import os\n  |        ^^ F401\n  |\npkg/m3.py:1:8: F401 [*] `os` imported but unused\n  |\n1 | import os\n  |        ^^ F401\n  |\npkg/m4.py:1:8: F401 [*] `os` imported but unused\n  |\n1 | import os\n  |        ^^ F401\n  |\npkg/m5.py:1:8: F401 [*] `os` imported but unused\n  |\n1 | import os\n  |        ^^ F401\n  |\npkg/m6.py:1:8: F401 [*] `os` imported but unused\n  |\n1 | import os\n  |        ^^ F401\n  |\npkg/m7.py:1:8: F401 [*] `os` imported but unused\n  |\n1 | import os\n  |        ^^ F401\n  |\nFound 8 errors.\n[*] 8 fixable with the `--fix` option.\n",
+   "expect": [
+    "pkg/m7.py:1:8: F401",
+    "Found 8 errors.",
+    "[*] 8 fixable"
+   ],
+   "absent": [
+    "  |        ^^ F401"
+   ]
+  }
+ ]
+}

@@ -1,0 +1,58 @@
+{
+ "id": "pip",
+ "description": "pip / uv install: drop collecting / downloading / already-satisfied lines, keep result, warnings, errors.",
+ "source": "own rules; some match / drop / keep regexes adapted from OmniRoute (MIT) open-sse/services/compression/engines/rtk/filters/pip.json — see NOTICE",
+ "priority": 75,
+ "commands": [
+  "^(?:python\\d?(?:\\.\\d+)?\\s+-m\\s+)?pip3?\\s+(?:install|download|wheel|sync)\\b",
+  "^uv\\s+(?:pip\\s+install|sync|add)\\b",
+  "^poetry\\s+install\\b"
+ ],
+ "detect": [
+  "^Successfully installed ",
+  "^Requirement already satisfied: "
+ ],
+ "drop": [
+  "^\\s*Collecting ",
+  "^\\s*Downloading ",
+  "^\\s*Using cached ",
+  "^Requirement already satisfied: ",
+  "^\\s*Obtaining ",
+  "^\\s*(?:Preparing|Getting|Building|Created|Stored) ",
+  "^\\s*Installing (?:collected packages|build dependencies|backend dependencies)",
+  "^\\s*Attempting uninstall: ",
+  "^\\s*Found existing installation: ",
+  "^\\s*Uninstalling ",
+  "^\\s*Successfully uninstalled ",
+  "^\\s*Resolved \\d+ packages",
+  "^\\s*(?:Prepared|Installed|Audited) \\d+ packages?",
+  "^\\s*\\+ \\S+==\\S+$",
+  "^\\s*Building wheel",
+  "^\\s*Running setup\\.py",
+  "^\\s*Looking in indexes"
+ ],
+ "protect": [
+  "^Successfully installed ",
+  "^\\s*(?:ERROR|WARNING):",
+  "Could not find a version",
+  "^\\[notice\\]"
+ ],
+ "head": 5,
+ "tail": 30,
+ "max_lines": 80,
+ "tests": [
+  {
+   "name": "install",
+   "command": "pip install -r requirements.txt",
+   "input": "Collecting pkg0==1.0.0\n  Downloading pkg0-1.0.0-py3-none-any.whl (12 kB)\nCollecting pkg1==1.1.0\n  Downloading pkg1-1.1.0-py3-none-any.whl (12 kB)\nCollecting pkg2==1.2.0\n  Downloading pkg2-1.2.0-py3-none-any.whl (12 kB)\nCollecting pkg3==1.3.0\n  Downloading pkg3-1.3.0-py3-none-any.whl (12 kB)\nCollecting pkg4==1.4.0\n  Downloading pkg4-1.4.0-py3-none-any.whl (12 kB)\nCollecting pkg5==1.5.0\n  Downloading pkg5-1.5.0-py3-none-any.whl (12 kB)\nCollecting pkg6==1.6.0\n  Downloading pkg6-1.6.0-py3-none-any.whl (12 kB)\nCollecting pkg7==1.7.0\n  Downloading pkg7-1.7.0-py3-none-any.whl (12 kB)\nCollecting pkg8==1.8.0\n  Downloading pkg8-1.8.0-py3-none-any.whl (12 kB)\nCollecting pkg9==1.9.0\n  Downloading pkg9-1.9.0-py3-none-any.whl (12 kB)\nRequirement already satisfied: dep0 in ./venv/lib/python3.12/site-packages (from pkg0==1.0.0) (2.0.0)\nRequirement already satisfied: dep1 in ./venv/lib/python3.12/site-packages (from pkg0==1.0.0) (2.0.1)\nRequirement already satisfied: dep2 in ./venv/lib/python3.12/site-packages (from pkg0==1.0.0) (2.0.2)\nRequirement already satisfied: dep3 in ./venv/lib/python3.12/site-packages (from pkg0==1.0.0) (2.0.3)\nRequirement already satisfied: dep4 in ./venv/lib/python3.12/site-packages (from pkg0==1.0.0) (2.0.4)\nRequirement already satisfied: dep5 in ./venv/lib/python3.12/site-packages (from pkg0==1.0.0) (2.0.5)\nRequirement already satisfied: dep6 in ./venv/lib/python3.12/site-packages (from pkg0==1.0.0) (2.0.6)\nRequirement already satisfied: dep7 in ./venv/lib/python3.12/site-packages (from pkg0==1.0.0) (2.0.7)\nInstalling collected packages: pkg0, pkg1\nWARNING: The script pkg0 is installed in '/home/u/.local/bin' which is not on PATH.\nSuccessfully installed pkg0-1.0.0 pkg1-1.1.0\n",
+   "expect": [
+    "Successfully installed pkg0-1.0.0 pkg1-1.1.0",
+    "WARNING: The script pkg0"
+   ],
+   "absent": [
+    "Collecting pkg3",
+    "Requirement already satisfied: dep2"
+   ]
+  }
+ ]
+}

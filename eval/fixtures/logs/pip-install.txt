@@ -1,0 +1,33 @@
+Collecting requests==2.32.3
+  Downloading requests-2.32.3-py3-none-any.whl.metadata (4.6 kB)
+Collecting rich==13.9.4
+  Downloading rich-13.9.4-py3-none-any.whl.metadata (18 kB)
+Collecting charset-normalizer<4,>=2 (from requests==2.32.3)
+  Downloading charset_normalizer-3.5.3-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl.metadata (43 kB)
+Collecting idna<4,>=2.5 (from requests==2.32.3)
+  Downloading idna-3.20-py3-none-any.whl.metadata (7.2 kB)
+Collecting urllib3<3,>=1.21.1 (from requests==2.32.3)
+  Downloading urllib3-2.8.0-py3-none-any.whl.metadata (7.4 kB)
+Collecting certifi>=2017.4.17 (from requests==2.32.3)
+  Downloading certifi-2026.11.20-py3-none-any.whl.metadata (2.5 kB)
+Collecting markdown-it-py>=2.2.0 (from rich==13.9.4)
+  Downloading markdown_it_py-4.3.0-py3-none-any.whl.metadata (7.9 kB)
+Collecting pygments<3.0.0,>=2.13.0 (from rich==13.9.4)
+  Downloading pygments-2.21.0-py3-none-any.whl.metadata (2.5 kB)
+Collecting mdurl~=0.1 (from markdown-it-py>=2.2.0->rich==13.9.4)
+  Downloading mdurl-0.1.2-py3-none-any.whl.metadata (1.6 kB)
+Downloading requests-2.32.3-py3-none-any.whl (64 kB)
+Downloading rich-13.9.4-py3-none-any.whl (242 kB)
+Downloading certifi-2026.11.20-py3-none-any.whl (127 kB)
+Downloading charset_normalizer-3.5.3-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl (239 kB)
+Downloading idna-3.20-py3-none-any.whl (69 kB)
+Downloading markdown_it_py-4.3.0-py3-none-any.whl (96 kB)
+Downloading pygments-2.21.0-py3-none-any.whl (1.3 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.3/1.3 MB 39.7 MB/s eta 0:00:00
+Downloading urllib3-2.8.0-py3-none-any.whl (135 kB)
+Downloading mdurl-0.1.2-py3-none-any.whl (10.0 kB)
+Installing collected packages: urllib3, pygments, mdurl, idna, charset-normalizer, certifi, requests, markdown-it-py, rich
+Successfully installed certifi-2026.11.20 charset-normalizer-3.5.3 idna-3.20 markdown-it-py-4.3.0 mdurl-0.1.2 pygments-2.21.0 requests-2.32.3 rich-13.9.4 urllib3-2.8.0
+
+[notice] A new release of pip is available: 25.0.1 -> 26.3
+[notice] To update, run: pip install --upgrade pip

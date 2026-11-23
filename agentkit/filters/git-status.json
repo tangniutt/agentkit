@@ -1,0 +1,48 @@
+{
+ "id": "git-status",
+ "description": "git status: drop hint lines in parentheses; keep branch, section headers, changed files.",
+ "source": "own rules; some match / drop / keep regexes adapted from OmniRoute (MIT) open-sse/services/compression/engines/rtk/filters/git-status.json — see NOTICE",
+ "priority": 95,
+ "commands": [
+  "^git\\s+status\\b"
+ ],
+ "detect": [
+  "^On branch \\S+",
+  "^Changes not staged for commit:"
+ ],
+ "drop": [
+  "^\\s*\\(use \\\"git .*\\)$",
+  "^\\s*\\(commit or discard .*\\)$"
+ ],
+ "protect": [
+  "^On branch ",
+  "^Your branch ",
+  "^(?:Changes|Untracked|Unmerged)",
+  "^\\s*(?:modified|new file|deleted|renamed|both modified|typechange):",
+  "^ ?[MADRCU?!]{1,2}\\s+\\S",
+  "^nothing to commit"
+ ],
+ "group": [
+  "^\\t\\S"
+ ],
+ "head": 12,
+ "tail": 20,
+ "max_lines": 80,
+ "tests": [
+  {
+   "name": "long",
+   "command": "git status",
+   "input": "On branch main\nYour branch is up to date with 'origin/main'.\n\nChanges not staged for commit:\n  (use \"git add <file>...\" to update what will be committed)\n  (use \"git restore <file>...\" to discard changes in working directory)\n\tmodified:   src/a.py\n\tmodified:   src/b.py\n\nUntracked files:\n  (use \"git add <file>...\" to include in what will be committed)\n\tbuild/out0.o\n\tbuild/out1.o\n\tbuild/out2.o\n\tbuild/out3.o\n\tbuild/out4.o\n\tbuild/out5.o\n\tbuild/out6.o\n\tbuild/out7.o\n\tbuild/out8.o\n\tbuild/out9.o\n\tbuild/out10.o\n\tbuild/out11.o\n\tbuild/out12.o\n\tbuild/out13.o\n\tbuild/out14.o\n\tbuild/out15.o\n\tbuild/out16.o\n\tbuild/out17.o\n\tbuild/out18.o\n\tbuild/out19.o\n\tbuild/out20.o\n\tbuild/out21.o\n\tbuild/out22.o\n\tbuild/out23.o\n\tbuild/out24.o\n\tbuild/out25.o\n\tbuild/out26.o\n\tbuild/out27.o\n\tbuild/out28.o\n\tbuild/out29.o\n\nno changes added to commit (use \"git add\" and/or \"git commit -a\")\n",
+   "expect": [
+    "On branch main",
+    "modified:   src/a.py",
+    "modified:   src/b.py",
+    "\tbuild/out0.o",
+    "similar lines"
+   ],
+   "absent": [
+    "(use \"git restore"
+   ]
+  }
+ ]
+}

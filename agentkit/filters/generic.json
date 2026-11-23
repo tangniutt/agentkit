@@ -1,0 +1,29 @@
+{
+ "id": "generic",
+ "description": "Fallback for any command: strip ANSI and progress, dedup warnings and repeated lines; no truncation (the run budget does that).",
+ "source": "own rules (AgentKit, Apache-2.0)",
+ "priority": 0,
+ "commands": [],
+ "detect": [],
+ "drop": [],
+ "protect": [],
+ "dedup": [],
+ "group": [],
+ "head": 0,
+ "tail": 0,
+ "max_lines": 0,
+ "tests": [
+  {
+   "name": "progress + repeats",
+   "input": "Downloading model\n\r[                    ] 0%\r[#                   ] 5%\r[##                  ] 10%\r[###                 ] 15%\r[####                ] 20%\r[#####               ] 25%\r[######              ] 30%\r[#######             ] 35%\r[########            ] 40%\r[#########           ] 45%\r[##########          ] 50%\r[###########         ] 55%\r[############        ] 60%\r[#############       ] 65%\r[##############      ] 70%\r[###############     ] 75%\r[################    ] 80%\r[#################   ] 85%\r[##################  ] 90%\r[################### ] 95%\r[####################] 100%\nretrying connection...\nretrying connection...\nretrying connection...\nretrying connection...\nretrying connection...\nretrying connection...\nretrying connection...\nretrying connection...\nretrying connection...\nretrying connection...\nretrying connection...\nretrying connection...\nretrying connection...\nretrying connection...\nretrying connection...\nretrying connection...\nretrying connection...\nretrying connection...\nretrying connection...\nretrying connection...\nretrying connection...\nretrying connection...\nretrying connection...\nretrying connection...\nretrying connection...\nretrying connection...\nretrying connection...\nretrying connection...\nretrying connection...\nretrying connection...\ndone\n",
+   "expect": [
+    "retrying connection...  [×30]",
+    "done",
+    "Downloading model"
+   ],
+   "absent": [
+    "100%"
+   ]
+  }
+ ]
+}

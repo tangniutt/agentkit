@@ -1,0 +1,56 @@
+{
+ "id": "pytest",
+ "description": "pytest: drop passing progress / PASSED lines, dedup warnings, keep failures, tracebacks, summary.",
+ "source": "own rules; some match / drop / keep regexes adapted from OmniRoute (MIT) open-sse/services/compression/engines/rtk/filters/test-pytest.json — see NOTICE",
+ "priority": 90,
+ "commands": [
+  "^(?:python\\d?(?:\\.\\d+)?\\s+-m\\s+)?(?:py\\.?test)\\b"
+ ],
+ "detect": [
+  "^=+ .*(?:passed|failed|error).* in [\\d.]+s",
+  "^=+ test session starts =+$"
+ ],
+ "drop": [
+  "^\\S+\\s+[.sx]+\\s*\\[\\s*\\d+%\\]$",
+  "^[.sx]+\\s*\\[\\s*\\d+%\\]$",
+  "::\\S+ (?:PASSED|SKIPPED|XFAIL)\\b",
+  "^(?:platform|cachedir|rootdir|configfile|plugins|cachedir): ",
+  "^collected \\d+ items?$",
+  "^collecting \\.\\.\\."
+ ],
+ "protect": [
+  "^=+ .* =+$",
+  "^_{3,} .* _{3,}$",
+  "^(?:FAILED|ERROR) ",
+  "^\\S+\\.py:\\d+: "
+ ],
+ "dedup": [
+  "^\\s+warnings\\.warn\\(",
+  "^\\s+\\S+\\.py:\\d+: \\w*Warning"
+ ],
+ "group": [
+  "^\\S+\\.py::\\S+$",
+  "^\\s+\\S+\\.py::\\S+$"
+ ],
+ "head": 20,
+ "tail": 60,
+ "max_lines": 200,
+ "tests": [
+  {
+   "name": "progress + warnings",
+   "command": "python -m pytest -q",
+   "input": "tests/test_a.py ........................ [ 50%]\ntests/test_b.py .......F.. [100%]\n=================================== FAILURES ===================================\n___________________________________ test_b3 ____________________________________\n\n    def test_b3():\n>       assert add(1, 2) == 4\nE       assert 3 == 4\n\ntests/test_b.py:9: AssertionError\n=============================== warnings summary ===============================\ntests/test_a.py::test_0\n  /repo/pkg/m.py:4: DeprecationWarning: old() is deprecated\n    warnings.warn('old() is deprecated', DeprecationWarning)\n\ntests/test_a.py::test_1\n  /repo/pkg/m.py:4: DeprecationWarning: old() is deprecated\n    warnings.warn('old() is deprecated', DeprecationWarning)\n\ntests/test_a.py::test_2\n  /repo/pkg/m.py:4: DeprecationWarning: old() is deprecated\n    warnings.warn('old() is deprecated', DeprecationWarning)\n\ntests/test_a.py::test_3\n  /repo/pkg/m.py:4: DeprecationWarning: old() is deprecated\n    warnings.warn('old() is deprecated', DeprecationWarning)\n\ntests/test_a.py::test_4\n  /repo/pkg/m.py:4: DeprecationWarning: old() is deprecated\n    warnings.warn('old() is deprecated', DeprecationWarning)\n\ntests/test_a.py::test_5\n  /repo/pkg/m.py:4: DeprecationWarning: old() is deprecated\n    warnings.warn('old() is deprecated', DeprecationWarning)\n\ntests/test_a.py::test_6\n  /repo/pkg/m.py:4: DeprecationWarning: old() is deprecated\n    warnings.warn('old() is deprecated', DeprecationWarning)\n\ntests/test_a.py::test_7\n  /repo/pkg/m.py:4: DeprecationWarning: old() is deprecated\n    warnings.warn('old() is deprecated', DeprecationWarning)\n\ntests/test_a.py::test_8\n  /repo/pkg/m.py:4: DeprecationWarning: old() is deprecated\n    warnings.warn('old() is deprecated', DeprecationWarning)\n\ntests/test_a.py::test_9\n  /repo/pkg/m.py:4: DeprecationWarning: old() is deprecated\n    warnings.warn('old() is deprecated', DeprecationWarning)\n\ntests/test_a.py::test_10\n  /repo/pkg/m.py:4: DeprecationWarning: old() is deprecated\n    warnings.warn('old() is deprecated', DeprecationWarning)\n\ntests/test_a.py::test_11\n  /repo/pkg/m.py:4: DeprecationWarning: old() is deprecated\n    warnings.warn('old() is deprecated', DeprecationWarning)\n\n=========================== short test summary info ============================\nFAILED tests/test_b.py::test_b3 - assert 3 == 4\n================== 1 failed, 33 passed, 12 warnings in 0.12s ===================\n",
+   "expect": [
+    "FAILED tests/test_b.py::test_b3",
+    "E       assert 3 == 4",
+    "DeprecationWarning: old() is deprecated  [×12]",
+    "1 failed, 33 passed",
+    "tests/test_b.py .......F..",
+    "similar lines"
+   ],
+   "absent": [
+    "tests/test_a.py ........................"
+   ]
+  }
+ ]
+}

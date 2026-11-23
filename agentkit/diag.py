@@ -68,6 +68,8 @@ def _register_keys(ctx: Ctx):
 
 def cmd_logs(ctx: Ctx, a) -> Result:
     _register_keys(ctx)
+    if getattr(a, "raw", False):
+        return _raw_run(ctx, a.id)
     evs = _events(ctx, a.id)
     total = len(evs)
     if a.errors:
@@ -90,6 +92,33 @@ def cmd_logs(ctx: Ctx, a) -> Result:
     if trunc:
         nxt = ctx.with_args({"--tail": max(1, len(taken) // 2)}) if not a.tail else ctx.with_args({"--budget": ctx.budget * 2})
     return Result(data, trunc, nxt)
+
+
+def _raw_run(ctx: Ctx, rid: str) -> Result:
+    """C-08: the unfiltered (redacted at write time) output of one `run` / check, by run log id."""
+    from .run import fit_tails
+
+    rid = rid if rid.startswith("run-") else "run-" + rid
+    if not re.fullmatch(r"run-[\w-]{6,80}", rid):
+        raise AKError(f"no events for '{rid[:40]}'", "run log ids look like run-20261123-024007-24337-7335",
+                      "use the id from a run's filtered.raw or a check's log field", code="AK-LOGS-UNKNOWN")
+    logs = ctx.root / ".agentkit" / "logs"
+    out_p, err_p = logs / f"{rid}.stdout.log", logs / f"{rid}.stderr.log"
+    if not (out_p.exists() or err_p.exists()):
+        raise AKError(f"no events for '{rid[:40]}' (no raw run output)", "run logs are .agentkit/logs/run-*.stdout.log / .stderr.log, kept [logs] retain_days",
+                      "use the id from a run's filtered.raw or a check's log field", code="AK-LOGS-UNKNOWN")
+    for p in (out_p, err_p):
+        if not p.exists():
+            p.write_text("")
+    data = {"id": rid, "stderr": "", "stdout": "", "logs": {"stderr": ctx.rel(err_p), "stdout": ctx.rel(out_p)}}
+    e, o, e_cut, o_cut, e_total, o_total = fit_tails(err_p, out_p, room_for(ctx, data, reserve=160))
+    data["stderr"], data["stdout"] = e, o
+    nxt = None
+    if e_cut:
+        nxt = ctx.next_cmd("read", f"{ctx.rel(err_p)}:1-{e_total}")
+    elif o_cut:
+        nxt = ctx.next_cmd("read", f"{ctx.rel(out_p)}:1-{o_total}")
+    return Result(data, bool(e_cut or o_cut), nxt)
 
 
 def _versions() -> dict:

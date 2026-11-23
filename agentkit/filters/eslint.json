@@ -1,0 +1,36 @@
+{
+ "id": "eslint",
+ "description": "eslint: keep file headers, every problem line, the total.",
+ "source": "own rules; some match / drop / keep regexes adapted from OmniRoute (MIT) open-sse/services/compression/engines/rtk/filters/build-eslint.json — see NOTICE",
+ "priority": 80,
+ "commands": [
+  "^eslint\\b",
+  "^(?:npm|pnpm|yarn)\\s+(?:run\\s+)?lint\\b"
+ ],
+ "detect": [
+  "✖ \\d+ problems?"
+ ],
+ "protect": [
+  "^\\s+\\d+:\\d+\\s+(?:error|warning)\\s",
+  "✖\\s+\\d+\\s+problems?",
+  "^/?\\S+\\.(?:[cm]?[jt]sx?|vue)$"
+ ],
+ "dedup": [],
+ "head": 10,
+ "tail": 40,
+ "max_lines": 200,
+ "tests": [
+  {
+   "name": "problems",
+   "command": "npx eslint src",
+   "input": "\n/repo/src/a.js\n  1:1  warning  Unexpected console statement  no-console\n  2:1  warning  Unexpected console statement  no-console\n  3:1  warning  Unexpected console statement  no-console\n  4:1  warning  Unexpected console statement  no-console\n  5:1  warning  Unexpected console statement  no-console\n  6:1  warning  Unexpected console statement  no-console\n  7:1  warning  Unexpected console statement  no-console\n  8:1  warning  Unexpected console statement  no-console\n  9:1  warning  Unexpected console statement  no-console\n  10:1  warning  Unexpected console statement  no-console\n  11:1  warning  Unexpected console statement  no-console\n  12:1  warning  Unexpected console statement  no-console\n  13:1  warning  Unexpected console statement  no-console\n  14:1  warning  Unexpected console statement  no-console\n  15:1  warning  Unexpected console statement  no-console\n  16:1  warning  Unexpected console statement  no-console\n  17:1  warning  Unexpected console statement  no-console\n  18:1  warning  Unexpected console statement  no-console\n  19:1  warning  Unexpected console statement  no-console\n  20:1  warning  Unexpected console statement  no-console\n  21:1  warning  Unexpected console statement  no-console\n  22:1  warning  Unexpected console statement  no-console\n  23:1  warning  Unexpected console statement  no-console\n  24:1  warning  Unexpected console statement  no-console\n  25:1  warning  Unexpected console statement  no-console\n  26:1  warning  Unexpected console statement  no-console\n  27:1  warning  Unexpected console statement  no-console\n  28:1  warning  Unexpected console statement  no-console\n  29:1  warning  Unexpected console statement  no-console\n  40:3  error  'x' is not defined  no-undef\n\n✖ 30 problems (1 error, 29 warnings)\n",
+   "expect": [
+    "'x' is not defined",
+    "✖ 30 problems",
+    "/repo/src/a.js",
+    "  29:1  warning"
+   ],
+   "compresses": false
+  }
+ ]
+}

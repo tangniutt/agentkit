@@ -1,0 +1,50 @@
+{
+ "id": "jest",
+ "description": "jest / vitest: drop PASS and ✓ lines, keep FAIL blocks, expected/received, summary.",
+ "source": "own rules; some match / drop / keep regexes adapted from OmniRoute (MIT) open-sse/services/compression/engines/rtk/filters/test-jest.json — see NOTICE",
+ "priority": 85,
+ "commands": [
+  "^(?:jest|vitest)\\b",
+  "^(?:npm|pnpm|yarn)\\s+(?:run\\s+)?test\\b"
+ ],
+ "detect": [
+  "^Tests:\\s+\\d+",
+  "^\\s*Test Files\\s+\\d+"
+ ],
+ "drop": [
+  "^\\s*PASS\\s",
+  "^\\s*[✓√]\\s",
+  "^\\s*✓ "
+ ],
+ "protect": [
+  "^\\s*FAIL\\s",
+  "^\\s*●\\s",
+  "Expected",
+  "Received",
+  "^(?:Test Suites|Tests|Snapshots|Time|Test Files):",
+  "^\\s+at\\s.*\\(\\S+:\\d+:\\d+\\)"
+ ],
+ "dedup": [
+  "^\\s+at\\s"
+ ],
+ "head": 15,
+ "tail": 60,
+ "max_lines": 180,
+ "tests": [
+  {
+   "name": "one failure",
+   "command": "npx jest",
+   "input": "PASS src/m0.test.js\n  ✓ works 0 (3 ms)\nPASS src/m1.test.js\n  ✓ works 1 (3 ms)\nPASS src/m2.test.js\n  ✓ works 2 (3 ms)\nPASS src/m3.test.js\n  ✓ works 3 (3 ms)\nPASS src/m4.test.js\n  ✓ works 4 (3 ms)\nPASS src/m5.test.js\n  ✓ works 5 (3 ms)\nPASS src/m6.test.js\n  ✓ works 6 (3 ms)\nPASS src/m7.test.js\n  ✓ works 7 (3 ms)\nPASS src/m8.test.js\n  ✓ works 8 (3 ms)\nPASS src/m9.test.js\n  ✓ works 9 (3 ms)\nPASS src/m10.test.js\n  ✓ works 10 (3 ms)\nPASS src/m11.test.js\n  ✓ works 11 (3 ms)\nPASS src/m12.test.js\n  ✓ works 12 (3 ms)\nPASS src/m13.test.js\n  ✓ works 13 (3 ms)\nPASS src/m14.test.js\n  ✓ works 14 (3 ms)\nFAIL src/sum.test.js\n  ● sum › adds\n\n    expect(received).toBe(expected)\n\n    Expected: 4\n    Received: 3\n\n      at Object.<anonymous> (src/sum.test.js:3:20)\n\nTests:       1 failed, 15 passed, 16 total\nTime:        1.2 s\n",
+   "expect": [
+    "FAIL src/sum.test.js",
+    "Expected: 4",
+    "Received: 3",
+    "Tests:       1 failed, 15 passed",
+    "src/sum.test.js:3:20"
+   ],
+   "absent": [
+    "PASS src/m3.test.js"
+   ]
+  }
+ ]
+}

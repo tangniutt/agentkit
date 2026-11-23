@@ -27,5 +27,8 @@ Homepage = "https://github.com/tangniutt/agentkit"
 [tool.setuptools.packages.find]
 include = ["agentkit*"]
 
+[tool.setuptools.package-data]
+agentkit = ["filters/*.json"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,0 +1,46 @@
+{
+ "id": "cargo-test",
+ "description": "cargo test: drop compiling / ok lines, keep failures, panics, test result.",
+ "source": "own rules; some match / drop / keep regexes adapted from OmniRoute (MIT) open-sse/services/compression/engines/rtk/filters/test-cargo.json — see NOTICE",
+ "priority": 85,
+ "commands": [
+  "^cargo\\s+(?:test|nextest)\\b"
+ ],
+ "detect": [
+  "^test result: "
+ ],
+ "drop": [
+  "^test \\S+ \\.\\.\\. ok$",
+  "^\\s*Compiling \\S+ v",
+  "^\\s*(?:Downloaded|Downloading|Fresh|Checking) "
+ ],
+ "protect": [
+  "^test result:",
+  "^running \\d+ tests?",
+  "^---- \\S+ stdout ----",
+  "^failures:",
+  "^thread '",
+  "\\.rs:\\d+:\\d+",
+  "^\\s*(?:Finished|Running) "
+ ],
+ "head": 10,
+ "tail": 60,
+ "max_lines": 180,
+ "tests": [
+  {
+   "name": "one fail",
+   "command": "cargo test",
+   "input": "   Compiling dep0 v0.1.0\n   Compiling dep1 v0.1.1\n   Compiling dep2 v0.1.2\n   Compiling dep3 v0.1.3\n   Compiling dep4 v0.1.4\n   Compiling dep5 v0.1.5\n   Compiling dep6 v0.1.6\n   Compiling dep7 v0.1.7\n   Compiling dep8 v0.1.8\n   Compiling dep9 v0.1.9\n    Finished test [unoptimized] target(s) in 3.2s\n     Running unittests src/lib.rs\n\nrunning 12 tests\ntest t::ok0 ... ok\ntest t::ok1 ... ok\ntest t::ok2 ... ok\ntest t::ok3 ... ok\ntest t::ok4 ... ok\ntest t::ok5 ... ok\ntest t::ok6 ... ok\ntest t::ok7 ... ok\ntest t::ok8 ... ok\ntest t::ok9 ... ok\ntest t::ok10 ... ok\ntest t::bad ... FAILED\n\nfailures:\n\n---- t::bad stdout ----\nthread 't::bad' panicked at src/lib.rs:9:5:\nassertion `left == right` failed\n  left: 3\n right: 4\n\nfailures:\n    t::bad\n\ntest result: FAILED. 11 passed; 1 failed; 0 ignored\n",
+   "expect": [
+    "test t::bad ... FAILED",
+    "panicked at src/lib.rs:9:5",
+    "left: 3",
+    "test result: FAILED. 11 passed; 1 failed"
+   ],
+   "absent": [
+    "test t::ok3 ... ok",
+    "Compiling dep3"
+   ]
+  }
+ ]
+}
