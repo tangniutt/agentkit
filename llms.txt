@@ -30,6 +30,8 @@ echo '{"ops":[{"op":"replace","path":"a.py","old":"x","new":"y"},{"op":"create",
              {"op":"delete","path":"c.py"},{"op":"rename","path":"d.py","to":"e.py"}]}' | agentkit patch   # all-or-nothing
 agentkit create path "content" | agentkit delete path.. | agentkit rename src dst
 agentkit run "pytest -q" [--timeout 120]   # exit_code, duration_s, stderr_tail first; full logs in .agentkit/logs/
+                                           # verbose output is filtered per command (data.filtered); errors/failures are never dropped;
+                                           # raw: agentkit logs RUN --raw (RUN from data.filtered.raw), or run with --raw
 agentkit verify --check "pytest -q" [--check "..."]
     # runs checks in a clean git worktree (or temp copy), ≤300-token report:
     # verdict pass|fail|invalid (invalid = the check command itself is missing/broken),
@@ -59,6 +61,7 @@ agentkit task cancel ID | agentkit task clean ID|--all [--keep-branch]
 - error.code is a stable code (docs/errors.md), error.run the run id.
 - agentkit logs <run-or-task-id> [--errors] [--tail N]   # where it failed: step, component, duration, code
 - agentkit debug-bundle <id>                             # redacted .tar.gz for a bug report
+- agentkit logs <run-log-id> --raw                       # unfiltered (redacted) output of a run / check (id from filtered.raw or a check's log)
 - AK-INTERNAL means a bug in AgentKit; the traceback is in a log file, not in your context.
 
 ## Reporting problems

@@ -18,6 +18,8 @@
 | [LooppooL](https://github.com/Penty-d/LooppooL) | MIT | 0 星，较新 | TypeScript | 「验证者假设工人会撒谎」、模型分档、预算上限 | 可以 |
 | [Spewer](https://github.com/modiqo/spewer) | Apache-2.0 | 1 星 | Rust | 派活后返回「带证据的收据」 | 可以（保留 NOTICE） |
 | [Serena](https://github.com/oraios/serena) | GitHub 显示 NOASSERTION（主体 GPL-3.0，SolidLSP 部分 MIT，待逐文件核实） | ~3.2 万星 | Python | LSP 符号级查找 / 编辑 | 只借思路，核实前不复制 |
+| [OmniRoute](https://github.com/diegosouzapw/OmniRoute)（镜像 cheaper-inference/OmniRoute） | MIT | 活跃 | TypeScript | 上下文压缩：RTK 命令输出过滤、会话去重、渐进老化、校验器、缓存友好前缀、简洁输出风格（C-08） | 可以（已复用严重词表与部分过滤正则，见 NOTICE 第 3 条） |
+| [RTK](https://github.com/rtk-ai/rtk) | Apache-2.0（2026-11-23 GitHub API 核实） | 活跃 | Rust | 命令感知输出过滤、过滤器即数据 + 内联测试、原始输出可找回（C-08） | 可以；本轮只借思路，未复制代码 |
 | Qoder | 闭源（只有公开文档和技术博客） | — | — | 记忆系统设计 | 不能，只借思路 |
 | Claude Code | 闭源 | — | — | 工具设计、Agent 体验 | 不能，只借思路 |
 | Nib、Choragos | 未核实 | — | — | 编辑格式按模型家族、单 Go 二进制派活 | 核实前不复制 |
@@ -91,6 +93,20 @@ Qoder 记忆系统闭源，但其文档和技术博客公开了设计；jcode �
 - 绑定的代码改动后，相关记忆 100% 被标记「可能过期」；
 - 记忆中扫描不到任何密钥明文。
 
+### E. 上下文压缩（变更 C-08）
+
+| 功能 | 借鉴 | 参考代码位置 | 实现 |
+|---|---|---|---|
+| 命令感知输出过滤（过滤器是 JSON 数据 + 内联样例，选择顺序：命令 → 输出特征 → generic） | OmniRoute RTK 引擎；RTK | `OmniRoute/open-sse/services/compression/engines/rtk/{lineFilter,commandDetector,filterLoader}.ts`、`filters/*.json`；`docs/compression/RTK_COMPRESSION.md` | `agentkit/compress.py`、`agentkit/filters/*.json`（15 个） |
+| 严重行永不丢（error/fail/assert/traceback…） | OmniRoute `severityVocabulary.ts`（MIT，词表已复用） | 同上 | `compress.SEVERITY` |
+| 重复行计数折叠、相似行分组 | RTK `deduplicator.ts` / `grouper.ts` 思路 | `engines/rtk/deduplicator.ts`、`grouper.ts` | `apply_filter` 第 2–4 步 |
+| 安全校验：代码块、路径、URL、版本号、错误行不变，否则退回原文 | OmniRoute `validation.ts` | `open-sse/services/compression/validation.ts` | `compress.validate` |
+| 原始输出可找回 | RTK raw output recovery | `engines/rtk/rawOutput.ts` | `agentkit logs RUN --raw`、`run --raw` |
+| 会话去重（内容哈希 → same_as_turn） | OmniRoute `engines/session-dedup` | `engines/session-dedup/index.ts` | `agentkit/context.py` |
+| 渐进老化（最近 2 轮原样，更早的工具结果一行摘要，批量进行） | OmniRoute `progressiveAging.ts`、`cacheAwareConfig.ts` | 同名文件 | `agentkit/context.py`、`worker.py` |
+| 简洁输出风格 | OmniRoute `outputMode.ts` / `outputStyles`（caveman） | `open-sse/services/compression/outputMode.ts` | `worker.STYLE_TERSE` |
+| 缓存友好的稳定前缀（system + 工具定义 + 记忆摘要字节不变） | OmniRoute `prefixFreeze.ts` | 同名文件 | 老化从第 3 条消息开始；测试逐次请求比对前缀 |
+
 ## 三、开工克隆清单（已克隆到开发环境）
 
-jcode、mini-swe-agent、SWE-agent、Aider、XERJ、Grok Workhorse、worker-bridge、LooppooL 已浅克隆（只取最新版本），仅供阅读参考，不提交到本仓库。M1 原型以 mini-swe-agent 的循环 + SWE-agent 的工具 + Aider 的仓库地图为骨架；M4 正式版参考 jcode 的 Rust 架构。
+jcode、mini-swe-agent、SWE-agent、Aider、XERJ、Grok Workhorse、worker-bridge、LooppooL 、OmniRoute（C-08）已浅克隆（只取最新版本），仅供阅读参考，不提交到本仓库。M1 原型以 mini-swe-agent 的循环 + SWE-agent 的工具 + Aider 的仓库地图为骨架；M4 正式版参考 jcode 的 Rust 架构。

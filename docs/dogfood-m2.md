@@ -96,4 +96,22 @@ agentkit logs t95aeaf --tail 12
 3. 主管侧冗余：create 回显 model / branch / null 的 queue_pos，report 回显主管自己给的检查命令、恒定的 env、通过时的工人声明 → C-06 删除。
 
 ### 5.5 OpenRouter
-用户告知 Key 已连接，但本会话沙箱里 `OPENROUTER_API_KEY` 变量不存在（检查两次），没有发出任何 OpenRouter 请求（免费额度未消耗）。公开的 `GET /api/v1/models` 显示 11 个同时满足「id 以 `:free` 结尾、单价 0、支持 tools」的模型（如 `google/gemma-4-31b-it:free`、`nvidia/nemotron-3.5-lightning:free`）。客户端适配（200 里的 provider 错误、`X-RateLimit-Reset`、归属头、非 free 模型警告 / 评测拒绝）已用假服务器测试覆盖。
+（上午）沙箱里 `OPENROUTER_API_KEY` 不存在，未发出请求。下午见第 6 节。
+
+## 6. OpenRouter 真实运行 + C-08（2026-11-23 下午）
+
+### 6.1 真实运行
+- Key 由沙箱代理在网络层注入；命令里只用占位值，Key 不进日志 / 仓库。`GET /api/v1/key`：开始 0/50，结束 49/50。
+- `google/gemma-4-31b-it:free`：上游（Google AI Studio 共享池）全部 429，3 道题即时 paused（按设计暂停、可 `task resume`，不耗额度）。换 `nvidia/nemotron-3.5-lightning:free`（支持 tools）。
+- dogfood：在本仓库副本里让工人给 `agentkit/fsutil.py` 加 `human_bytes()` 并写测试（`max_rounds=12`）。结果：12 轮停止，7/8 测试通过，102,578 token。验收器判 fail，并标出 `check_script_modified`（目标要求新建测试文件，预期内）。
+- 3 道多文件评测题：**3/3 pass**（ev-shop 14 轮 69,712 token；ev-csv 11 轮 42,130；ev-rename 14 轮 50,047；主管 181–235 token / 题）。其中两题用满轮数被停，但改动已正确，独立验收判 pass。
+
+### 6.2 发现并修复
+1. **工人编造工作目录**：dogfood 里模型 4 轮在 `cd /workspace && pytest …`（路径不存在），再 `pwd`、`ls` 才找回。修复：系统提示写明「命令在 worktree 根目录运行，用相对路径，别 cd 绝对路径」。
+2. **输入 token 堆积**：12 轮 10 万输入 token，主要是早期 `repo_map` 和整文件 `read` 每轮重复发送（上下文 100 万，70% 折叠永远不触发）。→ C-08 渐进老化；同一转录离线重放 −60%。
+3. **`npm ERR!` 不算严重行**（C-08 自测发现）：`\berr!\b` 在「!」后没有词边界，`npm ERR! code ERESOLVE` 会被 git-diff 的按文件封顶删掉，而校验器用同一个正则也没拦住。修复正则；随机噪声测试覆盖每个过滤器 × 9 种严重行。
+4. **git diff 被校验器整体退回**：源码里的 ``` 被当成「代码块」，按文件封顶后校验失败 → git-diff 过滤器关闭代码块检查（diff 本身就是代码；文件头 / hunk 头仍受保护）。
+5. **diff 在预算下只看到最后一个文件**：原 `run` 尾部优先截断。→ diff 先输出「N files: 路径 (+a -b)」一行，并改为头部优先显示（3/3 改动文件可见，原来 0/3）。
+
+### 6.3 C-08 数字
+见 `docs/STATUS.md`「C-08 实测」：冗长日志 C-08 后显示 token 省 32–92%（pytest 300 警告 81%、npm 77%、cargo / jest 92%），git diff 1%、git status 0%；离线评测工人 token 多文件题 −11.6%、小题 +5.7%、合计 −1.4%；主管 token 不变。

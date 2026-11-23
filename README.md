@@ -51,7 +51,7 @@ AI 读 [`llms.txt`](llms.txt) 即可上手。所有命令默认输出一行紧�
 | `agentkit edit f.py --old "..." --new "..."` | 唯一匹配替换；0 次 / 多次匹配返回最接近 3 处；语法错误拒写并给行号；读后文件被改则拒写 |
 | `agentkit patch` (stdin JSON) | 多文件原子补丁（replace/create/delete/rename），任一失败全部回滚 |
 | `agentkit create / delete / rename` | 新建 / 删除 / 重命名，同样自动快照 |
-| `agentkit run "cmd" [--timeout 120]` | 超时杀进程组；返回 exit_code、耗时、stderr 尾部优先；完整日志落盘 |
+| `agentkit run "cmd" [--timeout 120] [--raw]` | 超时杀进程组；返回 exit_code、耗时、stderr 尾部优先；完整日志落盘。C-08：按命令过滤冗长输出（pytest / jest / go / cargo / tsc / eslint / ruff / mypy / pip / npm / git status·diff·log / 通用），去 ANSI 与进度条、重复行计数折叠，错误 / 失败行永不删；`filtered.raw` 给出 `agentkit logs RUN --raw` 找回原文；`--raw` 或 `[compress] run_filters = false` 关闭 |
 | `agentkit verify --check "pytest -q"` | 在干净 worktree（非 git 则临时副本）跑验收；≤300 token 报告：pass/fail/invalid、改动文件、可疑标记 |
 | `agentkit checkpoint list / diff ID / rollback ID` | 每次改动前自动快照，回滚后哈希校验；不依赖 git |
 | `agentkit memory brief / add / list / search / show / forget` | 项目记忆（Markdown + front matter，SQLite FTS5 检索，代码锚定失效标记） |
@@ -72,6 +72,7 @@ AI 读 [`llms.txt`](llms.txt) 即可上手。所有命令默认输出一行紧�
 - 工人只能用上面的工具（外加 `finish` 提交），不能 commit / push；工人说「完成」不算数：验收器把它的改动复制到全新 worktree 独立重跑检查，并标记删测试、跳过测试、改验收脚本、改白名单外文件、偷偷提交等行为。
 - 预算超限 5 秒内停止；429 按 Retry-After 等一次后暂停上报（不轮换账号）；Key 无效立即失败。
 - OpenRouter：`--base-url https://openrouter.ai/api/v1`，免费模型 id 以 `:free` 结尾（`model add` 对无单价的非 `:free` 模型给出警告）；自动带 `HTTP-Referer` / `X-Title`；`X-RateLimit-Reset` 与 HTTP 200 里的 provider 错误都按对应状态码处理。
+- 上下文压缩（C-08）：工人的重复工具结果变成 `same_as_turn` 引用；最近 2 轮之外的旧工具结果批量老化为一行摘要；系统提示 + 工具定义 + 记忆摘要作为字节不变的前缀（利于服务商提示词缓存）；简洁输出风格。`[compress] enabled / run_filters / dedup / aging / age_min_chars / style` 可调。实测数字见 [docs/STATUS.md](docs/STATUS.md)（多文件题工人 token −10%，小题 +3%；冗长日志 57–92%；真实转录重放 −60%）。
 - 日志：`.agentkit/logs/` 默认保留 7 天，`[logs] retain_days` 可调（0 = 永久）。
 - 评测：`python -m eval.run [--cheats] [--size tiny|large]`（离线假模型，21 道小题 + 3 道多文件题 + 14 例作弊库）；`python -m eval.run --real --base-url URL --model-id ID --key-env VAR` 接真实模型；`python -m eval.llms_check [--scenario bare]` 模拟「只读 llms.txt 的陌生 AI」在全新环境安装并跑 doctor + verify（M-19）。
 
