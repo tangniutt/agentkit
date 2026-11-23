@@ -43,7 +43,7 @@
 | C-10 ③ 卡住检测修正 | 完成 | NVIDIA dogfood 发现：首次改动前 10 轮探索（每轮读到新内容）被判「卡住」→ failed（不可续跑）。改为首次改动之前、本轮有新结果（`context.result_key` 没见过）的轮不计入「无新 diff」；重复同样调用仍计入；`max_rounds` 封顶 | `test_exploring_before_first_edit_is_not_stuck`（旧代码失败）；`test_stuck_no_new_diff` 改为 4 次请求（第 1 次读是新信息） |
 | C-11 第 4、5 家 + 修正 | 完成；真实运行见「第 4、5 家实测」 | `--preset agnes`（`https://apihub.agnes-ai.com/v1`、`AGNES_API_KEY`、rpm 6、`rate_wait` 60、max_wait 65、max_tokens 8192）、`--preset amd-cn`（`https://developer.amd.com.cn/radeon/api/v1`、`AMD_CN_API_KEY`、rpm 15、max_wait 65、max_tokens 8192）；`models.error_obj` 读 `error` / `detail.error` / `detail` 文本，HTTP 错误与 200 body 都报服务商原话；429 `model_concurrency_rate_limit_exceeded`（`ModelError.capacity`）→ 等 5 / 10 / 20 s（≤ max_wait）后仍忙则暂停（原因写明「model at capacity」，可续跑），配额类 429 仍按旧规则；模型配置 `rate_wait`（`model add --rate-wait`、`eval.run --rate-wait`）：429 无 Retry-After 时等一次；`model test` / `doctor --online` 不做忙等；`reasoning` 字段与 `reasoning_content` 同样不回传；`hardcoded_return_suspect` 跳过基例（单个比较 + 边界字面量 + 返回平凡字面量或目标原文里的字面量）；同一回复里并行调用的同一错误只算 1 次 | `test_providers_agnes_amd.py`（13 个：两个预设、嵌套错误解析、忙 429 等待后成功 / 暂停且信息可读、配额 429 不当忙、无 Retry-After 的 429 按 `rate_wait` 等一次、200 body 嵌套错误与 401、工人忙模型暂停、`reasoning` 字段 model test 与工人不回传、基例不误报（单元 + 端到端，旧代码失败）、并行同错只算一次（旧代码失败）） |
 
-测试：`pytest -q` **271 个全绿**（M1 的 107 + M2 66 + C-08 22 + C-09 57 + C-10 6 + C-11 13）；CI 见下「C-11 提交」。Dogfood：`docs/dogfood-m2.md`（离线派活通过；真实 Gemini 任务暴露并修复了 503 处理 bug）。
+测试：`pytest -q` **271 个全绿**（M1 的 107 + M2 66 + C-08 22 + C-09 57 + C-10 6 + C-11 13）；CI（Python 3.10 / 3.12）通过（d149a27，run 45155898363）。Dogfood：`docs/dogfood-m2.md`（离线派活通过；真实 Gemini 任务暴露并修复了 503 处理 bug）。
 
 ## C-08 实测（2026-11-23，诚实记录，含接近 0 的情况）
 
