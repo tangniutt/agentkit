@@ -134,7 +134,7 @@ class TranscriptCompressor:
     def _window_start(self, messages: list) -> int:
         asst = [i for i, m in enumerate(messages) if m.get("role") == "assistant"]
         if len(asst) <= self.keep_turns:
-            return len(messages)
+            return 2  # every turn is still inside the recent window: nothing is old yet (only the prefix precedes it)
         return asst[-self.keep_turns]
 
     def age(self, messages: list) -> int:

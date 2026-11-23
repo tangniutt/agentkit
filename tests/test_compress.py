@@ -177,6 +177,21 @@ def test_aging_is_batched():
     assert tc.age(msgs) == 0 and not any(str(m.get("content", "")).startswith(AGED) for m in msgs)
 
 
+def test_recent_turns_never_aged_early():
+    """Fix found while adding C-09: with <= keep_turns assistant turns nothing is old yet. The window used to be
+    treated as 'everything old', so a small age_min_chars aged the file the worker had just read (and made the
+    end-to-end dedup test depend on two pytest runs printing the same timing)."""
+    tc = TranscriptCompressor({"age_min_chars": 10})
+    msgs = [{"role": "system", "content": "S"}, {"role": "user", "content": "T"}]
+    for i in range(2):
+        msgs.append({"role": "assistant", "tool_calls": [{"id": f"c{i}", "function": {"name": "ls", "arguments": "{}"}}]})
+        msgs.append({"role": "tool", "tool_call_id": f"c{i}", "content": "y" * 2000})
+        assert tc.age(msgs) == 0 and not any(str(m.get("content", "")).startswith(AGED) for m in msgs)
+    msgs.append({"role": "assistant", "tool_calls": [{"id": "c2", "function": {"name": "ls", "arguments": "{}"}}]})
+    msgs.append({"role": "tool", "tool_call_id": "c2", "content": "y" * 2000})
+    assert tc.age(msgs) > 0 and msgs[3]["content"].startswith(AGED) and msgs[5]["content"] == "y" * 2000
+
+
 # ---------------------------------------------------------------- worker end-to-end (fake model)
 
 def test_worker_compression_end_to_end_stable_prefix(ak, repo, fake):
