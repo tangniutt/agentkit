@@ -10,6 +10,11 @@ import pytest
 
 KEYS = {"ok", "data", "error", "truncated", "next"}
 
+# tests (and in-process eval runs) must never write the uninstall registry into the real home
+import tempfile as _tempfile  # noqa: E402
+
+os.environ["XDG_DATA_HOME"] = _tempfile.mkdtemp(prefix="ak-test-data-")
+
 
 class AK:
     def __init__(self, cwd: Path):
@@ -69,7 +74,10 @@ def repo(tmp_path):
 
 @pytest.fixture
 def ak(repo):
-    return AK(repo)
+    a = AK(repo)
+    # never write the uninstall repo registry into the real home during tests
+    a.env["XDG_DATA_HOME"] = str(repo.parent / "xdg-data")
+    return a
 
 
 @pytest.fixture

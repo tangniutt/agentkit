@@ -157,7 +157,7 @@ def build_parser() -> argparse.ArgumentParser:
     mor = mos.add_parser("remove")
     mor.add_argument("name")
 
-    t = sub.add_parser("task", help="dispatch to a worker: create|status|wait|report|cancel|clean")
+    t = sub.add_parser("task", help="dispatch to a worker: create|status|wait|report|resume|cancel|clean")
     ts = t.add_subparsers(dest="task_cmd", parser_class=_Parser)
     tc = ts.add_parser("create")
     tc.add_argument("goal", nargs="?")
@@ -175,6 +175,12 @@ def build_parser() -> argparse.ArgumentParser:
     tw = ts.add_parser("wait")
     tw.add_argument("ids", nargs="*")
     tw.add_argument("--timeout", type=float, default=300)
+    tw.add_argument("--no-report", action="store_true", help="one finished task: status only, no inline report")
+    trs = ts.add_parser("resume", help="continue a paused/interrupted/stopped task in its worktree (compacted transcript)")
+    trs.add_argument("ids", nargs="*")
+    trs.add_argument("--budget-tokens", type=int, help="new total token budget for the task")
+    trs.add_argument("--budget-usd", type=float)
+    trs.add_argument("--budget-minutes", type=float, help="time budget for this resumed run")
     tcl = ts.add_parser("clean")
     tcl.add_argument("ids", nargs="*")
     tcl.add_argument("--all", action="store_true")
@@ -192,6 +198,13 @@ def build_parser() -> argparse.ArgumentParser:
     fbg.add_argument("--bug")
     fbg.add_argument("--idea")
 
+    un = sub.add_parser("uninstall", help="remove agentkit: package, ~/.config + ~/.local/share/agentkit, .agentkit/ + worktrees "
+                                        "in every repo it used (dry run unless --yes; never touches your code or git history)")
+    un.add_argument("--yes", action="store_true", help="really delete (default: print the plan only)")
+    un.add_argument("--this-repo", action="store_true", help="only this repo's .agentkit/ and worktrees; keep package + user config")
+    un.add_argument("--keep-package", action="store_true", help="do not pip uninstall the package")
+    un.add_argument("--delete-branches", action="store_true", help="also delete agentkit/<task> branches")
+
     tr = sub.add_parser("_task-run", help=argparse.SUPPRESS)
     tr.add_argument("id")
     return p
@@ -207,7 +220,7 @@ def _handlers():
         "rename": edit.cmd_rename, "run": run.cmd_run, "checkpoint": checkpoint.cmd_checkpoint,
         "verify": verify.cmd_verify, "memory": memory.cmd_memory, "doctor": doctor.cmd_doctor,
         "task": _task, "model": _model, "_task-run": _task_run,
-        "logs": _diag("cmd_logs"), "debug-bundle": _diag("cmd_debug_bundle"), "feedback": _diag("cmd_feedback"),
+        "logs": _diag("cmd_logs"), "uninstall": _uninstall, "debug-bundle": _diag("cmd_debug_bundle"), "feedback": _diag("cmd_feedback"),
     }
 
 
@@ -218,6 +231,12 @@ def _diag(name):
         return getattr(diag, name)(ctx, a)
 
     return h
+
+
+def _uninstall(ctx, a):
+    from . import lifecycle
+
+    return lifecycle.cmd_uninstall(ctx, a)
 
 
 def _task(ctx, a):
@@ -337,8 +356,12 @@ def run_cli(argv: list) -> tuple[dict, int, bool]:
             a.mem_cmd = "brief"
         res: Result = _handlers()[a.cmd](ctx, a)
         env = envelope(True, res.data, None, res.truncated, res.next)
-        if a.cmd not in ("logs", "_task-run", "feedback", "debug-bundle") and (ctx.root / ".agentkit").is_dir():
+        if a.cmd not in ("logs", "_task-run", "feedback", "debug-bundle", "uninstall") and (ctx.root / ".agentkit").is_dir():
             EventLog(ctx.root, run_id).emit("command", step=a.cmd, duration=_time.monotonic() - t0)
+            if a.cmd != "_task-run":
+                from .lifecycle import prune_logs
+
+                prune_logs(ctx.root, ctx.config)  # C-03 / baseline 5.3: logs kept [logs] retain_days (7)
         return finalize(ctx, env, res.budget_chars), 0, human
     except AKError as e:
         code = e.code or classify(e.what, cmd)

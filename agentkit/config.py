@@ -21,6 +21,9 @@ budget = 2000          # tokens (~4 chars each)
 timeout = 120          # seconds
 allow = []             # regexes; a matching command segment bypasses the built-in deny list
 deny = []              # regexes; always refused (wins over allow)
+
+[logs]
+retain_days = 7        # .agentkit/logs older than this are deleted automatically (0 = keep forever)
 """
 
 

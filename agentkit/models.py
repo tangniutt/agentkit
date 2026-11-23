@@ -109,11 +109,65 @@ def _retry_after(headers, body: str) -> Optional[float]:
             return float(v)
         except ValueError:
             pass
+    reset = headers.get("X-RateLimit-Reset") if headers else None  # OpenRouter: epoch milliseconds
+    if not reset:
+        m = re.search(r'"X-RateLimit-Reset"\s*:\s*"?(\d{10,13})', body or "")
+        reset = m.group(1) if m else None
+    if reset:
+        try:
+            r = float(reset)
+            r = r / 1000.0 if r > 1e11 else r
+            return max(0.0, round(r - time.time(), 1))
+        except ValueError:
+            pass
     m = re.search(r'"retryDelay"\s*:\s*"([\d.]+)s"', body or "")
     if m:
         return float(m.group(1))
     m = re.search(r"retry in ([\d.]+)\s*s", body or "", re.I)
     return float(m.group(1)) if m else None
+
+
+def is_openrouter(base_url: str) -> bool:
+    host = (urllib.parse.urlsplit(base_url).hostname or "").lower()
+    return host == "openrouter.ai" or host.endswith(".openrouter.ai")
+
+
+def _raise_body_error(data, raw: str) -> None:
+    """Gateways such as OpenRouter report upstream/provider failures inside an HTTP 200 body:
+    {"error": {"code": 429, "message": ..., "metadata": {...}}} at the top level or on a choice
+    (finish_reason "error"). Map them like the equivalent HTTP status."""
+    if not isinstance(data, dict):
+        return
+    err = data.get("error")
+    if not err:
+        for ch in data.get("choices") or []:
+            if isinstance(ch, dict) and (ch.get("error") or ch.get("finish_reason") == "error"):
+                err = ch.get("error") or {"message": "provider returned finish_reason=error"}
+                break
+    if not err:
+        return
+    if not isinstance(err, dict):
+        err = {"message": str(err)}
+    code = err.get("code")
+    try:
+        code = int(code)
+    except (TypeError, ValueError):
+        code = None
+    msg = redact_text(str(err.get("message") or ""))[:200]
+    meta = err.get("metadata") or {}
+    prov = meta.get("provider_name") if isinstance(meta, dict) else None
+    where = f" [provider {prov}]" if prov else ""
+    if code in (401, 403):
+        raise ModelError("auth", f"{code} in body: {msg}{where}", status=code)
+    if code == 429:
+        raise ModelError("rate_limited", f"429 in body: {msg}{where}", _retry_after({}, raw), status=429)
+    if code in (408, 504):
+        raise ModelError("timeout", f"{code} in body: {msg}{where}", status=code)
+    if code in (500, 502, 503) or code is None:
+        raise ModelError("unavailable", f"provider error in body: {msg}{where}", status=code)
+    if code == 402:
+        raise ModelError("http", f"402 in body (credits / paid model): {msg}{where}", status=402)
+    raise ModelError("http", f"{code} in body: {msg}{where}", status=code)
 
 
 class ChatClient:
@@ -128,6 +182,9 @@ class ChatClient:
     def _post(self, payload: dict, timeout: float) -> dict:
         url = self.spec.base_url.rstrip("/") + "/chat/completions"
         headers = {"Content-Type": "application/json"}
+        if is_openrouter(self.spec.base_url):  # optional attribution headers (openrouter.ai/docs/api-reference)
+            headers["HTTP-Referer"] = "https://github.com/tangniutt/agentkit"
+            headers["X-Title"] = "AgentKit"
         key = self.spec.key()
         if key:
             headers["Authorization"] = "Bearer " + key
@@ -162,8 +219,12 @@ class ChatClient:
             raise ModelError("network", redact_text(str(e.reason))[:200])
         try:
             data = json.loads(raw)
+        except ValueError:
+            raise ModelError("bad_response", "response is not an OpenAI chat completion: " + redact_text(raw)[:200])
+        _raise_body_error(data, raw)
+        try:
             data["choices"][0]["message"]
-        except (ValueError, KeyError, IndexError, TypeError):
+        except (KeyError, IndexError, TypeError):
             raise ModelError("bad_response", "response is not an OpenAI chat completion: " + redact_text(raw)[:200])
         return data
 
@@ -226,6 +287,10 @@ def cmd_model(ctx: Ctx, a) -> Result:
         data = {"added": a.name, "config": ctx.rel(p), "key_env_set": bool(a.key_env and os.environ.get(a.key_env))}
         if a.key_env and not data["key_env_set"]:
             data["hint"] = f"environment variable {a.key_env} is not set in this shell"
+        mid = a.model or a.name
+        if is_openrouter(a.base_url) and not mid.endswith(":free") and not (a.price_in or a.price_out):
+            data["warning"] = ("OpenRouter model without ':free' suffix and price 0: --budget-usd cannot protect you; "
+                               "pass --price-in/--price-out, or use a ':free' model id")
         return Result(data)
     cfg = load_config(ctx.root)
     if sub == "list":

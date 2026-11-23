@@ -51,7 +51,7 @@ def create(ak, goal, *extra):
 
 
 def wait(ak, tid, timeout=90):
-    r = ak("task", "wait", tid, "--timeout", str(timeout))
+    r = ak("task", "wait", tid, "--timeout", str(timeout), "--no-report")
     assert r["data"]["done"], r
     return r["data"]["tasks"][0]
 
@@ -72,7 +72,7 @@ def test_task_end_to_end_isolated(ak, repo, fake):
     assert len(rep["_raw"]) <= 1200, "report must stay under 300 tokens"
     d = rep["data"]
     assert d["verdict"] == "pass" and d["changed"] == ["M calc.py"] and d["suspicious"] == []
-    assert set(d) >= {"verdict", "checks", "changed", "suspicious", "cost", "env"}
+    assert set(d) >= {"verdict", "checks", "changed", "suspicious", "cost"}
     assert d["cost"]["tokens"] > 0 and d["cost"]["usd"] > 0
     # main tree untouched, work lives on the task branch / worktree
     assert "a - b" in (repo / "calc.py").read_text()
@@ -91,6 +91,22 @@ def test_task_end_to_end_isolated(ak, repo, fake):
     assert c["ok"] and not wt.exists()
     branches = subprocess.run(["git", "-C", str(repo), "branch", "--list", "agentkit/*"], capture_output=True, text=True).stdout
     assert tid not in branches
+
+
+def test_lean_create_and_wait_with_inline_report(ak, repo, fake):
+    """C-06: create says only id/status (next in the envelope); wait on one finished task carries the report."""
+    project(repo, ak, fake)
+    fake.add("[LEAN]", FIX)
+    r = ak("task", "create", "fix add [LEAN]", "--check", CHECK)
+    assert set(r["data"]) == {"id", "status"} and r["next"].startswith("agentkit task wait " + r["data"]["id"])
+    w = ak("task", "wait", r["data"]["id"], "--timeout", "90")
+    d = w["data"]
+    assert d["done"] and d["verdict"] == "pass" and d["changed"] == ["M calc.py"] and d["suspicious"] == []
+    assert d["checks"] == [{"result": "pass", "exit": 0, "s": d["checks"][0]["s"]}], "passing check: no cmd/log echo"
+    assert "env" not in d and "branch" not in d and "claim_untrusted" not in d and w["next"] is None
+    assert len(w["_raw"]) <= 1200
+    full = ak("task", "report", r["data"]["id"])["data"]
+    assert {k: v for k, v in full.items()} == {k: v for k, v in d.items() if k != "done"}
 
 
 def test_task_refuses_non_git_and_empty_repo(ak, repo, fake):

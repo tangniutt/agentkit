@@ -6,9 +6,15 @@
 > Output never exceeds the budget (default 2000 tokens ≈ 8000 chars; set with --budget N).
 > If "truncated" is true, run the command in "next" to continue. No model needed (direct mode).
 
-## Install (Python 3.10+, no root)
-pip install git+https://github.com/tangniutt/agentkit
-agentkit doctor            # version, git, write permission, disk, tree-sitter, models (--online calls each model once)
+## Install (Python 3.10+, git, no root). Run the FIRST line that succeeds, then agentkit doctor:
+pip install git+https://github.com/tangniutt/agentkit       # inside a virtualenv / any Python whose pip works
+pipx install git+https://github.com/tangniutt/agentkit      # pip missing, or pip says "externally-managed-environment"
+uv tool install git+https://github.com/tangniutt/agentkit   # no pipx either (uv fetches its own Python if needed)
+python3 -m venv ~/.agentkit-venv && ~/.agentkit-venv/bin/pip install git+https://github.com/tangniutt/agentkit && mkdir -p ~/.local/bin && ln -sf ~/.agentkit-venv/bin/agentkit ~/.local/bin/agentkit
+- "agentkit: command not found" after pipx / uv / venv: export PATH="$HOME/.local/bin:$PATH"   (needed in every new shell)
+- None worked (no pip, pipx, uv or python3-venv)? Ask your human to run: sudo apt install pipx   (or install uv: https://docs.astral.sh/uv/)
+agentkit doctor            # healthy:true = ready. version, git, write permission, disk, tree-sitter, models (--online calls each model once)
+agentkit uninstall         # prints what would be removed; agentkit uninstall --yes removes package, config, .agentkit/ state and worktrees (never your code or git history)
 
 ## Direct mode workflow (you write the code)
 agentkit memory brief                      # AGENTS.md head + pinned project memories (≤500 tokens)
@@ -33,15 +39,16 @@ agentkit memory add "title" "body" -c project-info|conventions|lessons|tools-mod
 agentkit memory list | search "words" | show ID | forget ID   # anchored memories get maybe_stale when the code changes
 
 ## Dispatch mode (a cheap model does the work, you read a ≤300-token verdict)
-agentkit model add cheap --base-url https://openrouter.ai/api/v1 --model qwen/qwen3-coder --key-env OPENROUTER_API_KEY \
-    --context 32000 --price-in 0.2 --price-out 0.8 --tier low       # stores only the env var NAME, never the key
+agentkit model add cheap --base-url https://openrouter.ai/api/v1 --model google/gemma-4-31b-it:free --key-env OPENROUTER_API_KEY \
+    --context 32000 --tier low       # stores only the env var NAME, never the key; ':free' ids cost nothing (paid ids: set --price-in/--price-out)
 agentkit model list | test [NAME] | remove NAME
 agentkit task create "fix the failing test in calc.py" --check "pytest -q" [--allow src/] \
     [--budget-tokens N] [--budget-usd X] [--budget-minutes M] [--tier low|mid|high] [--model NAME]
     # needs a git repo with a commit; worker runs in its own worktree/branch agentkit/<id>; identical submissions dedupe
 agentkit task status [ID..]                # <100 tokens each: status, queue pos, rounds, tokens, usd, verdict, code
-agentkit task wait ID [ID..] --timeout 600
+agentkit task wait ID [ID..] --timeout 600 # one finished task: the report comes back inline (no extra call)
 agentkit task report ID                    # ≤300 tokens, same shape as verify; verdict pass|fail|invalid|needs_review
+agentkit task resume ID [--budget-tokens N] # paused (429/timeout) | interrupted | stopped: continue in the same worktree
     # needs_review = checks passed but anti-cheat flags fired (tests_deleted/modified/skipped, check_script_modified,
     # test_config_modified, outside_allow, worker_committed, denied_commands, path_escape, hardcoded_return_suspect)
     # The verifier re-runs the checks in a clean worktree; the worker's claim is never trusted.
@@ -62,5 +69,6 @@ agentkit task cancel ID | agentkit task clean ID|--all [--keep-branch]
 ## Rules
 - run/verify refuse: git push, git commit, sudo, rm -rf / or ~, curl|sh, reading ~/.ssh or .env (override in .agentkit/config.toml [run] allow/deny).
 - Secrets (sk-..., ghp_..., AKIA..., configured model keys) are redacted from all output, logs and model requests.
-- State lives in <repo>/.agentkit/ (checkpoints, logs, memory, tasks, worktrees). Nothing is uploaded anywhere except
+- State lives in <repo>/.agentkit/ (checkpoints, logs, memory, tasks, worktrees); logs are kept 7 days ([logs] retain_days).
+  ~/.local/share/agentkit/repos.txt lists repos for `agentkit uninstall`. Nothing is uploaded anywhere except
   model calls to the endpoint you configured.

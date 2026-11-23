@@ -107,3 +107,10 @@ TASKS = [
        "from ev import sum_evens\n\ndef test_evens():\n    assert sum_evens([1, 2, 3, 4]) == 6\n",
        [("ev.py", "if x % 2)", "if x % 2 == 0)")]),
 ]
+
+
+from eval.tasks_large import TASKS_LARGE  # noqa: E402  multi-file tasks (C-06)
+
+for _t_ in TASKS:
+    _t_.setdefault("size", "tiny")
+TASKS = TASKS + TASKS_LARGE

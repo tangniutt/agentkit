@@ -44,7 +44,11 @@ def test_eval_offline_runner_baseline_vs_worker(tmp_path, capsys):
     assert all(r["pass"] for r in worker), [r for r in worker if not r["pass"]]
     assert all(r["worker_tokens"] > 0 and r["host_tokens"] > 0 for r in worker)
     table = capsys.readouterr().out
-    assert "| direct |" in table and "| worker |" in table and "pass rate" in table
+    assert "| direct (large) |" in table and "| worker (tiny) |" in table and "| worker (all) |" in table and "pass rate" in table
+    # token claim (C-06), offline: on multi-file tasks the host reads far less when it dispatches
+    big = {m: sum(r["host_tokens"] for r in res["rows"] if r["mode"] == m and r["size"] == "large") for m in ("direct", "worker")}
+    assert len([t for t in TASKS if t["size"] == "large"]) >= 3
+    assert big["worker"] * 3 < big["direct"], big
 
 
 def test_cheat_library_detection_is_100_percent(tmp_path, capsys):

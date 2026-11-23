@@ -44,6 +44,7 @@ from .redact import redact, register_secret
 
 VERDICT_CODES = {"fail": "AK-VERIFY-FAIL", "invalid": "AK-VERIFY-INVALID", "needs_review": "AK-VERIFY-SUSPICIOUS"}
 TERMINAL = {"done", "failed", "stopped", "cancelled", "interrupted", "paused"}
+RESUMABLE = {"paused", "interrupted", "stopped"}
 ACTIVE = {"running", "verifying"}
 STATUS_CHARS = 400  # < 100 tokens
 REPORT_CHARS = 300 * 4
@@ -147,7 +148,7 @@ def recover(root: Path) -> list:
     for t in all_tasks(root):
         if t.get("status") in ACTIVE and not pid_alive(t.get("pid")):
             t["status"] = "interrupted"
-            t["reason"] = "worker process ended unexpectedly (crash / kill / reboot); worktree kept, re-run with task create"
+            t["reason"] = "worker process ended unexpectedly (crash / kill / reboot); worktree kept; continue with agentkit task resume ID"
             t["ended"] = time.time()
             t["error_code"] = "AK-TASK-INTERRUPTED"
             t.setdefault("component", "worker")
@@ -318,7 +319,10 @@ def create(ctx: Ctx, a) -> dict:
         for t in all_tasks(root):
             if t.get("hash") == h and (t.get("status") in ACTIVE | {"queued", "starting"}
                                        or (t.get("status") == "done" and t.get("verdict") == "pass")):
-                return {"id": t["id"], "status": t["status"], "deduped": True, "queue_pos": queue_pos(root, t["id"])}
+                d = {"id": t["id"], "status": t["status"], "deduped": True}
+                if queue_pos(root, t["id"]):
+                    d["queue_pos"] = queue_pos(root, t["id"])
+                return d
         free = shutil.disk_usage(str(root)).free // (1024 * 1024)
         min_free = int((cfg.get("tasks") or {}).get("min_free_mb", 200))
         if free < min_free:
@@ -348,12 +352,17 @@ def create(ctx: Ctx, a) -> dict:
         EventLog(root, tid, "task").emit("created", step=0, model=spec.name, cli_run=ctx.run_id or None)
     schedule(root)
     t = load(root, tid)
-    out = {"id": tid, "status": t["status"], "model": spec.name, "branch": branch, "queue_pos": queue_pos(root, tid)}
+    # C-06: lean output. model / branch are known to the host (branch = agentkit/<id>); next goes in the envelope
+    out = {"id": tid, "status": t["status"]}
+    qp = queue_pos(root, tid)
+    if qp:
+        out["queue_pos"] = qp
+    if a.model is None and len(M.all_models(cfg)) > 1:
+        out["model"] = spec.name
     if warnings:
         out["warnings"] = warnings
     if not a.check:
         out.setdefault("warnings", []).append("no --check given: the verdict can only be 'invalid'; pass --check '<test cmd>'")
-    out["next"] = ctx.next_cmd("task", "wait", tid, "--timeout", "600")
     return out
 
 
@@ -452,9 +461,15 @@ def run_task(root: Path, tid: str) -> None:
         brief_txt = dumps(b.data)
     except Exception:
         pass
+    resume_txt = None
+    if t.get("resumes"):
+        from .worker import resume_context
+
+        resume_txt = resume_context(d / "transcript.jsonl", wt, t["base"], {**t, "reason": t.get("resumed_from")})
+        events.emit("resumed", step=worker.rounds, resume=t["resumes"])
     code = None
     try:
-        outcome = worker.run(brief_txt)
+        outcome = worker.run(brief_txt, resume=resume_txt)
         status, reason, stopped, claim, code = outcome.status, outcome.reason, outcome.stopped, outcome.claim, outcome.code
     except StopWorker as e:
         status, reason, stopped, claim = "stopped", f"stopped: {e.reason}", e.reason, ""
@@ -481,7 +496,8 @@ def run_task(root: Path, tid: str) -> None:
     fields = dict(status="verifying", worker_status=status, reason=reason, stopped=stopped, claim=claim,
                   rounds=st["rounds"], tokens=st["tokens_in"] + st["tokens_out"], tokens_in=st["tokens_in"],
                   tokens_out=st["tokens_out"], usd=st["usd"], compactions=st["compactions"], repairs=st["repairs"],
-                  denied=worker.denied, worker_s=round(time.monotonic() - t0, 1),
+                  denied=sorted(set(worker.denied) | set(t.get("denied") or [])),
+                  worker_s=round(time.monotonic() - t0 + float((t.get("prior") or {}).get("worker_s") or 0), 1),
                   error_code=code, component=worker.last_component if code else None, last_step=worker.last_step)
     events.emit("worker_end", step=worker.rounds, component=worker.last_component, error_code=code, status=status,
                 duration=time.monotonic() - t0)
@@ -730,16 +746,50 @@ def compact_status(root: Path, t: dict) -> dict:
 
 
 def compact_report(rep: dict) -> tuple:
-    base = {k: rep[k] for k in ("verdict", "checks", "changed", "suspicious", "cost", "env") if k in rep}
+    """≤300 tokens. C-06 trims what the host already knows: the check command and log id of a
+    passing check (its index is its identity), the constant env, the task branch (always
+    agentkit/<id>) and the worker's claim when the verifier confirmed a pass."""
+    checks = []
+    for c in rep.get("checks") or []:
+        c = dict(c)
+        if c.get("result") == "pass":
+            c.pop("cmd", None)
+            c.pop("log", None)
+        checks.append(c)
+    base = {k: rep[k] for k in ("verdict", "changed", "suspicious", "cost") if k in rep}
+    base["checks"] = checks
+    base = {k: base[k] for k in ("verdict", "checks", "changed", "suspicious", "cost") if k in base}
     head = {k: rep[k] for k in ("task", "status", "stopped") if rep.get(k)}
-    tail = {k: str(rep[k])[:80] for k in ("why", "claim_untrusted") if rep.get(k)}
+    tail = {k: str(rep[k])[:80] for k in ("why",) if rep.get(k)}
+    if rep.get("claim_untrusted") and rep.get("verdict") != "pass":
+        tail["claim_untrusted"] = str(rep["claim_untrusted"])[:80]
     if rep.get("error"):
         tail["error"] = rep["error"]
     room = REPORT_CHARS - 200 - len(dumps(head)) - len(dumps(tail))
     comp, trunc = V._compact(base, room)
-    out = {**head, **comp, **tail}
-    if rep.get("branch") and len(dumps(out)) + len(rep["branch"]) + 20 < REPORT_CHARS - 200:
-        out["branch"] = rep["branch"]
+    return {**head, **comp, **tail}, trunc
+
+
+def report_view(ctx: Ctx, tid: str) -> tuple:
+    root = ctx.root
+    t = load(root, tid)
+    rp = tpath(root, tid) / "report.json"
+    if not rp.exists():
+        if t["status"] not in TERMINAL:
+            return {"task": tid, "status": t["status"], "verdict": None, "hint": "not finished yet",
+                    "_next": ctx.next_cmd("task", "wait", tid, "--timeout", "600")}, False
+        verify_task(root, tid)  # interrupted / killed runs: verify lazily
+        t = load(root, tid)
+        if not t.get("verdict"):
+            update(root, tid, verdict=json.loads(rp.read_text())["verdict"])
+    rep = json.loads(rp.read_text())
+    t = load(root, tid)
+    rep["status"] = t["status"]
+    out, trunc = compact_report(rep)
+    nxt = ctx.next_cmd("read", ctx.rel(rp)) if trunc else (
+        ctx.next_cmd("task", "resume", tid) if t["status"] in RESUMABLE and not t.get("cleaned") else None)
+    if nxt:
+        out["_next"] = nxt
     return out, trunc
 
 
@@ -751,7 +801,10 @@ def cmd_task(ctx: Ctx, a) -> Result:
     root = ctx.root
     sub = a.task_cmd
     if sub == "create":
-        return Result(create(ctx, a))
+        out = create(ctx, a)
+        nxt = ctx.next_cmd("task", "report" if out.get("status") in TERMINAL else "wait", out["id"],
+                           *([] if out.get("status") in TERMINAL else ["--timeout", "600"]))
+        return Result(out, False, nxt)
     if not (root / ".agentkit" / "tasks").exists() and sub != "create":
         if sub == "status" and not a.ids:
             return Result({"tasks": [], "hint": "no tasks yet: agentkit task create GOAL --check CMD"})
@@ -774,6 +827,11 @@ def cmd_task(ctx: Ctx, a) -> Result:
                 break
             time.sleep(0.3)
         done = all(t["status"] in TERMINAL for t in ts)
+        if done and len(ts) == 1 and not getattr(a, "no_report", False):
+            # C-06: one finished task -> the ≤300-token report inline, saving the host a `task report` round trip
+            rep, trunc = report_view(ctx, ts[0]["id"])
+            nxt = rep.pop("_next", None)
+            return Result({"done": True, **rep}, trunc, nxt, budget_chars=REPORT_CHARS)
         data = {"done": done, "tasks": [compact_status(root, t) for t in ts]}
         nxt = ctx.next_cmd("task", "report", a.ids[0]) if done else ctx.next_cmd("task", "wait", *a.ids, "--timeout", str(int(float(a.timeout))))
         return Result(data, False, nxt)
@@ -781,23 +839,12 @@ def cmd_task(ctx: Ctx, a) -> Result:
         if not a.ids:
             raise AKError("report needs a task id", "", "agentkit task report ID")
         schedule(root)
-        tid = a.ids[0]
-        t = load(root, tid)
-        rp = tpath(root, tid) / "report.json"
-        if not rp.exists():
-            if t["status"] not in TERMINAL:
-                return Result({"task": tid, "status": t["status"], "verdict": None, "hint": "not finished yet"},
-                              False, ctx.next_cmd("task", "wait", tid, "--timeout", "600"))
-            verify_task(root, tid)  # interrupted / killed runs: verify lazily
-            t = load(root, tid)
-            if not t.get("verdict"):
-                update(root, tid, verdict=json.loads(rp.read_text())["verdict"])
-        rep = json.loads(rp.read_text())
-        t = load(root, tid)
-        rep["status"] = t["status"]
-        out, trunc = compact_report(rep)
-        nxt = ctx.next_cmd("read", ctx.rel(rp)) if trunc else None
+        out, trunc = report_view(ctx, a.ids[0])
+        nxt = out.pop("_next", None)
         return Result(out, trunc, nxt, budget_chars=REPORT_CHARS)
+    if sub == "resume":
+        out = resume(ctx, a)
+        return Result(out, False, ctx.next_cmd("task", "wait", out["id"], "--timeout", "600"))
     if sub == "cancel":
         if not a.ids:
             raise AKError("cancel needs task ids", "", "agentkit task cancel ID")
@@ -823,7 +870,55 @@ def cmd_task(ctx: Ctx, a) -> Result:
             update(root, tid, cleaned=True)
             cleaned.append(tid)
         return Result({"cleaned": cleaned, "branches_kept": bool(a.keep_branch)})
-    raise AKError(f"unknown task subcommand '{sub}'", "use create|status|wait|report|cancel|clean", "agentkit task --help")
+    raise AKError(f"unknown task subcommand '{sub}'", "use create|status|wait|report|resume|cancel|clean", "agentkit task --help")
+
+
+def resume(ctx: Ctx, a) -> dict:
+    """Continue a paused / interrupted / stopped task in its own worktree with a compacted transcript."""
+    from . import models as M
+
+    root = ctx.root
+    if not a.ids:
+        raise AKError("resume needs a task id", "", "agentkit task resume ID")
+    tid = a.ids[0]
+    with locked(root):
+        recover(root)
+        t = load(root, tid)
+        if t["status"] not in RESUMABLE:
+            raise AKError(f"task {tid} is {t['status']}", "only paused, interrupted or stopped tasks can be resumed",
+                          "agentkit task create ... for a new attempt" if t["status"] in TERMINAL else f"agentkit task wait {tid}")
+        if t.get("cleaned") or not (root / t["worktree"]).exists():
+            raise AKError("task worktree is gone", "it was cleaned; nothing to resume", "agentkit task create ... to run again")
+        spec = M.pick(ctx.config, t["model"])
+        if spec.key_env and not os.environ.get(spec.key_env):
+            raise AKError(f"environment variable {spec.key_env} is not set", f"model '{spec.name}' reads its key from it",
+                          f"export {spec.key_env}=...  then  agentkit task resume {tid}")
+        budget = dict(t.get("budget") or {})
+        for k, v in (("tokens", a.budget_tokens), ("usd", a.budget_usd), ("minutes", a.budget_minutes)):
+            if v:
+                budget[k] = v
+        prior = {"tokens_in": t.get("tokens_in", t.get("tokens", 0)), "tokens_out": t.get("tokens_out", 0),
+                 "usd": t.get("usd", 0.0), "rounds": t.get("rounds", 0), "worker_s": t.get("worker_s", 0)}
+        if t.get("stopped") == "budget" and budget == (t.get("budget") or {}):
+            raise AKError(f"task {tid} is out of budget", "resuming with the same budget would stop at once",
+                          f"agentkit task resume {tid} --budget-tokens N | --budget-usd X | --budget-minutes M")
+        prev = t.get("reason") or t["status"]
+        for k in ("verdict", "ended", "error_code", "component", "stopped", "claim", "worker_status", "pid", "started",
+                  "stopped_at", "stop_requested_at", "last_step"):
+            t.pop(k, None)
+        t.update(status="queued", budget=budget, prior=prior, resumes=int(t.get("resumes") or 0) + 1,
+                 resumed_from=prev, reason=None)
+        d = tpath(root, tid)
+        for f in ("report.json", "cancel"):
+            (d / f).unlink(missing_ok=True)
+        save(root, t)
+        EventLog(root, tid, "task").emit("resume_requested", step=t.get("rounds", 0), cli_run=ctx.run_id or None)
+    schedule(root)
+    t = load(root, tid)
+    out = {"id": tid, "status": t["status"], "resumes": t["resumes"]}
+    if queue_pos(root, tid):
+        out["queue_pos"] = queue_pos(root, tid)
+    return out
 
 
 def cancel(root: Path, tid: str) -> dict:

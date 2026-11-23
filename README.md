@@ -29,6 +29,7 @@
 
 ```bash
 pip install git+https://github.com/tangniutt/agentkit    # Python 3.10+，无需 root
+# pip 不可用 / 提示 externally-managed-environment：pipx install ... 或 uv tool install ...（见 llms.txt）
 agentkit doctor                                          # 自检：版本、git、写权限、磁盘、tree-sitter、模型配置
 ```
 
@@ -57,7 +58,9 @@ AI 读 [`llms.txt`](llms.txt) 即可上手。所有命令默认输出一行紧�
 | `agentkit doctor` | 自检，每项给修复建议 |
 | `agentkit model add/list/test/remove` | 配置工人模型（任意 OpenAI 兼容接口）；配置里只存 Key 的**环境变量名** |
 | `agentkit task create "目标" --check "pytest -q" [--allow DIR] [--budget-tokens/--budget-usd/--budget-minutes] [--tier]` | 派活：工人在独立 worktree/分支 `agentkit/<id>` 干活；无模型时返回「直接模式」提示 |
-| `agentkit task status / wait / report / cancel / clean` | status <100 token；report ≤300 token（与 verify 同格式，verdict 多一个 `needs_review` = 测试过了但有作弊嫌疑） |
+| `agentkit task status / wait / report / cancel / clean` | status <100 token；report ≤300 token（与 verify 同格式，verdict 多一个 `needs_review` = 测试过了但有作弊嫌疑）；`wait` 单个任务结束时直接带回报告（省一次调用） |
+| `agentkit task resume ID [--budget-*]` | 续跑 paused（429/超时）/ interrupted / stopped 任务：沿用原 worktree 和分支，工人拿到压缩后的历史（做过的动作 + 当前 diff），token / 金额预算按整个任务累计 |
+| `agentkit uninstall [--yes] [--this-repo] [--delete-branches]` | 卸载：不带 `--yes` 只列出将删除的内容；删除包、`~/.config/agentkit`、`~/.local/share/agentkit`、各仓库 `.agentkit/` 与 worktree；**不动你的代码和 git 历史**（任务分支默认保留，git 已跟踪的共享记忆保留） |
 | `agentkit logs <id> [--errors]` / `agentkit debug-bundle <id>` | 定位失败：结构化事件（哪一步、哪个组件、错误码）；脱敏归档用于报 Bug（错误码见 [docs/errors.md](docs/errors.md)） |
 | `agentkit feedback --bug <id> \| --idea "..."` | 生成脱敏的 Issue 草稿和预填链接，**从不自动提交** |
 
@@ -68,7 +71,9 @@ AI 读 [`llms.txt`](llms.txt) 即可上手。所有命令默认输出一行紧�
 ### 派活模式要点
 - 工人只能用上面的工具（外加 `finish` 提交），不能 commit / push；工人说「完成」不算数：验收器把它的改动复制到全新 worktree 独立重跑检查，并标记删测试、跳过测试、改验收脚本、改白名单外文件、偷偷提交等行为。
 - 预算超限 5 秒内停止；429 按 Retry-After 等一次后暂停上报（不轮换账号）；Key 无效立即失败。
-- 评测：`python -m eval.run [--cheats]`（离线假模型，21 题 + 14 例作弊库）；`python -m eval.run --real --base-url URL --model-id ID --key-env VAR` 接真实模型。
+- OpenRouter：`--base-url https://openrouter.ai/api/v1`，免费模型 id 以 `:free` 结尾（`model add` 对无单价的非 `:free` 模型给出警告）；自动带 `HTTP-Referer` / `X-Title`；`X-RateLimit-Reset` 与 HTTP 200 里的 provider 错误都按对应状态码处理。
+- 日志：`.agentkit/logs/` 默认保留 7 天，`[logs] retain_days` 可调（0 = 永久）。
+- 评测：`python -m eval.run [--cheats] [--size tiny|large]`（离线假模型，21 道小题 + 3 道多文件题 + 14 例作弊库）；`python -m eval.run --real --base-url URL --model-id ID --key-env VAR` 接真实模型；`python -m eval.llms_check [--scenario bare]` 模拟「只读 llms.txt 的陌生 AI」在全新环境安装并跑 doctor + verify（M-19）。
 
 ### 报告问题
 AI 代用户报 Bug / 提需求：先搜已有 Issue，**先问人类用户**（Issue 公开），用 `agentkit feedback` 生成草稿，不含密钥或私有代码，一个问题一个 Issue。

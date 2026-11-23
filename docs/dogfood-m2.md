@@ -63,3 +63,37 @@ agentkit logs t95aeaf --tail 12
 
 ## 4. 主管 token 观察（诚实记录）
 离线评测里，这些题都极小（单个 5 行文件），主管直接改反而更省（直接模式 21 题共约 5.3k token，派活模式约 5.8k token：create + wait + report 的固定开销约 280 token/题）。派活模式的优势要在需要多轮探索的真实任务上才体现（上面真实任务里工人花了 1.2 万 token，主管只花约 290 token）。M-20 的「省 token」结论需要更大的真实任务集（M5）。
+
+## 5. M2 补完（2026-11-23 上午）
+
+### 5.1 M-19 实测：机械 AI 只读 llms.txt 自装
+`python -m eval.llms_check [--src .] [--scenario venv|bare]`：只执行 llms.txt「Install」一节的命令（按顺序取第一条成功的），再跑 `agentkit doctor` 与 Direct mode 一节的 `agentkit verify`。
+
+| 场景 | 旧 llms.txt | 新 llms.txt |
+|---|---|---|
+| 全新 venv、空 HOME、空 pip 缓存、从 GitHub 安装 | 通过（安装 3.5 s） | 通过 |
+| bare：PEP 668 发行版系统 Python（3.13，无 pip、无 ensurepip），PATH 上只有 git / uv | **失败**：`pip: command not found` | 通过：pip → pipx 失败后 `uv tool install` 成功（1.0 s），按提示加 `~/.local/bin` 到 PATH，doctor healthy，verify pass |
+
+结论：单行 `pip install` 在越来越常见的「系统 Python 不让装包」环境里必然失败；改成四选一 + PATH 提示 + 「都不行就请人类装 pipx/uv」（C-07）。
+
+### 5.2 真实模型：多文件题与续跑
+- gemini-3-flash-preview × ev-shop（shop 包，库存价值忽略数量 + 折扣按小数算，两个文件要改）：工人 7 轮修好两处，在调用 finish 前被 429 暂停；验收器在全新 worktree 独立重跑 → **pass**。主管只花 228 token（create + wait，报告内联），同题直接模式 2,178 token。
+- 下一题 ev-csv 第 1 轮就 429（日配额，Retry-After ≈ 20,000 s），按要求停止，不再重试。
+- 这正是 C-05 续跑的场景：配额重置后 `agentkit task resume <id>` 会在原 worktree 继续，而不是从头再派。
+
+### 5.3 主管 token（C-06 前后，离线 24 题）
+| | 小题 21 道 | 多文件题 3 道 |
+|---|---|---|
+| 直接模式 | 5,253 | 5,442 |
+| 派活模式（瘦身前） | ≈ 5,800 | — |
+| 派活模式（瘦身后） | 3,226 | 553 |
+
+单个小题：create 303 字符 + wait（内联报告）294 字符 ≈ 149 token，原来 create + wait + report ≈ 268 token。
+
+### 5.4 发现并修复
+1. llms.txt 在 PEP 668 / 无 pip 环境装不上（见 5.1）。
+2. `uninstall --this-repo` 后，CLI 收尾的事件日志会把刚删掉的 `.agentkit/logs` 又建回来 → uninstall 不再写事件、不触发日志清理。
+3. 主管侧冗余：create 回显 model / branch / null 的 queue_pos，report 回显主管自己给的检查命令、恒定的 env、通过时的工人声明 → C-06 删除。
+
+### 5.5 OpenRouter
+用户告知 Key 已连接，但本会话沙箱里 `OPENROUTER_API_KEY` 变量不存在（检查两次），没有发出任何 OpenRouter 请求（免费额度未消耗）。公开的 `GET /api/v1/models` 显示 11 个同时满足「id 以 `:free` 结尾、单价 0、支持 tools」的模型（如 `google/gemma-4-31b-it:free`、`nvidia/nemotron-3.5-lightning:free`）。客户端适配（200 里的 provider 错误、`X-RateLimit-Reset`、归属头、非 free 模型警告 / 评测拒绝）已用假服务器测试覆盖。

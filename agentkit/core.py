@@ -101,6 +101,9 @@ class Ctx:
         if create and not base.exists():
             base.mkdir(parents=True, exist_ok=True)
             (base / ".gitignore").write_text(_AGENTKIT_GITIGNORE)
+            from .lifecycle import register_repo
+
+            register_repo(self.root)  # so `agentkit uninstall` can find every repo it wrote to
         p = base.joinpath(*parts)
         if create:
             p.mkdir(parents=True, exist_ok=True)

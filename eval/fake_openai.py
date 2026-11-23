@@ -14,6 +14,7 @@ the same step. Steps:
   {"usage": {"prompt_tokens": N, "completion_tokens": M}}   (on any step) override usage
   {"sig": "..."}                                  attach Gemini-style extra_content.thought_signature
   {"before": [{"http": 429, "retry_after": 1}, {"sleep": 3}, {"http": 401}]}
+  {"before": [{"body": {"error": {...}}, "http": 200, "headers": {...}}]}   verbatim body (gateway errors)
       served, in order, on the first requests for this step before the step itself.
 
 Past the end of the script the last step repeats (useful for stuck / budget tests).
@@ -129,6 +130,8 @@ class FakeOpenAI:
             else:
                 pre = None
         if pre is not None:
+            if "body" in pre:  # verbatim response, e.g. an OpenRouter provider error inside an HTTP 200
+                return pre.get("http", 200), pre["body"], pre.get("headers") or {}
             if "sleep" in pre:
                 time.sleep(pre["sleep"])
                 if "http" not in pre:

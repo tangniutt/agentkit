@@ -1,13 +1,13 @@
 # 进度
 
-更新：2026-11-23
+更新：2026-11-23（M2 补完）
 
 | 阶段 | 状态 |
 |---|---|
 | M0 调研 + 需求基线 | 完成（基线冻结，变更 C-01 至 C-04 已登记） |
 | 阶段二 接口契约 | 与 M1 合并完成：CLI 输出 schema 即契约（`{ok,data,error{what,why,next,code,run},truncated,next}`；C-03 增加 code、run） |
 | M1 Python 原型（直接模式工具集） | **完成**（见下表；偏差见「M1 未完成/偏差」） |
-| M2 工人 + 派活 + 验收器 | **完成**（含 C-03 可诊断性、C-04 反馈引导；真实模型评测部分待配额重置，见「M2 未完成/偏差」） |
+| M2 工人 + 派活 + 验收器 | **完成**（含 C-03 / C-04；补完 C-05 续跑、C-06 输出瘦身 + 多文件评测、C-07 llms.txt 安装修正、uninstall、日志 7 天清理；真实模型评测仍是小样本，见「M2 未完成/偏差」） |
 | M3 防作弊与安全 | 部分提前完成（M-15 基础规则 + 14 例作弊库 100% 检出、M-17 Key 引用与扫描测试）；沙箱仍在 V1.1 |
 | M4 Rust/Go 正式版 | 未开始 |
 | M5 评测与发布 | 未开始 |
@@ -16,7 +16,7 @@
 
 | 编号 | 状态 | 实现 | 测试 |
 |---|---|---|---|
-| M-12 工人循环 | 完成（离线）；真实接口实测 1 家（Gemini OpenAI 兼容），另 2 家待测 | `agentkit/worker.py`（mini-swe-agent 式循环，只用 M1 工具 + finish）；`agentkit/models.py`（标准库 OpenAI 兼容客户端）。工具调用格式错误本地修复（JSON 修补 / Python 字面量 / 文本里的调用 / 工具名别名），修不了把错误回给模型，连续 3 次失败 → 任务失败；卡住检测（N 轮无新 diff、同一错误重复 3 次）；上下文到 70% 时折叠旧工具输出（保留目标、记忆摘要、最近几轮）；开工先读 `memory brief`；回传 Gemini `extra_content.thought_signature` | `test_m2_tasks.py`（修复、3 次失败、纯文本、卡住×2、压缩、签名回传） |
+| M-12 工人循环 | 完成（离线）；真实接口实测 1 家（Gemini OpenAI 兼容）；OpenRouter 适配完成但本会话沙箱拿不到 Key 未实测；魔搭 / Ollama 待测 | `agentkit/worker.py`（mini-swe-agent 式循环，只用 M1 工具 + finish）；`agentkit/models.py`（标准库 OpenAI 兼容客户端）。工具调用格式错误本地修复（JSON 修补 / Python 字面量 / 文本里的调用 / 工具名别名），修不了把错误回给模型，连续 3 次失败 → 任务失败；卡住检测（N 轮无新 diff、同一错误重复 3 次）；上下文到 70% 时折叠旧工具输出（保留目标、记忆摘要、最近几轮）；开工先读 `memory brief`；回传 Gemini `extra_content.thought_signature` | `test_m2_tasks.py`（修复、3 次失败、纯文本、卡住×2、压缩、签名回传） |
 | 模型配置 | 完成 | `agentkit model add/list/test/remove`，`.agentkit/config.toml` `[models.NAME]`（base_url、model、key_env、context、price_in/out、tier）；超时 / 网络 / 5xx 重试 2 次指数退避；429 读 Retry-After（≤30 s 时等一次）后暂停上报；401/403 立即失败 | `test_m2_models.py` |
 | M-13 任务系统 | 完成（无常驻守护进程，见偏差） | `agentkit/tasks.py`：create（目标、--check、--allow、三种预算、--tier/--model）/ status（<100 token，含排队位置）/ wait（多 ID + 超时）/ report（≤300 token，与 verify 同格式）/ cancel / clean；状态落盘；进程消失 → interrupted；内容哈希去重；全局并发上限 + 排队；无模型时保持 M1 直接模式提示 | 端到端、去重 + 排队、取消、kill -9 后恢复 |
 | M-14 隔离 | 完成 | 每任务分支 `agentkit/<id>` + worktree `.agentkit/worktrees/<id>`；工人的 run 拒绝 commit/push（M-22）+ `core.hooksPath` 指向永远拒绝的钩子 + 验收时检查分支是否被提交（`worker_committed`）；非 git / 无提交仓库拒绝并提示 `git init`；`task clean` 清理 worktree 与分支 | 端到端隔离 + 作弊库 |
@@ -28,26 +28,33 @@
 | M-21 记忆（补充） | 完成 | 任务结束确定性写入：失败原因（`task-failures`）、每个模型按任务类型的通过/失败计数（`model-stats`）；带可疑标记的任务不学习 | `test_auto_memory_records_results` |
 | C-03 可诊断性 | 完成 | `agentkit/events.py`：运行 ID、43 个稳定错误码（`docs/errors.md`）、脱敏 JSONL 事件日志；`error` 增加 `code`、`run`；任务 status/report 给 `code`、`at`（组件#步骤）、日志指针；`agentkit logs`、`agentkit debug-bundle`；未处理异常的堆栈写 `crash-<run>.log`，输出只给 `AK-INTERNAL` + 运行 ID | `test_m2_diag.py`（错误码冻结 + 文档同步、日志 / 归档脱敏、内部崩溃路径） |
 | C-04 反馈引导 | 完成 | `.github/ISSUE_TEMPLATE/`（bug、feature、config）；`agentkit feedback --bug/--idea` 只生成草稿与预填链接，从不提交；llms.txt / AGENTS.md / CONTRIBUTING.md 说明；`AK-INTERNAL` 的 next 指向 feedback | URL 编码、脱敏、表单字段与命令一致 |
+| C-05 续跑 | 完成 | `agentkit task resume ID [--budget-tokens/--budget-usd/--budget-minutes]`：paused / interrupted / stopped → 排队后在**原 worktree、原分支**续跑；`worker.resume_context` 把 transcript 压成「每个工具调用一行 + 结果、最后说明、停止原因、当前 diff（含新文件）」，不重放原始助手消息；token / 金额 / 轮数计数累计（`prior`），因预算停止必须给新预算；transcript 写 `_resume` 标记；interrupted 的提示改为 `task resume`；`task report` 对可续跑任务的 next 指向 resume | `test_resume.py`（429 暂停后续跑通过、kill -9 后续跑、预算拒绝与加预算续跑、done / 已清理 / 无 ID 拒绝；断言续跑请求只有 system + user、不含旧 thought_signature、<7000 字符） |
+| C-06 输出瘦身 + 多文件评测 | 完成 | `task create` 只回 id/status；`task wait` 单个任务结束时内联报告；报告去掉主管已知字段；`eval/tasks_large.py` 3 道多文件题（2–6 处跨文件修改，带 explore 步骤）；评测表按 tiny / large / all 分组；`--size` | `test_lean_create_and_wait_with_inline_report`；离线评测断言 large 题派活主管 token < 直接模式的 1/3 |
+| M-01 卸载 | 完成 | `agentkit uninstall`：默认只打印计划；`--yes` 删除包（pip）、`~/.config/agentkit`、`~/.local/share/agentkit`、登记过的每个仓库的 `.agentkit/` 与其 worktree；保留用户代码、git 历史、`agentkit/*` 分支（`--delete-branches` 才删）、git 已跟踪的 `.agentkit` 文件；有运行中任务则拒绝（AK-TASK-STATE）；`--this-repo` 只清当前仓库。仓库登记：首次创建 `.agentkit/` 时写入 `~/.local/share/agentkit/repos.txt`（任务 worktree / 临时验收目录不登记） | `test_lifecycle.py`（两仓库 + worktree + 分支全清、代码与历史不变、跟踪文件保留、删分支、运行中拒绝） |
+| C-03 日志保留 | 完成 | `lifecycle.prune_logs`：任意命令结束后（每 6 小时最多一次）删除 `.agentkit/logs` 中超过 `[logs] retain_days`（默认 7，0 = 永久）的文件，并从共享 `events.jsonl` 删掉过期行 | 过期文件删除、新文件保留、过期事件行删除、6 小时节流、可配置 |
+| M-19 实测 | 完成 | `eval/llms_check.py`：只读 llms.txt，在全新 venv + 空 HOME 里按「第一条成功的」执行安装行，再跑 `agentkit doctor`（须 healthy）和 Direct mode 一节示例的 `agentkit verify`；`--scenario bare` 模拟 PEP 668 发行版（系统 Python 无 pip、只有 git/uv/pipx）。实测：旧 llms.txt 在 bare 场景失败（`pip: command not found`）→ 修正为 pip → pipx → uv → venv 四选一 + PATH 提示（C-07）；修正后两个场景都通过。从 GitHub 安装、空 pip 缓存：3.5 s；本地源码：2.3 s；uv：1.0 s | `test_llms_install.py`（解析规则 + venv 场景 + bare 场景；无网络时跳过后两项） |
+| OpenRouter 适配 | 完成（离线测试），真实调用未做 | 自动带 `HTTP-Referer` / `X-Title`；HTTP 200 里的 `error`（顶层或 choice 上 `finish_reason:error`）按 code 映射（401/403 → auth 不重试，429 → rate_limited，5xx / 无 code → 暂时不可用重试，402 → http）；429 读 `X-RateLimit-Reset`（毫秒时间戳，也从 body metadata 读）；`model add` 对无单价的非 `:free` OpenRouter 模型给警告；`eval.run --real` 拒绝非 `:free` 的 OpenRouter 模型（`--allow-paid` 才放行） | `test_m2_models.py` 新增 3 个 |
 
-测试：`pytest -q` **156 个全绿**（M1 的 107 + M2 新增 49）；CI（Python 3.10 / 3.12）通过。Dogfood：`docs/dogfood-m2.md`（离线派活通过；真实 Gemini 任务暴露并修复了 503 处理 bug）。
+测试：`pytest -q` **172 个全绿**（M1 的 107 + M2 49 + 本轮 16）；CI（Python 3.10 / 3.12）见提交记录。Dogfood：`docs/dogfood-m2.md`（离线派活通过；真实 Gemini 任务暴露并修复了 503 处理 bug）。
 
 ## M2 未完成/偏差
 
 | 项 | 偏差 | 原因 / 计划 |
 |---|---|---|
-| M-12 | 验收标准要求「至少跑通 3 家 OpenAI 兼容接口」：目前只实测 Gemini（另有本地假服务器）；OpenRouter / 魔搭 / Ollama 待用户提供 Key 或本地模型 | 待测 |
+| M-12 | 验收标准要求「至少跑通 3 家 OpenAI 兼容接口」：目前只实测 Gemini（另有本地假服务器）。OpenRouter 适配已完成并有离线测试，但用户连接 Key 后本会话沙箱里 `OPENROUTER_API_KEY` 仍不存在（检查两次后停止），未做真实调用；魔搭 / Ollama 待测 | 下次会话确认 Key 注入后：`python -m eval.run --real --base-url https://openrouter.ai/api/v1 --model-id <某个 :free 模型> --key-env OPENROUTER_API_KEY --limit 8`（免费档约 50 次/天，先查 `GET /api/v1/key`） |
 | M-12 | 卡住阈值、轮数上限是配置值（`[worker] stuck_rounds=10`、`max_rounds=40`、`same_error_limit=3`），未按评测调优 | M5 评测后调 |
 | M-13 | 没有常驻守护进程：每个任务是独立的后台进程，状态全部落盘；任何 task 命令先「恢复」（进程已不在的 running → interrupted）再「调度」（按并发上限启动排队任务），工人结束时也会调度 | 满足「重启后状态不丢」且更轻 |
-| M-13 | paused（429 / 超时）任务不能原地续跑，只能重新 create | 续跑（task answer/steer）属 Should |
+| M-13 / C-05 | 续跑只用「压缩历史 + 当前 diff」重开对话，不还原完整对话；时间预算按每次续跑单独计算（token / 金额累计）；共享 `events.jsonl` 过期行清理与并发追加之间无锁，极端情况下可能丢一行日志 | 取舍：省 token、跨服务商安全 |
 | M-14 | 「只读 .git 引用」改为：命令拦截 + 拒绝型 git 钩子 + 验收时检测分支被提交（`worker_committed`）。混淆写法 + `--no-verify` 仍可能提交成功，但一定被标记为 needs_review | 真正只读需沙箱（V1.1） |
 | M-15 | `hardcoded_return_suspect` 是启发式（新增 `if x == 字面量: return 字面量`），可能误报 | 误报只会降为 needs_review |
 | M-16 | 若主线程 4 s 内没响应停止信号，看门狗直接记 stopped 并退出，报告在 `task report` 时补做验收 | 兜底路径 |
 | M-17 | 发给模型的消息统一脱敏：源码里若有形似密钥的字面量，模型看到的是 `[REDACTED]` | 与 M1 输出脱敏一致的取舍 |
-| M-20 | 真实模型评测只完成小样本（3 题通过、6 次被免费档 429/503 挡住）：**real-model eval pending quota reset**；直接模式基线是「参考解 + 工具」的脚本化主管，不是真实主管模型 | 配额重置后跑 `python -m eval.run --real ...` |
-| M-20 | 离线小题上派活模式的主管 token 反而略多（固定开销约 280 token/题）；省 token 结论需更大的真实任务 | M5 |
+| M-20 | 真实模型评测仍是小样本。本轮（2026-11-23 上午）：gemini-3.5-flash-lite 1 次连通调用成功后，第一道评测题即 429（日配额，Retry-After ≈ 20,000 s）；gemini-3-flash-preview 跑通多文件题 ev-shop（verdict pass，7 轮，工人 17,385 token，主管 228 token vs 直接模式 2,178；工人在调用 finish 前被 429 暂停，验收器独立重跑通过），下一题 ev-csv 即 429 日配额，按要求停止。累计真实结果：4 题通过（ev-add、ev-max、ev-pal、ev-shop），其余都被免费档配额挡住，没有一题是模型做错 | 配额重置后（约北京时间 16:00）用 `task resume` 续跑被暂停的任务，或 `python -m eval.run --real ... --size large` |
+| M-20 | 省 token：离线对照（24 题）——小题：直接模式 5,253 vs 派活 3,226 主管 token（C-06 瘦身前派活约 5.8k，反而更多）；多文件题：直接 5,442 vs 派活 553（约 1/10）。直接模式基线是「参考解 + 工具」的脚本化主管，不是真实主管模型 | M5 用真实主管模型再测 |
 | C-03 | 普通命令的事件写入共享的 `.agentkit/logs/events.jsonl`（按 run_id 区分，5 MB 轮转），每个任务一个独立文件，而不是每条命令一个文件 | 避免成千上万个小文件 |
 | C-03 | JSON 契约 `error` 由 3 键变为 5 键（加 `code`、`run`），属于对 M-02 schema 的扩展（已登记 C-03） | — |
-| 其他 | 仍未做：`agentkit uninstall`、日志 7 天保留清理、M-19「陌生 AI 只读 llms.txt 自装」实测 | M5 |
+| M-01 | `uninstall` 只能找到登记过的仓库（本版本之前创建的 `.agentkit/` 不在登记表里，需在该仓库里运行 `agentkit uninstall --yes --this-repo`）；pip 以外的安装方式（pipx / uv / venv）不自动卸载包，输出会提示 | M4 单二进制后简化 |
+| M-19 | 实测是脚本化的「机械 AI」（只执行 llms.txt 里的命令），不是另一个真实大模型；bare 场景依赖机器上有 uv 或 pipx | 足以发现文档缺口（已发现 1 个并修正） |
 
 ## M1 完成情况
 
@@ -68,7 +75,7 @@
 | M-21 记忆（基础） | 完成 | `.agentkit/memory/*.md` + front matter；add/list/search/show/forget/brief；FTS5（grep 兜底）；锚点哈希 → maybe_stale；verify 通过（且无可疑标记）时确定性写入「通过的检查命令」 | brief ≤500 token、锚点失效 |
 | M-22 命令权限 | 完成 | 默认拒绝 git push/commit、sudo、rm -rf / 或 ~、curl\|sh、读 ~/.ssh / .env；`.agentkit/config.toml` `[run] allow/deny` | 18 条拒绝 + 10 条放行用例 |
 | 密钥脱敏（M-17 基础） | 完成（模式匹配） | 所有输出、run 日志、记忆写入均脱敏 | `test_run_security.py` |
-| M-19 llms.txt + README | 文档完成，「陌生 AI 只读 llms.txt 自装」实测待做 | `llms.txt`、README 使用一节 | |
+| M-19 llms.txt + README | 完成（实测见 M2 表「M-19 实测」） | `llms.txt`、README 使用一节 | `test_llms_install.py` |
 
 测试：`pytest -q` 107 个全绿（本机 Python 3.12 与 3.10；CI 同样通过）。Dogfood：见 `docs/dogfood-m1.md`（发现并修复 1 个 verify 误报 bug）。
 
@@ -78,7 +85,7 @@
 
 | 项 | 偏差 | 原因 / 计划 |
 |---|---|---|
-| M-01 | 仍是 Python 包，不是单二进制；本机（有 pip 缓存）安装约 3 秒，干净机器 ≤30 秒未实测 | 基线允许 M1 用 Python 包；二进制在 M4 |
+| M-01 | 仍是 Python 包，不是单二进制；全新 venv + 空 HOME + 空 pip 缓存从 GitHub 安装 3.5 秒（`eval/llms_check.py`，本开发机网络）；真正的干净虚拟机未测 | 基线允许 M1 用 Python 包；二进制在 M4 |
 | M-04 | >1MB 文件按「每页最多 2000 行 + 预算」分段，但文件仍整体读入内存（未流式） | 原型足够；M4 改流式 |
 | M-05 | 10 万文件 <2 秒只在有 ripgrep 时达到；纯 Python 兜底约 2.1 秒 | doctor 提示安装 ripgrep |
 | M-06 | 排序用跨文件标识符计数近似 Aider 的 PageRank；单次最多解析 3000 个代码文件；tree-sitter 语法包首次使用需联网下载（离线时自动退化为正则） | 足够产出概览；精排留给 V1.1 |
@@ -94,6 +101,5 @@
 | M-12–M-16、M-20 | 不在 M1 范围 | M2 / M3 / M5 |
 
 ## 下一步
-1. 真实模型评测补完（配额重置后）：Gemini 剩余题目 + 第 2、3 家 OpenAI 兼容接口（OpenRouter / 魔搭 / 本地 Ollama），记录通过率 / token / 成本。
-2. 补 M-19「陌生 AI 只读 llms.txt 自装」实测、日志保留清理、`uninstall`。
-3. M4：Rust/Go 单二进制。
+1. 真实模型评测补完：Gemini 配额重置后续跑被暂停的任务、跑 3 道多文件题；OpenRouter 确认 Key 注入后跑 1 个 dogfood + ≤8 题（只用 `:free` 模型，开始前后查 `GET /api/v1/key` 的免费额度）；第 3 家（魔搭 / 本地 Ollama）。
+2. M4：Rust/Go 单二进制（安装、卸载随之简化）。

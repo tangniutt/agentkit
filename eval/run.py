@@ -77,8 +77,17 @@ class Host:
         return self.chars // 4
 
 
+def _explore_call(cmd: list) -> dict:
+    name, rest = cmd[0], cmd[1:]
+    if name == "read":
+        return {"call": "read", "args": {"spec": rest[0]}}
+    if name == "search":
+        return {"call": "search", "args": {"pattern": rest[0]}}
+    return {"call": name, "args": {}}
+
+
 def offline_steps(task: dict) -> list:
-    steps = []
+    steps = [_explore_call(c) for c in task.get("explore") or []]
     for path in dict.fromkeys(p for p, _o, _n in task["fix"]):
         steps.append({"call": "read", "args": {"spec": path}})
     for path, old, new in task["fix"]:
@@ -91,13 +100,15 @@ def offline_steps(task: dict) -> list:
 def run_direct(task: dict, work: Path) -> dict:
     root = make_repo(work / f"direct-{task['id']}", task["files"])
     h = Host(root, dict(os.environ))
+    for cmd in task.get("explore") or []:  # what a direct-mode AI reads before it can edit
+        h(*cmd)
     for path in dict.fromkeys(p for p, _o, _n in task["fix"]):
         h("read", path)
     for path, old, new in task["fix"]:
         h("edit", path, "--old", old, "--new", new)
     r = h("verify", "--check", sub(task["check"]))
     verdict = (r.get("data") or {}).get("verdict")
-    return {"id": task["id"], "mode": "direct", "pass": verdict == "pass", "verdict": verdict,
+    return {"id": task["id"], "mode": "direct", "size": task.get("size", "tiny"), "pass": verdict == "pass", "verdict": verdict,
             "host_tokens": h.tokens, "worker_tokens": 0, "usd": 0.0, "s": None}
 
 
@@ -129,18 +140,20 @@ def run_worker(task: dict, work: Path, model: dict, env: dict, budget_tokens: in
         args += ["--allow", a]
     r = h(*args)
     if not r.get("ok"):
-        return {"id": task["id"], "mode": "worker", "pass": False, "verdict": None, "error": r.get("error"),
+        return {"id": task["id"], "mode": "worker", "size": task.get("size", "tiny"), "pass": False, "verdict": None, "error": r.get("error"),
                 "host_tokens": h.tokens, "worker_tokens": 0, "usd": 0.0, "s": 0}
     tid = r["data"]["id"]
     while True:
         w = h("task", "wait", tid, "--timeout", "120")
         if (w.get("data") or {}).get("done") or time.monotonic() - t0 > timeout:
             break
-    rep = h("task", "report", tid).get("data") or {}
+    wd = w.get("data") or {}
+    # a finished single task comes back from `wait` with the report inline (C-06): no extra call
+    rep = wd if wd.get("done") and "checks" in wd else h("task", "report", tid).get("data") or {}
     full = json.loads((root / ".agentkit" / "tasks" / tid / "report.json").read_text()) \
         if (root / ".agentkit" / "tasks" / tid / "report.json").exists() else rep
     task_json = json.loads((root / ".agentkit" / "tasks" / tid / "task.json").read_text())
-    return {"id": task["id"], "mode": "worker", "pass": rep.get("verdict") == "pass", "verdict": rep.get("verdict"),
+    return {"id": task["id"], "mode": "worker", "size": task.get("size", "tiny"), "pass": rep.get("verdict") == "pass", "verdict": rep.get("verdict"),
             "status": rep.get("status"), "why": task_json.get("reason") if task_json.get("worker_status") != "submitted" else None,
             "flags": [f["flag"] for f in full.get("suspicious", [])],
             "host_tokens": h.tokens, "worker_tokens": task_json.get("tokens", 0), "usd": task_json.get("usd", 0.0),
@@ -157,13 +170,16 @@ def run_cheat(case: dict, work: Path, model: dict, env: dict) -> dict:
 def table(rows: list, title: str) -> str:
     out = [f"### {title}", "", "| mode | tasks | pass | pass rate | host tokens (sum) | worker tokens (sum) | worker cost USD |",
            "|---|---|---|---|---|---|---|"]
-    for mode in ("direct", "worker"):
-        rs = [r for r in rows if r["mode"] == mode]
-        if not rs:
-            continue
-        n, p = len(rs), sum(1 for r in rs if r["pass"])
-        out.append(f"| {mode} | {n} | {p} | {100 * p / n:.0f}% | {sum(r['host_tokens'] for r in rs)} | "
-                   f"{sum(r['worker_tokens'] for r in rs)} | {sum(r['usd'] for r in rs):.4f} |")
+    sizes = sorted({r.get("size", "tiny") for r in rows})
+    for size in sizes + (["all"] if len(sizes) > 1 else []):
+        for mode in ("direct", "worker"):
+            rs = [r for r in rows if r["mode"] == mode and (size == "all" or r.get("size", "tiny") == size)]
+            if not rs:
+                continue
+            n, p = len(rs), sum(1 for r in rs if r["pass"])
+            label = mode if len(sizes) == 1 else f"{mode} ({size})"
+            out.append(f"| {label} | {n} | {p} | {100 * p / n:.0f}% | {sum(r['host_tokens'] for r in rs)} | "
+                       f"{sum(r['worker_tokens'] for r in rs)} | {sum(r['usd'] for r in rs):.4f} |")
     return "\n".join(out)
 
 
@@ -179,7 +195,9 @@ def main(argv=None) -> int:
     ap.add_argument("--price-out", type=float, default=0.0)
     ap.add_argument("--tasks", help="comma-separated task ids")
     ap.add_argument("--limit", type=int)
+    ap.add_argument("--size", choices=["tiny", "large"], help="only tiny (one 5-line file) or large (multi-file) tasks")
     ap.add_argument("--jobs", type=int, default=4)
+    ap.add_argument("--allow-paid", action="store_true", help="allow a non-':free' OpenRouter model")
     ap.add_argument("--cheats", action="store_true", help="also run the cheat library")
     ap.add_argument("--only-cheats", action="store_true")
     ap.add_argument("--no-direct", action="store_true")
@@ -192,6 +210,8 @@ def main(argv=None) -> int:
     if a.tasks:
         want = a.tasks.split(",")
         tasks = [t for t in TASKS if t["id"] in want]
+    if a.size:
+        tasks = [t for t in tasks if t.get("size", "tiny") == a.size]
     if a.limit:
         tasks = tasks[: a.limit]
     work = Path(tempfile.mkdtemp(prefix="agentkit-eval-"))
@@ -200,6 +220,10 @@ def main(argv=None) -> int:
     if a.real:
         if not (a.base_url and a.model_id):
             ap.error("--real needs --base-url and --model-id (and usually --key-env)")
+        from agentkit.models import is_openrouter
+
+        if is_openrouter(a.base_url) and not a.model_id.endswith(":free") and not a.allow_paid:
+            ap.error("OpenRouter model id must end with ':free' (pass --allow-paid to spend money)")
         model = {"name": "evalmodel", "base_url": a.base_url, "model_id": a.model_id, "key_env": a.key_env,
                  "tier": a.tier, "context": a.context, "price_in": a.price_in, "price_out": a.price_out}
         jobs = 1  # be gentle with free tiers

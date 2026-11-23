@@ -310,7 +310,7 @@ def _compact(report: dict, room: int) -> tuple[dict, bool]:
         lambda r: r.update(changed=r["changed"][:8] + ([f"+{len(r['changed']) - 8} more"] if len(r["changed"]) > 8 else [])),
         lambda r: [c.update(why=str(c.get("why", ""))[:60]) for c in r["checks"] if c.get("why")],
         lambda r: r.update(changed=r["changed"][:3] + ([f"+{len(report['changed']) - 3} more"] if len(report["changed"]) > 3 else [])),
-        lambda r: [c.update(cmd=c["cmd"][:40]) for c in r["checks"]],
+        lambda r: [c.update(cmd=c["cmd"][:40]) for c in r["checks"] if "cmd" in c],
         lambda r: r.update(checks=r["checks"][:4]),
         lambda r: r.pop("hint", None),
         lambda r: r.update(changed=[f"{len(report['changed'])} files"]),

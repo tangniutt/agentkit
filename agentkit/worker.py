@@ -212,10 +212,12 @@ class Worker:
         b = task.get("budget") or {}
         self.budget_tokens = int(b.get("tokens") or 0)
         self.budget_usd = float(b.get("usd") or 0)
-        self.tokens_in = 0
-        self.tokens_out = 0
-        self.usd = 0.0
-        self.rounds = 0
+        prior = task.get("prior") or {}  # resumed task: budgets cover the whole task, not one segment
+        self.tokens_in = int(prior.get("tokens_in") or 0)
+        self.tokens_out = int(prior.get("tokens_out") or 0)
+        self.usd = float(prior.get("usd") or 0.0)
+        self.rounds = int(prior.get("rounds") or 0)
+        self.start_round = self.rounds
         self.compactions = 0
         self.repairs = 0
         self.denied: list = []
@@ -392,12 +394,17 @@ class Worker:
         return Outcome("failed", f"model error: {str(e)[:200]}", code=code)
 
     # ---------------------------------------------------------- loop
-    def run(self, brief: str) -> Outcome:
+    def run(self, brief: str, resume: Optional[str] = None) -> Outcome:
         t = self.task
         sysmsg = SYSTEM.format(goal=t["goal"], checks="\n".join(f"- {c}" for c in t.get("checks") or []) or "- (none given)",
                                allow=", ".join(t.get("allow") or []) or "(any)", brief=brief or "(none)")
+        if resume:
+            self._log({"role": "_resume", "content": f"resumed at round {self.rounds}"})
         self._add({"role": "system", "content": sysmsg})
-        self._add({"role": "user", "content": f"Task {t['id']}: {t['goal']}\nStart with the memory brief above, then explore with repo_map/search/read."})
+        if resume:
+            self._add({"role": "user", "content": resume})
+        else:
+            self._add({"role": "user", "content": f"Task {t['id']}: {t['goal']}\nStart with the memory brief above, then explore with repo_map/search/read."})
         format_errors = 0
         last_fp = self.diff_fingerprint()
         no_change = 0
@@ -406,7 +413,7 @@ class Worker:
             stop = self.check_stop()
             if stop:
                 return Outcome("stopped", stop, stopped=stop)
-            if self.rounds >= self.max_rounds:
+            if self.rounds - self.start_round >= self.max_rounds:
                 return Outcome("stopped", f"max rounds ({self.max_rounds})", stopped="rounds")
             self.maybe_compact()
             if self.budget_tokens and self.tokens_in + self.tokens_out + self.est_tokens() > self.budget_tokens:
@@ -525,6 +532,86 @@ class Worker:
                 no_change += 1
                 if no_change >= self.stuck_rounds:
                     return Outcome("failed", f"stuck: no new diff in {no_change} rounds", stopped="stuck")
+
+
+# ---------------------------------------------------------------- resume (paused / interrupted / stopped tasks)
+
+RESUME_CHARS = 6000
+
+
+def resume_context(transcript: Optional[Path], wt: Path, base: str, task: dict, max_chars: int = RESUME_CHARS) -> str:
+    """A compacted transcript for `task resume`: what was done so far (one line per tool call with
+    its outcome), the worker's last note, why it stopped, and the current diff of the worktree.
+    Raw assistant turns are NOT replayed: that keeps the context small, avoids dangling tool calls
+    of an interrupted turn, and sidesteps provider-specific state (e.g. Gemini thought signatures
+    are only valid inside the conversation that produced them)."""
+    calls, results, last_text, segments = {}, {}, "", 0
+    order: list = []
+    if transcript and transcript.exists():
+        for line in transcript.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                m = json.loads(line)
+            except ValueError:
+                continue
+            role = m.get("role")
+            if role == "_resume":
+                segments += 1
+            elif role == "assistant":
+                if m.get("content"):
+                    last_text = str(m["content"])
+                for tc in m.get("tool_calls") or []:
+                    fn = tc.get("function") or {}
+                    cid = tc.get("id") or f"_{len(order)}"
+                    calls[cid] = (fn.get("name", "?"), str(fn.get("arguments", ""))[:100])
+                    order.append(cid)
+            elif role == "tool":
+                results[m.get("tool_call_id")] = _outcome(str(m.get("content", "")))
+    lines = []
+    for cid in order:
+        name, args = calls[cid]
+        lines.append(f"- {name} {args} -> {results.get(cid, 'no result (interrupted)')}")
+    if len(lines) > 25:
+        lines = [f"- ... {len(lines) - 25} earlier actions omitted"] + lines[-25:]
+    try:
+        stat = subprocess.run(["git", "-C", str(wt), "status", "--porcelain", "--untracked-files=all"],
+                              capture_output=True, text=True, timeout=60).stdout
+        stat = "\n".join(l for l in stat.splitlines() if ".agentkit/" not in l and "__pycache__" not in l and not l.endswith(".pyc"))
+        diff = subprocess.run(["git", "-C", str(wt), "diff", base, "--", ".", ":(exclude).agentkit"],
+                              capture_output=True, text=True, timeout=60).stdout
+        for l in stat.splitlines():  # new files are untracked: show them too (index left untouched)
+            if l.startswith("?? "):
+                p = wt / l[3:]
+                try:
+                    diff += f"\n+++ new file {l[3:]}\n" + p.read_text(errors="replace")[:1500]
+                except OSError:
+                    pass
+    except (OSError, subprocess.SubprocessError):
+        stat, diff = "", ""
+    head = (f"Resuming task {task['id']} (resume #{segments + 1}) after: {task.get('reason') or task.get('status')}.\n"
+            f"GOAL: {task['goal']}\nThe worktree still holds your earlier changes. Do not redo work that is already in the diff;"
+            f" continue from here, run the checks, then call finish.\n")
+    body = "ACTIONS SO FAR (compacted):\n" + ("\n".join(lines) or "- none") + "\n"
+    if last_text:
+        body += f"YOUR LAST NOTE: {last_text[:300]}\n"
+    body += "CHANGED FILES:\n" + (stat or "(none)") + "\n"
+    room = max(400, max_chars - len(head) - len(body) - 40)
+    d = diff if len(diff) <= room else diff[:room] + "\n...[diff truncated; read the files for the rest]"
+    return redact_text(head + body + "CURRENT DIFF vs base:\n" + (d or "(empty)"))
+
+
+def _outcome(content: str) -> str:
+    try:
+        env = json.loads(content)
+    except ValueError:
+        return content[:80]
+    if not isinstance(env, dict):
+        return content[:80]
+    if not env.get("ok"):
+        return "error: " + str((env.get("error") or {}).get("what", ""))[:80]
+    d = env.get("data")
+    if isinstance(d, dict) and "exit_code" in d:
+        return f"exit {d.get('exit_code')}"
+    return "ok"
 
 
 def _is_json_obj(raw) -> bool:
