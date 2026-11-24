@@ -76,7 +76,13 @@ agentkit task cancel ID | agentkit task clean ID|--all [--keep-branch]
 ## Reporting problems
 - Search existing issues first: https://github.com/tangniutt/agentkit/issues
 - agentkit feedback --bug <run_id> | agentkit feedback --idea "..."   # drafts title/body/prefilled URL; NEVER posts
-- Ask your human user before filing (issues are public). Never include secrets or private code. One issue per problem.
+- Improvement / tool-design ideas after real use (C-12): agentkit feedback --improve "one concrete change" --from <task/run id>
+  [--observed .. --gain .. --cost .. --prior-art .. --license .. --verify-by ..] or --input file.json|-  # evidence auto-collected, redacted
+- A task/verify result's `next` may suggest `agentkit feedback ...` once when a run hit a signal (AK-INTERNAL, repeated tool
+  errors, stuck, possible false alarm). Only file if AgentKit (not your task) is at fault.
+- Open the draft's search_first link first; if an issue already covers it, comment/+1 there with your evidence instead.
+- Ask your human user before filing (issues are public). Never include secrets or private code. One issue per problem or idea.
+- How issues are evaluated and become changes: docs/triage.md
 
 ## Rules
 - run/verify refuse: git push, git commit, sudo, rm -rf / or ~, curl|sh, reading ~/.ssh or .env (override in .agentkit/config.toml [run] allow/deny).

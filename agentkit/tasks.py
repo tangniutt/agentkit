@@ -811,6 +811,11 @@ def report_view(ctx: Ctx, tid: str) -> tuple:
     out, trunc = compact_report(rep)
     nxt = ctx.next_cmd("read", ctx.rel(rp)) if trunc else (
         ctx.next_cmd("task", "resume", tid) if t["status"] in RESUMABLE and not t.get("cleaned") else None)
+    if not nxt:
+        # C-12: at most one cheap feedback hint, only when the run ended with a signal worth reporting
+        from .diag import feedback_hint
+
+        nxt = feedback_hint(root, tid, t=t, rep=rep)
     if nxt:
         out["_next"] = nxt
     return out, trunc

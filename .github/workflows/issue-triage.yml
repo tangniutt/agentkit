@@ -1,0 +1,153 @@
+# C-12: first-pass triage of AI-filed issues (docs/triage.md). No secrets, no checkout, no code from the
+# issue is ever executed: the body is read from the event JSON file, never interpolated into the shell.
+name: issue-triage
+on:
+  issues:
+    types: [opened, edited, labeled]
+permissions:
+  issues: write
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    steps:
+      - name: check sections, scan for secrets, label needs-eval
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import json, os, re, urllib.request
+
+          AI_LABEL = "ai-feedback"
+          MARK = "<!-- agentkit-issue-triage -->"
+          DONE = {"accepted", "declined", "duplicate", "wontfix", "invalid"}
+          REQUIRED = {
+              "improvement": ["Observed", "Proposal", "Expected gain", "Cost / risk", "How to verify"],
+              "bug": ["Minimal reproduction", "Expected", "Actual"],
+              "feature": ["Problem", "Proposal"],
+          }
+          # mirrors agentkit/redact.py (tests/test_c12_feedback.py keeps them in sync)
+          SECRET_PATTERNS = [
+              ("authorization header", r"(?i)authorization\s*[:=]\s*(?:bearer\s+)?[A-Za-z0-9._\-]{12,}"),
+              ("private key", r"-----BEGIN [A-Z0-9 ]*?PRIVATE KEY-----"),
+              ("password in URL", r"(?i)[a-z][a-z0-9+.\-]{0,30}://[^:@/\s]{1,256}:(?!\[REDACTED)[^@/\s]{1,256}@"),
+              ("provider token", r"\b(?:sk|rk|pk_live|sk_live|ghp|gho|ghu|ghs|ghr|github_pat|glpat|xox[baprs]|hf|gsk|xai|ms)[-_][A-Za-z0-9_\-]{16,}"),
+              ("AWS key id", r"\b(?:AKIA|ASIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA)[0-9A-Z]{16}\b"),
+              ("Google API key", r"\bAIza[0-9A-Za-z_\-]{35}\b"),
+              ("key/password assignment", r"(?i)(?:api[_-]?key|access[_-]?token|auth[_-]?token|secret[_-]?key|client[_-]?secret|password|passwd)[\"']?\s*[:=]\s*[\"']?(?!\[REDACTED)[A-Za-z0-9_\-/+=.]{12,}"),
+          ]
+
+
+          def sections(body):
+              out, cur = {}, None
+              for line in (body or "").splitlines():
+                  m = re.match(r"^###\s+(.+?)\s*$", line)
+                  if m:
+                      cur = m.group(1)
+                      out[cur] = []
+                  elif cur is not None:
+                      out[cur].append(line)
+              return {k: "\n".join(v).strip() for k, v in out.items()}
+
+
+          def empty(v):
+              v = (v or "").strip()
+              return not v or v == "_No response_" or bool(re.fullmatch(r"<[^<>]*>(\s*\n?\d*\.?\s*<[^<>]*>)*", v)) \
+                  or bool(re.fullmatch(r"1\.\s*<[^<>]*>\s*2\.\s*", v))
+
+
+          def kind_of(title, secs):
+              t = (title or "").lower()
+              if t.startswith("[improve]") or "How to verify" in secs:
+                  return "improvement"
+              if t.startswith("[bug]") or "Minimal reproduction" in secs:
+                  return "bug"
+              return "feature"
+
+
+          def secret_hits(text):
+              hits = []
+              for i, line in enumerate((text or "").splitlines(), 1):
+                  for name, pat in SECRET_PATTERNS:
+                      if re.search(pat, line):
+                          hits.append((i, name))
+                          break
+              return hits
+
+
+          def is_ai(body, labels):
+              secs = sections(body)
+              return AI_LABEL in labels or "agentkit feedback" in secs.get("Filed via", "") \
+                  or bool(re.search(r"(?im)^- \[x\] Filed by an AI agent", body or ""))
+
+
+          def check(title, body, labels):
+              secs = sections(body)
+              kind = kind_of(title, secs)
+              missing = [s for s in REQUIRED[kind] if empty(secs.get(s))]
+              return {"ai": is_ai(body, labels), "kind": kind, "missing": missing,
+                      "secrets": secret_hits((title or "") + "\n" + (body or ""))}
+
+
+          def comment_text(res):
+              parts = [MARK, "Thanks - AgentKit's issue triage (docs/triage.md) found:"]
+              if res["secrets"]:
+                  parts.append("- **Possible secrets** on line(s) " + ", ".join(f"{n} ({k})" for n, k in res["secrets"][:10])
+                               + ". Please edit the issue and replace them with `[REDACTED]`, then rotate the key if it was real.")
+              if res["missing"]:
+                  parts.append("- **Missing or placeholder sections**: " + ", ".join(res["missing"])
+                               + ". Please fill them (evidence from real use, expected gain, how to verify).")
+              parts.append("Edit the issue and this check runs again. Duplicates: comment on the existing issue instead.")
+              return "\n".join(parts)
+
+
+          def api(method, path, data=None):
+              req = urllib.request.Request("https://api.github.com/repos/" + os.environ["GITHUB_REPOSITORY"] + path,
+                                           method=method, data=None if data is None else json.dumps(data).encode(),
+                                           headers={"Authorization": "Bearer " + os.environ["GITHUB_TOKEN"],
+                                                    "Accept": "application/vnd.github+json"})
+              with urllib.request.urlopen(req, timeout=30) as r:
+                  raw = r.read()
+                  return json.loads(raw) if raw else None
+
+
+          def main():
+              ev = json.load(open(os.environ["GITHUB_EVENT_PATH"]))
+              issue = ev["issue"]
+              if issue.get("pull_request"):
+                  return
+              labels = {l["name"] for l in issue.get("labels") or []}
+              res = check(issue.get("title"), issue.get("body"), labels)
+              print(json.dumps({k: v for k, v in res.items() if k != "secrets"}), "secrets:", len(res["secrets"]))
+              if not res["ai"]:
+                  return
+              n = issue["number"]
+              add = {AI_LABEL}
+              if not labels & DONE:
+                  add.add("needs-eval")
+              bad = bool(res["missing"] or res["secrets"])
+              if bad:
+                  add.add("needs-info")
+              if add - labels:
+                  api("POST", f"/issues/{n}/labels", {"labels": sorted(add - labels)})
+              drop = (["needs-info"] if not bad and "needs-info" in labels else []) + \
+                  (["needs-eval"] if labels & DONE and "needs-eval" in labels else [])
+              for name in drop:
+                  try:
+                      api("DELETE", f"/issues/{n}/labels/{name}")
+                  except Exception:
+                      pass
+              mine = [c for c in api("GET", f"/issues/{n}/comments?per_page=100") or [] if MARK in (c.get("body") or "")]
+              if bad:
+                  text = comment_text(res)
+                  if mine:
+                      api("PATCH", f"/issues/comments/{mine[0]['id']}", {"body": text})
+                  else:
+                      api("POST", f"/issues/{n}/comments", {"body": text})
+              elif mine:
+                  api("PATCH", f"/issues/comments/{mine[0]['id']}",
+                      {"body": MARK + "\nAll required sections are filled and no secret-looking strings were found. Queued for evaluation (needs-eval)."})
+
+
+          if __name__ == "__main__":
+              main()
+          PY

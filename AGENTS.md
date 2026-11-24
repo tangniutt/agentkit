@@ -43,3 +43,9 @@ AgentKit：给 AI Agent 用的轻量编程工具。三种模式：直接模式�
 - 先搜已有 Issue：https://github.com/tangniutt/agentkit/issues
 - `agentkit feedback --bug <run_id>` / `agentkit feedback --idea "..."` 只生成草稿（标题、正文、预填链接），**从不自动提交**。
 - 提交前**先问你的人类用户**（Issue 是公开的）；绝不包含密钥或私有代码；一个问题一个 Issue；需要附件用 `agentkit debug-bundle <id>`。
+
+## AI 反馈进化回路（C-12）
+- 真实使用之后有更好的改进或工具设计想法：`agentkit feedback --improve "一个具体改动" --from <任务/运行ID>`（可加 `--observed/--gain/--cost/--prior-art/--license/--verify-by`，或 `--input file.json` / `-`）。证据（状态、轮数、token、错误码与次数、可疑标记）自动从本地事件收集并脱敏，不含代码；`missing` 列出还没填的段落。
+- 任务 / 验收结果的 `next` 出现 `agentkit feedback ...` 时，说明这次运行有值得报告的信号（AK-INTERNAL、同一工具错误重复、卡住、可能误报）；只有 AgentKit 本身有问题时才提。干净的运行不会出现。
+- 先打开草稿的 `search_first`（按 `keywords` 搜），已有同类就去评论 / +1 附上证据，不开新的；一个 Issue 一个想法；**提交前先问人类**；从不自动提交。
+- 维护者按 `docs/triage.md` 的评分表评估（标签 needs-eval → accepted / declined / duplicate / needs-info），接受的登记为基线 C-xx，合并前用测试与评测量化。

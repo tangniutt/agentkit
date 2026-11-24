@@ -63,6 +63,11 @@ body:
     attributes:
       label: Environment
       description: OS, Python, git versions
+  - type: input
+    id: filed_via
+    attributes:
+      label: Filed via
+      description: Prefilled by `agentkit feedback` when an AI agent drafted this issue.
   - type: checkboxes
     id: filed_by_ai
     attributes:

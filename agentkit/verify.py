@@ -300,6 +300,11 @@ def cmd_verify(ctx: Ctx, a) -> Result:
 
     compact, trunc = _compact(report, REPORT_TOKENS * 4 - 120 - len(ctx.rel(full_p)))
     nxt = ctx.next_cmd("read", ctx.rel(full_p)) if trunc else None
+    if not nxt and verdict == "pass" and flags and ctx.run_id:
+        # C-12: suspicious flags may be a false alarm the host can judge; one cheap hint, never on clean runs
+        from .diag import feedback_hint
+
+        nxt = feedback_hint(ctx.root, ctx.run_id, t={}, rep={"verdict": "needs_review", "suspicious": flags}, evs=[])
     return Result(compact, trunc, nxt, budget_chars=REPORT_TOKENS * 4)
 
 

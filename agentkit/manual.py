@@ -123,8 +123,10 @@ SPEC: dict = {
              "fx": ["ro"], "ex": "agentkit logs t1a2b3c --errors"},
     "debug-bundle": {"do": "redacted .tar.gz of config (no keys), events, report for a bug report", "out": "bundle,bytes,files,error_codes,note (next: feedback --bug)", "err": ["AK-LOGS-UNKNOWN"], "fx": ["state"],
                      "ex": "agentkit debug-bundle t1a2b3c"},
-    "feedback": {"out": "posted(false),title,url,search_first,body,rules", "err": ["AK-LOGS-UNKNOWN"], "fx": ["ro"],
-                 "ex": "agentkit feedback --idea 'task wait --json-lines'"},
+    "feedback": {"do": "draft an issue, never posts; --improve: proposal + redacted evidence from --from ids; "
+                       "open search_first, +1 a duplicate; ask your human first",
+                 "out": "posted(false),title,url,search_first,keywords,missing?,body,rules", "err": ["AK-LOGS-UNKNOWN", "AK-USAGE"], "fx": ["ro"],
+                 "ex": "agentkit feedback --improve 'edit: show nearest match' --from t1a2b3c"},
     "uninstall": {"do": "remove package, user config/data, .agentkit/ + worktrees; dry run unless --yes", "out": "plan: repos,user_paths,package,dry_run,hint (next: --yes) | uninstalled,repos,user_paths_removed",
                   "err": ["AK-TASK-STATE"], "fx": ["destructive"], "ex": "agentkit uninstall --this-repo"},
     "manual": {"do": "this manual: overview | <command> detail | --all", "out": "overview | commands{path:detail}", "err": [], "fx": ["ro"], "ex": "agentkit manual task create"},
@@ -153,7 +155,8 @@ MODES = {
 
 SAFETY = [
     "keys: only the env var NAME is stored (--key-env); values are redacted everywhere and never printed; never pass a key as an argument",
-    "feedback only drafts (posted:false); ask your human before filing; no secrets/private code",
+    "feedback only drafts (posted:false); ask your human before filing; no secrets/private code; "
+    "a task/verify next may suggest feedback once (a signal: AK-INTERNAL, repeated tool errors, stuck, false alarm)",
     "uninstall is a dry run unless --yes; show the plan to your human first; never touches source or git history",
     "workers cannot commit/push; you merge agentkit/<id>; run/verify refuse git push/commit, sudo, rm -rf /|~, curl|sh, .env/~/.ssh",
     "edit/create/delete/rename/patch are checkpointed: checkpoint rollback ID",

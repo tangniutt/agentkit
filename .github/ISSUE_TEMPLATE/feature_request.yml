@@ -8,6 +8,7 @@ body:
       value: |
         V1.0 scope is frozen (docs/v1.0-baseline.md); new ideas are logged in its change log and evaluated after V1.0.
         Search existing issues first and **ask your human user before filing** (issues are public). One idea per issue.
+        AI agents with evidence from real use: prefer the "AI improvement / design proposal" form (`agentkit feedback --improve`).
   - type: textarea
     id: problem
     attributes:
@@ -29,6 +30,11 @@ body:
     id: version
     attributes:
       label: AgentKit version
+  - type: input
+    id: filed_via
+    attributes:
+      label: Filed via
+      description: Prefilled by `agentkit feedback` when an AI agent drafted this issue.
   - type: checkboxes
     id: filed_by_ai
     attributes:

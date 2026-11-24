@@ -6,7 +6,7 @@ AgentKit: token-frugal coding tools for AI agents + optional cheap worker with i
 
 Global options: --budget N (output tokens, default 2000), --human (text), --root DIR; anywhere on the line.
 
-JSON form: `agentkit manual` (overview, ~1693 tokens), `agentkit manual <command>` (one command), `agentkit manual --all` (everything, ~3766 tokens).
+JSON form: `agentkit manual` (overview, ~1720 tokens), `agentkit manual <command>` (one command), `agentkit manual --all` (everything, ~3869 tokens).
 
 ## Quick start (supervisor)
 
@@ -27,7 +27,7 @@ JSON form: `agentkit manual` (overview, ~1693 tokens), `agentkit manual <command
 ## Budget and safety rules
 
 - keys: only the env var NAME is stored (--key-env); values are redacted everywhere and never printed; never pass a key as an argument
-- feedback only drafts (posted:false); ask your human before filing; no secrets/private code
+- feedback only drafts (posted:false); ask your human before filing; no secrets/private code; a task/verify next may suggest feedback once (a signal: AK-INTERNAL, repeated tool errors, stuck, false alarm)
 - uninstall is a dry run unless --yes; show the plan to your human first; never touches source or git history
 - workers cannot commit/push; you merge agentkit/<id>; run/verify refuse git push/commit, sudo, rm -rf /|~, curl|sh, .env/~/.ssh
 - edit/create/delete/rename/patch are checkpointed: checkpoint rollback ID
@@ -615,17 +615,28 @@ redacted .tar.gz of config (no keys), events, report for a bug report
 
 ### `agentkit feedback`
 
-draft a GitHub issue (never posts): --bug RUN_ID | --idea TEXT
+draft an issue, never posts; --improve: proposal + redacted evidence from --from ids; open search_first, +1 a duplicate; ask your human first
 
 | arg | type | default | notes |
 |---|---|---|---|
-| `--bug` | str |  | one of --bug / --idea; run or task id of the failure |
-| `--idea` | str |  | one of --bug / --idea; feature request text |
+| `--bug` | str |  | one of --bug / --improve / --idea; run or task id of the failure |
+| `--improve` | str |  | one of --bug / --improve / --idea; design proposal after real use (C-12) |
+| `--idea` | str |  | one of --bug / --improve / --idea; feature request text (humans) |
+| `--from` | str |  | repeatable; evidence run/task id (repeat) |
+| `--observed` | str |  | what you saw |
+| `--proposal` | str |  | default: the --improve text |
+| `--gain` | str |  | expected gain |
+| `--cost` | str |  | cost / risk |
+| `--prior-art` | str |  | references |
+| `--license` | str |  | of borrowed code |
+| `--verify-by` | str |  | test / eval idea |
+| `--title` | str |  |  |
+| `--input` | str |  | JSON with the same keys (verify, from[]) |
 
-- **Output `data`:** `posted(false),title,url,search_first,body,rules`
-- **Errors:** `AK-LOGS-UNKNOWN` (no events for that run / task id)
+- **Output `data`:** `posted(false),title,url,search_first,keywords,missing?,body,rules`
+- **Errors:** `AK-LOGS-UNKNOWN` (no events for that run / task id), `AK-USAGE` (bad command line arguments)
 - **Side effects:** ro
-- **Example:** `agentkit feedback --idea 'task wait --json-lines'`
+- **Example:** `agentkit feedback --improve 'edit: show nearest match' --from t1a2b3c`
 
 ### `agentkit uninstall`
 

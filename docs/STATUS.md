@@ -1,10 +1,10 @@
 # 进度
 
-更新：2026-11-23 夜（M2 补完 + C-08 上下文压缩 + C-09 主管操作手册 + C-10：第 3 家 NVIDIA NIM、真实压缩 A/B、小任务开销修正 + C-11：第 4、5 家 Agnes AI、AMD Token Factory 中国站）
+更新：2026-11-23 夜（M2 补完 + C-08 上下文压缩 + C-09 主管操作手册 + C-10：第 3 家 NVIDIA NIM、真实压缩 A/B、小任务开销修正 + C-11：第 4、5 家 Agnes AI、AMD Token Factory 中国站）；2026-11-24：C-12 AI 反馈进化回路
 
 | 阶段 | 状态 |
 |---|---|
-| M0 调研 + 需求基线 | 完成（基线冻结，变更 C-01 至 C-11 已登记） |
+| M0 调研 + 需求基线 | 完成（基线冻结，变更 C-01 至 C-12 已登记） |
 | 阶段二 接口契约 | 与 M1 合并完成：CLI 输出 schema 即契约（`{ok,data,error{what,why,next,code,run},truncated,next}`；C-03 增加 code、run） |
 | M1 Python 原型（直接模式工具集） | **完成**（见下表；偏差见「M1 未完成/偏差」） |
 | M2 工人 + 派活 + 验收器 | **完成**（含 C-03 / C-04；补完 C-05 续跑、C-06 输出瘦身 + 多文件评测、C-07 llms.txt 安装修正、C-08 上下文压缩、C-09 主管操作手册、uninstall、日志 7 天清理；真实模型实测 5 家（Gemini、OpenRouter、NVIDIA NIM、Agnes AI、AMD Token Factory 中国站，满足 M-12），真实压缩 A/B：NVIDIA / Gemini 每格 1 次，Agnes / AMD 每格 2 次，仍是小样本，见「M2 未完成/偏差」） |
@@ -42,8 +42,9 @@
 | C-10 ② NVIDIA NIM + 预设 + 节流 | 完成；真实运行见「真实压缩 A/B」 | `model add --preset nvidia\|gemini\|openrouter`（base URL、Key 变量名、上下文、节流，显式参数优先；无 preset 时必须 `--base-url`）；模型配置 `rpm`（每个工人每分钟最多请求数）、`max_wait`（Retry-After 最长等待，默认 30 s，预设 65 s）、`max_tokens`；HTTP / body 504 → 上游不可用（重试 2 次后暂停）；推理模型 `reasoning_content` 从不回传，`finish_reason=length` 且无工具调用 → 明确提示「输出 token 上限截断」；`model test` 返回 `reasoning_only`；`eval.run --real` 加 `--rpm / --max-wait / --max-tokens` | `test_providers.py`（6 个：预设与覆盖、504 两种形态、Retry-After ≤ max_wait 才等、rpm 节流 + max_tokens、推理模型 model test、工人端到端推理模型 + 截断提示 + 不回传 reasoning） |
 | C-10 ③ 卡住检测修正 | 完成 | NVIDIA dogfood 发现：首次改动前 10 轮探索（每轮读到新内容）被判「卡住」→ failed（不可续跑）。改为首次改动之前、本轮有新结果（`context.result_key` 没见过）的轮不计入「无新 diff」；重复同样调用仍计入；`max_rounds` 封顶 | `test_exploring_before_first_edit_is_not_stuck`（旧代码失败）；`test_stuck_no_new_diff` 改为 4 次请求（第 1 次读是新信息） |
 | C-11 第 4、5 家 + 修正 | 完成；真实运行见「第 4、5 家实测」 | `--preset agnes`（`https://apihub.agnes-ai.com/v1`、`AGNES_API_KEY`、rpm 6、`rate_wait` 60、max_wait 65、max_tokens 8192）、`--preset amd-cn`（`https://developer.amd.com.cn/radeon/api/v1`、`AMD_CN_API_KEY`、rpm 15、max_wait 65、max_tokens 8192）；`models.error_obj` 读 `error` / `detail.error` / `detail` 文本，HTTP 错误与 200 body 都报服务商原话；429 `model_concurrency_rate_limit_exceeded`（`ModelError.capacity`）→ 等 5 / 10 / 20 s（≤ max_wait）后仍忙则暂停（原因写明「model at capacity」，可续跑），配额类 429 仍按旧规则；模型配置 `rate_wait`（`model add --rate-wait`、`eval.run --rate-wait`）：429 无 Retry-After 时等一次；`model test` / `doctor --online` 不做忙等；`reasoning` 字段与 `reasoning_content` 同样不回传；`hardcoded_return_suspect` 跳过基例（单个比较 + 边界字面量 + 返回平凡字面量或目标原文里的字面量）；同一回复里并行调用的同一错误只算 1 次 | `test_providers_agnes_amd.py`（13 个：两个预设、嵌套错误解析、忙 429 等待后成功 / 暂停且信息可读、配额 429 不当忙、无 Retry-After 的 429 按 `rate_wait` 等一次、200 body 嵌套错误与 401、工人忙模型暂停、`reasoning` 字段 model test 与工人不回传、基例不误报（单元 + 端到端，旧代码失败）、并行同错只算一次（旧代码失败）） |
+| C-12 AI 反馈进化回路 | 完成 | `agentkit feedback --improve`（证据从本地事件自动收集并脱敏、`--input` JSON / stdin、`missing` 列表）；所有草稿带 `keywords` + `search_first`，重复去 +1；预填 `labels=ai-feedback`、`filed_via`；任务 wait/report 与 verify 有信号时 `next` 给最多一条 feedback 提示（干净运行无字段；离线评测主管 token 与改动前相同：派活全部 3,857–3,858、直接 10,856，改动前代码重跑同样在 ±1 内波动，为计时噪声）；`.github/ISSUE_TEMPLATE/improvement.yml`；`docs/triage.md`；`.github/workflows/issue-triage.yml`（必填段落、疑似密钥、needs-eval / needs-info，只有 `issues: write`）；仓库标签 ai-feedback / needs-eval / needs-info / accepted / declined | `test_c12_feedback.py`（34 个：草稿字段与表单一致、证据不含代码与密钥、JSON 输入与覆盖、缺段落、去重关键词与搜索链接、8 种信号触发、6 种普通运行无提示、端到端卡住任务有且只有一条提示 / 干净任务无提示、verify 只在可疑通过时提示、工作流 YAML 安全与解析、按 GitHub 渲染的正文检查草稿、密钥扫描与脱敏规则一致） |
 
-测试：`pytest -q` **271 个全绿**（M1 的 107 + M2 66 + C-08 22 + C-09 57 + C-10 6 + C-11 13）；CI（Python 3.10 / 3.12）通过（d149a27，run 45155898363）。Dogfood：`docs/dogfood-m2.md`（离线派活通过；真实 Gemini 任务暴露并修复了 503 处理 bug）。
+测试：`pytest -q` **305 个全绿**（M1 的 107 + M2 66 + C-08 22 + C-09 57 + C-10 6 + C-11 13 + C-12 34）；CI（Python 3.10 / 3.12）通过（d149a27，run 45155898363）。Dogfood：`docs/dogfood-m2.md`（离线派活通过；真实 Gemini 任务暴露并修复了 503 处理 bug）。
 
 ## C-08 实测（2026-11-23，诚实记录，含接近 0 的情况）
 

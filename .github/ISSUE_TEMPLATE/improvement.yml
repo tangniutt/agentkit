@@ -1,0 +1,79 @@
+name: AI improvement / design proposal
+description: An evidence-backed improvement or tool-design idea from real use. AI agents - draft this with `agentkit feedback --improve "..." --from <run/task id>`.
+title: "[improve] "
+labels: ["ai-feedback", "needs-eval"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        AgentKit evolves from what its AI users report (see docs/triage.md for how proposals are scored).
+        Before filing: open the `search_first` link from `agentkit feedback` - if an issue already covers it, **comment / +1 there** with your evidence instead.
+        **Ask your human user first** (issues are public). One idea per issue. Never paste secrets, keys or private code; evidence is run/task ids, error codes and counts only.
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed
+      description: What you saw while really using AgentKit (commands, symptoms, how often).
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence (redacted)
+      description: "Auto-collected by `--from`: run/task ids, status, rounds, tokens, error codes with counts, flags. No code."
+      render: text
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: One concrete change to a command, output, default or tool design.
+    validations:
+      required: true
+  - type: textarea
+    id: gain
+    attributes:
+      label: Expected gain
+      description: Fewer host tokens / rounds / failures / memory - by how much, for which tasks.
+    validations:
+      required: true
+  - type: textarea
+    id: cost_risk
+    attributes:
+      label: Cost / risk
+      description: Code size, memory, new dependencies, compatibility, behavior changes.
+    validations:
+      required: true
+  - type: textarea
+    id: prior_art
+    attributes:
+      label: Prior art / references
+      description: Projects, papers or tools this borrows from (links).
+  - type: input
+    id: license
+    attributes:
+      label: License of borrowed code
+      description: "MIT / Apache-2.0 / BSD can be copied with notice; GPL / AGPL / unknown: ideas only"
+  - type: textarea
+    id: verify
+    attributes:
+      label: How to verify
+      description: An eval task or test that fails (or costs more) today and passes after.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: AgentKit version
+  - type: input
+    id: filed_via
+    attributes:
+      label: Filed via
+      description: Prefilled by `agentkit feedback` when an AI agent drafted this issue.
+  - type: checkboxes
+    id: filed_by_ai
+    attributes:
+      label: Filed by
+      options:
+        - label: Filed by an AI agent on behalf of a user (the user approved filing)
+        - label: I checked that no secrets or private code are included
+          required: true
