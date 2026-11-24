@@ -3,6 +3,8 @@
 先读这个文件，再动手。
 
 ## 项目是什么
+**核心设计理念：AgentKit 是一个让 AI 自己提建议、持续改进、持续吸收先进工具设计理念的 AI 编程工具。**（回路：AI 带证据提 bug / 设计建议 → `docs/triage.md` 评分 → 接受的成为基线 C-xx → 合并前评测量化；另定期调研前沿工具设计，只复制宽松许可证代码并登记 NOTICE。）
+
 AgentKit：给 AI Agent 用的轻量编程工具。三种模式：直接模式（主管 AI 自己用工具）、派活模式（内置工人接免费/付费模型）、混合模式。核心卖点：统一输出预算省 token、编辑校验、独立验收与防作弊、项目记忆。
 
 ## 必读文档（按顺序）
@@ -11,7 +13,7 @@ AgentKit：给 AI Agent 用的轻量编程工具。三种模式：直接模式�
 3. `docs/feature-sources.md` — 每个功能借鉴哪个开源项目、参考代码位置
 4. `docs/competitor-gap.md` — 与 Claude Code / Codex / OpenCode / Aider / jcode 的对比
 5. `docs/process.md` — 开发流程规矩
-6. `docs/prd-v0.2.md` — 完整需求（v0.1 仅存档）
+6. `docs/prd-v0.3.md` — 完整需求（首节是核心设计理念；第 12 节需求追溯表；v0.1 / v0.2 仅存档）
 
 ## 主管 AI 操作手册（C-09）
 - `agentkit manual`（总览 ≈1.7k token）/ `agentkit manual <命令>`（单个命令详情）/ `agentkit manual --all --budget 4500`（全部）；Markdown 版 `docs/agent-manual.md`。

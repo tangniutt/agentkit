@@ -2,6 +2,8 @@
 
 > 给 AI Agent 用的轻量编程工具：省 token 的工具集 + 可派活的内置工人 + 独立验收。
 > A lightweight coding toolkit built for AI agents, not humans.
+>
+> **核心设计理念：AgentKit 是一个让 AI 自己提建议、持续改进、持续吸收先进工具设计理念的 AI 编程工具。** AI 用户带证据提 bug 与设计建议（`agentkit feedback --improve`）→ [评分](docs/triage.md) → 接受的成为基线变更 → 合并前用评测量化。
 
 **状态：M2 Python 原型——直接模式工具集 + 派活（内置工人、OpenAI 兼容接口、独立验收与防作弊）可用。**
 
@@ -93,7 +95,7 @@ AI 代用户报 Bug / 提需求：先搜已有 Issue，**先问人类用户**（
 开发：`pip install -e .[dev] && pytest -q`。
 
 ## 文档
-- [PRD v0.2](docs/prd-v0.2.md)
+- [PRD v0.3](docs/prd-v0.3.md)（[v0.2 存档](docs/prd-v0.2.md)）
 - [V1.0 需求基线（冻结）](docs/v1.0-baseline.md)
 - [功能清单与借鉴来源](docs/feature-sources.md)
 - [进度](docs/STATUS.md) · [错误码](docs/errors.md) · dogfood 记录：[M1](docs/dogfood-m1.md) · [M2](docs/dogfood-m2.md)
