@@ -15,6 +15,7 @@ pytestmark = pytest.mark.skipif(os.name != "posix", reason="dispatch mode requir
 
 
 def _repo(repo, ak, script: str, *, allow_unsandboxed=True, prices=True, cost_known=False, sandbox_off=False):
+    ak.env["QODER_PERSONAL_ACCESS_TOKEN"] = "test-pat"
     (repo / "calc.py").write_text("def add(a, b):\n    return a - b\n", encoding="utf-8")
     (repo / "tests").mkdir()
     (repo / "tests" / "test_calc.py").write_text(
@@ -59,7 +60,6 @@ print(json.dumps({"type":"result","subtype":"success","uuid":"u4","session_id":"
 
 def test_qoder_pat_is_redacted_from_event_log(ak, repo):
     secret = "qoder-pat-test-secret-123"
-    ak.env["QODER_PERSONAL_ACCESS_TOKEN"] = secret
     script = '''import json, os, sys
 from pathlib import Path
 sys.stdin.read()
@@ -68,6 +68,7 @@ print(json.dumps({"type":"result","subtype":"error_during_execution","uuid":"u2"
 sys.exit(1)
 '''
     _repo(repo, ak, script)
+    ak.env["QODER_PERSONAL_ACCESS_TOKEN"] = secret
     tid = ak("task", "create", "fix add [QODER-SECRET]", "--check", CHECK, "--backend", "qoder")["data"]["id"]
     assert wait(ak, tid)["status"] == "paused"
     log = (repo / ".agentkit" / "tasks" / tid / "qoder-events.jsonl").read_text(encoding="utf-8")
@@ -149,6 +150,7 @@ def test_builtin_task_hands_off_to_qoder_in_same_worktree(ak, repo, fake):
     paused = wait(ak, tid)
     assert paused["status"] == "paused", paused
     prior_tokens = tjson(repo, tid)["tokens"]
+    ak.env["QODER_PERSONAL_ACCESS_TOKEN"] = "test-pat"
     script = repo / "fake_qoder.py"
     script.write_text(SCRIPT, encoding="utf-8")
     cfg = repo / ".agentkit" / "config.toml"

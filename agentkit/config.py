@@ -14,6 +14,8 @@ else:  # pragma: no cover
     import tomli as tomllib
 
 EXAMPLE = """# .agentkit/config.toml
+# Saved-login opt-in belongs in the user config, never this project file:
+# ~/.config/agentkit/config.toml -> [security] allow_saved_credentials=true
 [output]
 budget = 2000          # tokens (~4 chars each)
 
@@ -125,7 +127,14 @@ def load_config(root: Path) -> dict:
     for k in ("model", "models"):
         if k in user and k not in cfg:
             cfg[k] = user[k]
+    security = user.get("security")
+    cfg["_user_security"] = security if isinstance(security, dict) else {}
     return cfg
+
+
+def saved_credentials_allowed(cfg: dict) -> bool:
+    security = cfg.get("_user_security")
+    return isinstance(security, dict) and security.get("allow_saved_credentials") is True
 
 
 def model_configured(cfg: dict) -> bool:

@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Callable, Optional
 from unittest.mock import patch
 
+from .config import saved_credentials_allowed
 from .redact import redact_text
 from .worker import Outcome
 
@@ -86,7 +87,7 @@ def opencode_usd_budget_known(cfg: dict) -> bool:
 
 
 def opencode_state_paths(cfg: Optional[dict] = None) -> list[Path]:
-    if cfg is not None and opencode_config(cfg).get("allow_account_login", False):
+    if cfg is not None and opencode_config(cfg).get("allow_account_login", False) and saved_credentials_allowed(cfg):
         home = Path.home()
         data = Path(os.environ.get("XDG_DATA_HOME") or home / ".local" / "share") / "opencode"
         cache = Path(os.environ.get("XDG_CACHE_HOME") or home / ".cache") / "opencode"
@@ -538,6 +539,7 @@ class OpenCodeBackend:
         self.allow_account_login = self.cfg.get("allow_account_login", False)
         if not isinstance(self.allow_account_login, bool):
             raise ValueError("workers.opencode.allow_account_login must be true or false")
+        self.allow_account_login = self.allow_account_login and saved_credentials_allowed(cfg)
         self.rounds = int(prior.get("rounds") or 0)
         self.compactions = 0
         self.repairs = 0
@@ -980,6 +982,9 @@ class QoderBackend:
         for key in ("QODER_MODEL", "QODER_SESSION_ID", "QODER_PERMISSION_MODE", "QODER_APPEND_SYSTEM_PROMPT"):
             env.pop(key, None)
         env.update({"QODER_CONFIG_DIR": str(config_dir), "QODER_PROGRAM_STATUS": "0"})
+        key_env = str(self.cfg.get("key_env") or "")
+        if key_env and os.environ.get(key_env):
+            env["QODER_PERSONAL_ACCESS_TOKEN"] = os.environ[key_env]
         stopped = self.check_stop()
         if stopped:
             return Outcome("stopped", f"stopped: {stopped}", stopped=stopped,

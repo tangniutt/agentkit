@@ -43,7 +43,7 @@ from types import SimpleNamespace
 from typing import Optional
 
 from . import verify as V
-from .config import load_config, model_configured
+from .config import load_config, model_configured, saved_credentials_allowed
 from .core import AKError, Ctx, Result, atomic_write, dumps, fill_lines, room_for
 from .events import EventLog
 from .redact import redact, register_secret
@@ -436,6 +436,37 @@ def task_type(goal: str) -> str:
     return "other"
 
 
+def _check_credential_policy(cfg: dict, backend: str, wcfg: dict, root: Path, command: str = "create", tid: str = "") -> None:
+    allowed = saved_credentials_allowed(cfg)
+    if backend == "qoder":
+        key_env = str(wcfg.get("key_env") or "")
+        has_key = bool(key_env and os.environ.get(key_env)) or bool(
+            os.environ.get("QODER_PERSONAL_ACCESS_TOKEN"))
+        if key_env and not has_key:
+            raise AKError(f"environment variable {key_env} is not set",
+                          "Qoder reads its dedicated PAT from it; QODER_PERSONAL_ACCESS_TOKEN is also supported",
+                          f"export {key_env}=...  then  agentkit task {command} {tid} --backend qoder",
+                          code="AK-MODEL-KEYENV")
+        if not key_env and not has_key and not allowed:
+            raise AKError("Qoder saved login requires user-level approval",
+                          "set QODER_PERSONAL_ACCESS_TOKEN or enable security.allow_saved_credentials in the user config",
+                          f"agentkit task {command} {tid} --backend qoder".replace("  ", " "), code="AK-CONFIG")
+        raw_dir = wcfg.get("config_dir")
+        if raw_dir and not allowed:
+            path = Path(str(raw_dir)).expanduser()
+            path = path.resolve() if path.is_absolute() else (root / path).resolve()
+            try:
+                path.relative_to(root.resolve())
+            except ValueError as e:
+                raise AKError("Qoder config_dir outside the repository requires user-level approval",
+                              "use a repository-local directory or enable security.allow_saved_credentials in the user config",
+                              code="AK-CONFIG") from e
+    elif backend == "opencode" and wcfg.get("allow_account_login", False) and not allowed:
+        raise AKError("OpenCode saved login requires user-level approval",
+                      "enable security.allow_saved_credentials in the user config or use provider API keys",
+                      code="AK-CONFIG")
+
+
 def create(ctx: Ctx, a) -> dict:
     from . import models as M
 
@@ -493,6 +524,7 @@ def create(ctx: Ctx, a) -> dict:
             if wcfg.get("transport", "cli") == "sdk" and not model_name:
                 raise AKError("Cursor SDK requires an explicit model", "set workers.cursor.model or pass --model",
                               "agentkit task create --help", code="AK-USAGE")
+        _check_credential_policy(cfg, backend, wcfg, root)
         if backend == "opencode" and model_name and (len(model_name.split("/", 1)) != 2 or
                                                      not all(model_name.split("/", 1))):
             raise AKError("OpenCode model must use provider/model format", "for example openai/gpt-5.1",
@@ -1494,6 +1526,7 @@ def resume(ctx: Ctx, a, handoff: bool = False) -> dict:
             if target_backend == "cursor" and wcfg.get("transport", "cli") == "sdk" and not model_name:
                 raise AKError("Cursor SDK requires an explicit model", "set workers.cursor.model or pass --model",
                               f"agentkit task {command} {tid} --model MODEL", code="AK-USAGE")
+            _check_credential_policy(ctx.config, target_backend, wcfg, root, command, tid)
             tier = ""
             try:
                 getattr(B, f"{target_backend}_prices")(ctx.config)
@@ -1504,7 +1537,7 @@ def resume(ctx: Ctx, a, handoff: bool = False) -> dict:
             except ValueError as e:
                 raise AKError(str(e), f"fix [workers.{target_backend}]", "agentkit doctor", code="AK-CONFIG")
             key_env = str(wcfg.get("key_env") or ("CURSOR_API_KEY" if target_backend == "cursor" else ""))
-            if key_env and not os.environ.get(key_env):
+            if key_env and not os.environ.get(key_env) and target_backend != "qoder":
                 raise AKError(f"environment variable {key_env} is not set", f"{label} reads its key from it",
                               f"export {key_env}=...  then  agentkit task {command} {tid}", code="AK-MODEL-KEYENV")
         else:

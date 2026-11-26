@@ -89,7 +89,7 @@ AgentKit 不能依靠“功能更多”建立差异。当前更有价值的方�
 
 当前明确缺口：
 
-- bubblewrap 已适配并支持 `network=false` 硬隔离与 `network=["api.example.com"]` 域名白名单；白名单模式使用独立网络命名空间、回环中继和宿主代理，按域名与 TLS SNI 放行，拒绝重复 Host、管道后续请求和非全局解析地址，任务报告/收据记录 shared/isolated/allowlist/host；默认仍共享网络以兼容现有模型调用；Qoder/OpenCode 复用登录所需认证目录仍由 CLI 工具规则保护，尚未实现独立凭证 broker，不可信仓库不得使用真实登录态；Windows 沙箱未完成，但 Windows 不是当前生产部署平台，仅保留 direct-mode 开发兼容；worktree 本身仍不是安全边界；
+- bubblewrap 已适配并支持 `network=false` 硬隔离与 `network=["api.example.com"]` 域名白名单；白名单模式使用独立网络命名空间、回环中继和宿主代理，按域名与 TLS SNI 放行，拒绝重复 Host、管道后续请求和非全局解析地址，任务报告/收据记录 shared/isolated/allowlist/host；默认仍共享网络以兼容现有模型调用；Qoder/OpenCode 复用登录所需认证目录仍由 CLI 工具规则保护，尚未实现独立凭证 broker，不可信仓库不得使用真实登录态。保存登录态与仓库外 Qoder `config_dir` 还必须获得用户级 `[security] allow_saved_credentials=true` 授权，项目配置不能自行开启；PAT/API Key 路径不受此开关影响；Windows 沙箱未完成，但 Windows 不是当前生产部署平台，仅保留 direct-mode 开发兼容；worktree 本身仍不是安全边界；
 - Goal 级验收与 retrospective 已有 v1，但缺真实长任务回归与外部作弊留出集；
 - MCP stdio 已实现 tools/resources/outputSchema、动态任务/Goal 资源与分页；完整支持 2025-06-18/2025-11-25 的资源订阅和状态变更通知；2026-07-28 的 `server/discover`、缓存与 `subscriptions/listen` 尚未实现，因此明确拒绝该版本；
 - `HandoffPacket` 与 Codex/OpenCode/Qoder/Cursor 适配器已实现，支持 builtin↔Codex↔OpenCode↔Qoder↔Cursor 接力；OpenCode V1 与 V2 均已适配，V2 官方免费模型可免登录使用，真实 2.4.2 最小任务验证通过，免费额度 429 会暂停且不绕过；LSP 引用窄客户端与词法回退已实现，Pyright 1.1.414 与 typescript-language-server 6.1.0 真实引用验证通过，其余语言服务器矩阵待测；Cursor 支持官方 headless CLI 与可选 Python SDK，CLI 仅轮次/时间预算，SDK 可在运行时报告 token 与按运行成本，但真实 API Key 任务未验证且 USD 硬预算不支持；Antigravity consumer 不包装，自动接力仍默认关闭；
@@ -632,7 +632,7 @@ Codex v0.172.0 已核验：`codex exec -C <repo> -m <model> -s read-only --json 
 
 OpenCode v1.19.6 已核验稳定 CLI 与 V1 权限 schema：`opencode run --format json --dir <worktree> --model provider/model [--session ID]`，`step_finish.part.tokens/cost` 提供用量；非交互权限请求默认拒绝。V1 适配器注入 `permission` 与 `OPENCODE_PERMISSION`，禁用项目配置、插件、网络工具和子 Agent，默认禁用 shell。V2 2.4.2 已单独核验并实现 `version="v2"`：使用 `--standalone run --format json`、V2 `permissions/policies`、cwd 工作树与独立数据目录；官方免费模型可免登录使用，真实最小任务成功，免费额度 429 暂停且不绕过。
 
-Qoder CLI 1.1.98 已核验官方帮助与文档：`qodercli --print --output-format stream-json --input-format text --permission-mode dont_ask --setting-sources user --strict-mcp-config`，`system/init` 提供 session/tools/permissionMode，`assistant.message.usage` 提供 token 与请求 Credits，`result` 提供 subtype/error_code/permission_denials。账号登录由官方 `qodercli login` 或 `QODER_PERSONAL_ACCESS_TOKEN` 完成；AgentKit 不读取、导出或共享凭证，默认使用 `XDG_CONFIG_HOME/agentkit/qoder` 专用目录，复用其他登录态必须显式配置。适配器在 init 后复核工具与权限策略，失败即关闭。当前开发机 CLI 只读检查尚未登录，Desktop 登录态未自动复用；适配器的真实 CLI 参数已解析通过，仅被登录拦截；真实账号任务尚未执行，当前证据为官方 CLI 帮助、公开契约与假可执行文件端到端测试。
+Qoder CLI 1.1.98 已核验官方帮助与文档：`qodercli --print --output-format stream-json --input-format text --permission-mode dont_ask --setting-sources user --strict-mcp-config`，`system/init` 提供 session/tools/permissionMode，`assistant.message.usage` 提供 token 与请求 Credits，`result` 提供 subtype/error_code/permission_denials。账号登录由官方 `qodercli login` 或 `QODER_PERSONAL_ACCESS_TOKEN` 完成；AgentKit 不读取、导出或共享凭证，默认使用 `XDG_CONFIG_HOME/agentkit/qoder` 专用目录。保存登录态与仓库外 `config_dir` 必须由用户级配置显式授权，项目配置不能伪造该授权；专用 `key_env` 缺失时不会静默回退到保存登录态。适配器在 init 后复核工具与权限策略，失败即关闭。当前开发机 CLI 只读检查尚未登录，Desktop 登录态未自动复用；适配器的真实 CLI 参数已解析通过，仅被登录拦截；真实账号任务尚未执行，当前证据为官方 CLI 帮助、公开契约与假可执行文件端到端测试。
 
 **HandoffPacket v1**：
 

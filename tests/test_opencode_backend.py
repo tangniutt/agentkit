@@ -152,7 +152,8 @@ def test_opencode_free_limit_is_resumable_rate_limit(tmp_path):
 def test_opencode_account_login_requires_explicit_opt_in(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     assert opencode_state_paths({}) == []
-    paths = opencode_state_paths({"workers": {"opencode": {"allow_account_login": True}}})
+    paths = opencode_state_paths({"workers": {"opencode": {"allow_account_login": True}},
+                                  "_user_security": {"allow_saved_credentials": True}})
     assert len(paths) == 3 and paths[0] == (tmp_path / "data" / "opencode").resolve()
 
 
@@ -170,6 +171,12 @@ def test_opencode_command_model_and_price_validation(tmp_path):
     backend = OpenCodeBackend({"workers": {"opencode": {"command": [sys.executable]}}}, task, tmp_path, tmp_path)
     with pytest.raises(ValueError, match="provider/model"):
         backend.run("", None)
+
+
+def test_opencode_backend_ignores_project_login_opt_in_without_user_approval(tmp_path):
+    cfg = {"workers": {"opencode": {"command": [sys.executable], "allow_account_login": True}}}
+    backend = OpenCodeBackend(cfg, {}, tmp_path, tmp_path)
+    assert backend.allow_account_login is False
 
 
 def test_opencode_default_policy_denies_shell_secrets_and_writes_to_git():

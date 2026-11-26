@@ -22,6 +22,7 @@ if capture:
     with open(capture, "a", encoding="utf-8") as f:
         f.write(json.dumps({{"args": args, "prompt": prompt,
             "config_dir": os.environ.get("QODER_CONFIG_DIR"),
+            "pat_set": bool(os.environ.get("QODER_PERSONAL_ACCESS_TOKEN")),
             "settings": json.loads(next(args[i + 1] for i, x in enumerate(args[:-1]) if x == "--settings"))}}) + "\\n")
 if mode != "noedit":
     p = Path("calc.py")
@@ -49,7 +50,7 @@ print(json.dumps({{"type":"result","subtype":"success","uuid":"u6","session_id":
 
 
 def _run(tmp_path: Path, *, mode="ok", budget=None, max_rounds=40, prior=None, session="", prices=(0, 0),
-         cost_known=False):
+         cost_known=False, key_env=""):
     work = tmp_path / "work"
     task_dir = tmp_path / "task"
     work.mkdir(exist_ok=True)
@@ -57,7 +58,8 @@ def _run(tmp_path: Path, *, mode="ok", budget=None, max_rounds=40, prior=None, s
     (work / "calc.py").write_text("def add(a, b):\n    return a - b\n", encoding="utf-8")
     script = _script(tmp_path, mode)
     cfg = {"workers": {"qoder": {"command": [sys.executable, str(script)], "model": "fake-model",
-                                  "price_in": prices[0], "price_out": prices[1], "cost_known": cost_known}}}
+                                  "key_env": key_env, "price_in": prices[0], "price_out": prices[1],
+                                  "cost_known": cost_known}}}
     task = {"id": "t123abc", "goal": "fix add", "checks": ["pytest -q"], "allow": [],
             "model": "fake-model", "budget": budget or {"tokens": 0, "usd": 0, "minutes": 5},
             "prior": prior or {}, "backend_session": session}
@@ -154,6 +156,26 @@ def test_qoder_invocation_is_noninteractive_and_private(tmp_path, monkeypatch):
     assert "Edit(~/.config/agentkit/**)" in settings["permissions"]["deny"]
     assert "Edit(~/.qoder/**)" in settings["permissions"]["deny"]
     assert "Do not commit or push" in call["prompt"]
+
+
+def test_qoder_dedicated_key_env_maps_to_official_pat_variable(tmp_path, monkeypatch):
+    capture = tmp_path / "capture.jsonl"
+    monkeypatch.setenv("AK_TEST_CAPTURE", str(capture))
+    monkeypatch.setenv("QODER_TEST_PAT", "test-pat")
+    monkeypatch.delenv("QODER_PERSONAL_ACCESS_TOKEN", raising=False)
+    backend, outcome, _work, _task_dir = _run(tmp_path, key_env="QODER_TEST_PAT")
+    assert outcome.status == "submitted"
+    assert json.loads(capture.read_text(encoding="utf-8"))["pat_set"] is True
+
+
+def test_qoder_standard_pat_survives_missing_dedicated_key(tmp_path, monkeypatch):
+    capture = tmp_path / "capture.jsonl"
+    monkeypatch.setenv("AK_TEST_CAPTURE", str(capture))
+    monkeypatch.setenv("QODER_PERSONAL_ACCESS_TOKEN", "test-pat")
+    monkeypatch.delenv("QODER_TEST_PAT", raising=False)
+    backend, outcome, _work, _task_dir = _run(tmp_path, key_env="QODER_TEST_PAT")
+    assert outcome.status == "submitted"
+    assert json.loads(capture.read_text(encoding="utf-8"))["pat_set"] is True
 
 
 def test_qoder_defaults_to_dedicated_config_directory(tmp_path, monkeypatch):

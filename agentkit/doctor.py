@@ -11,7 +11,7 @@ import sys
 import tempfile
 
 from . import __version__
-from .config import model_configured
+from .config import model_configured, saved_credentials_allowed, user_config_path
 from .core import Ctx, Result
 
 
@@ -78,6 +78,10 @@ def cmd_doctor(ctx: Ctx, a) -> Result:
     from .backends import (codex_available, codex_config, cursor_available, cursor_config,
                            opencode_available, opencode_config, qoder_available, qoder_config, qoder_config_dir)
 
+    saved_allowed = saved_credentials_allowed(ctx.config)
+    checks.append(_check("saved_credentials", True,
+                         "user opt-in enabled" if saved_allowed else
+                         f"disabled (API keys/PAT only); opt in via {user_config_path()}"))
     if codex_config(ctx.config):
         cavail = codex_available(ctx.config)
         checks.append(_check("codex_backend", cavail, "configured" if cavail else "not found",
@@ -89,8 +93,25 @@ def cmd_doctor(ctx: Ctx, a) -> Result:
     if qoder_config(ctx.config):
         qavail = qoder_available(ctx.config)
         qdir = qoder_config_dir(ctx.config, ctx.root)
-        checks.append(_check("qoder_backend", qavail, "configured; dedicated login directory" if qavail else "not found",
-                             f"set QODER_CONFIG_DIR={qdir} then run qodercli login"))
+        qcfg = qoder_config(ctx.config)
+        qkey = str(qcfg.get("key_env") or "")
+        has_pat = bool(os.environ.get("QODER_PERSONAL_ACCESS_TOKEN"))
+        has_key = bool(qkey and os.environ.get(qkey)) or has_pat
+        if qkey and not has_key:
+            auth = "dedicated PAT missing"
+        else:
+            auth = "PAT" if has_key else "saved login approved" if saved_allowed else "saved login disabled"
+        ready = has_key or (not qkey and saved_allowed)
+        if not qavail:
+            qfix = "set workers.qoder.command or install Qoder CLI"
+        elif qkey and not has_key:
+            qfix = f"export {qkey}=... or set QODER_PERSONAL_ACCESS_TOKEN"
+        elif not ready:
+            qfix = f"set QODER_PERSONAL_ACCESS_TOKEN or enable [security] allow_saved_credentials=true in {user_config_path()}"
+        else:
+            qfix = None
+        checks.append(_check("qoder_backend", qavail and ready,
+                             f"configured; {auth}; directory {qdir}" if qavail else "not found", qfix))
     if cursor_config(ctx.config):
         cavail = cursor_available(ctx.config)
         checks.append(_check("cursor_backend", cavail, "configured; CURSOR_API_KEY required" if cavail else "not found",
