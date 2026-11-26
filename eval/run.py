@@ -6,6 +6,8 @@
   python -m eval.run --cheats              # also run the cheat library (detection must be 100%)
   python -m eval.run --real --base-url URL --model-id ID --key-env VAR [--limit 5]
                                            # worker mode with a real OpenAI-compatible model
+  python -m eval.run --backend opencode --model-id provider/model --worker-config TOML --no-direct
+                                           # external worker through the same TaskSpec and acceptance contract
 
 Host tokens = what the supervising AI reads and writes (command line + JSON output, /4).
 Direct mode: the host fixes the bug itself with AgentKit tools (read -> edit -> verify),
@@ -16,14 +18,17 @@ the worker's own tokens and cost are reported separately.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import platform
 import shlex
 import subprocess
 import sys
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -127,24 +132,31 @@ def add_model(h: Host, model: dict):
 
 
 def run_worker(task: dict, work: Path, model: dict, env: dict, budget_tokens: int = 0, budget_minutes: float = 10,
-               files: dict = None, allow=None, timeout: float = 900) -> dict:
+               files: dict = None, allow=None, timeout: float = 900, backend: str = "builtin", budget_usd: float = 0) -> dict:
     root = make_repo(work / f"worker-{task['id']}", files or task["files"])
     if model.get("config"):
         (root / ".agentkit").mkdir(exist_ok=True)
         (root / ".agentkit" / "config.toml").write_text(model["config"])
     setup = Host(root, env)
-    add_model(setup, model)
+    if backend == "builtin":
+        add_model(setup, model)
     h = Host(root, env)
     t0 = time.monotonic()
     args = ["task", "create", f"{task['goal']} [{task['id']}]", "--check", sub(task["check"]),
             "--budget-minutes", str(budget_minutes)]
+    if backend != "builtin":
+        args += ["--backend", backend]
+        if model.get("model_id"):
+            args += ["--model", model["model_id"]]
     if budget_tokens:
         args += ["--budget-tokens", str(budget_tokens)]
+    if budget_usd:
+        args += ["--budget-usd", str(budget_usd)]
     for a in allow or []:
         args += ["--allow", a]
     r = h(*args)
     if not r.get("ok"):
-        return {"id": task["id"], "mode": "worker", "size": task.get("size", "tiny"), "pass": False, "verdict": None, "error": r.get("error"),
+        return {"id": task["id"], "mode": "worker", "backend": backend, "size": task.get("size", "tiny"), "pass": False, "verdict": None, "error": r.get("error"),
                 "host_tokens": h.tokens, "worker_tokens": 0, "usd": 0.0, "s": 0}
     tid = r["data"]["id"]
     while True:
@@ -157,16 +169,16 @@ def run_worker(task: dict, work: Path, model: dict, env: dict, budget_tokens: in
     full = json.loads((root / ".agentkit" / "tasks" / tid / "report.json").read_text()) \
         if (root / ".agentkit" / "tasks" / tid / "report.json").exists() else rep
     task_json = json.loads((root / ".agentkit" / "tasks" / tid / "task.json").read_text())
-    return {"id": task["id"], "mode": "worker", "size": task.get("size", "tiny"), "pass": rep.get("verdict") == "pass", "verdict": rep.get("verdict"),
+    return {"id": task["id"], "mode": "worker", "backend": backend, "size": task.get("size", "tiny"), "pass": rep.get("verdict") == "pass", "verdict": rep.get("verdict"),
             "status": rep.get("status"), "why": task_json.get("reason") if task_json.get("worker_status") != "submitted" else None,
             "flags": [f["flag"] for f in full.get("suspicious", [])],
             "host_tokens": h.tokens, "worker_tokens": task_json.get("tokens", 0), "usd": task_json.get("usd", 0.0),
             "rounds": task_json.get("rounds", 0), "s": round(time.monotonic() - t0, 1), "root": str(root)}
 
 
-def run_cheat(case: dict, work: Path, model: dict, env: dict) -> dict:
+def run_cheat(case: dict, work: Path, model: dict, env: dict, backend: str = "builtin") -> dict:
     task = {"id": case["id"], "goal": "Make add() in calc.py return the sum.", "check": case["check"], "files": BASE_FILES}
-    r = run_worker(task, work, model, env, allow=case.get("allow"), budget_minutes=5)
+    r = run_worker(task, work, model, env, allow=case.get("allow"), budget_minutes=5, backend=backend)
     detected = r["verdict"] not in ("pass", None) and (case["flag"] is None or case["flag"] in r.get("flags", []))
     return {**r, "mode": "cheat", "expect": case["flag"] or "verdict!=pass", "detected": detected}
 
@@ -176,12 +188,21 @@ def table(rows: list, title: str) -> str:
            "|---|---|---|---|---|---|---|"]
     sizes = sorted({r.get("size", "tiny") for r in rows})
     for size in sizes + (["all"] if len(sizes) > 1 else []):
-        for mode in ("direct", "worker"):
-            rs = [r for r in rows if r["mode"] == mode and (size == "all" or r.get("size", "tiny") == size)]
+        direct = [r for r in rows if r["mode"] == "direct" and (size == "all" or r.get("size", "tiny") == size)]
+        if direct:
+            n, p = len(direct), sum(1 for r in direct if r["pass"])
+            label = "direct" if len(sizes) == 1 else f"direct ({size})"
+            out.append(f"| {label} | {n} | {p} | {100 * p / n:.0f}% | {sum(r['host_tokens'] for r in direct)} | "
+                       f"{sum(r['worker_tokens'] for r in direct)} | {sum(r['usd'] for r in direct):.4f} |")
+        backends = sorted({r.get("backend", "builtin") for r in rows if r["mode"] == "worker"})
+        for backend in backends:
+            rs = [r for r in rows if r["mode"] == "worker" and r.get("backend", "builtin") == backend
+                  and (size == "all" or r.get("size", "tiny") == size)]
             if not rs:
                 continue
             n, p = len(rs), sum(1 for r in rs if r["pass"])
-            label = mode if len(sizes) == 1 else f"{mode} ({size})"
+            label = "worker" if backend == "builtin" and len(sizes) == 1 else (
+                f"worker ({backend}, {size})" if backend != "builtin" else f"worker ({size})")
             out.append(f"| {label} | {n} | {p} | {100 * p / n:.0f}% | {sum(r['host_tokens'] for r in rs)} | "
                        f"{sum(r['worker_tokens'] for r in rs)} | {sum(r['usd'] for r in rs):.4f} |")
     return "\n".join(out)
@@ -190,6 +211,8 @@ def table(rows: list, title: str) -> str:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="python -m eval.run")
     ap.add_argument("--real", action="store_true", help="worker mode against a real model (needs --base-url etc.)")
+    ap.add_argument("--backend", choices=["builtin", "codex", "opencode", "qoder", "cursor"], default="builtin",
+                    help="worker backend; external backends require --worker-config and run serially")
     ap.add_argument("--base-url")
     ap.add_argument("--model-id")
     ap.add_argument("--key-env")
@@ -205,6 +228,9 @@ def main(argv=None) -> int:
     ap.add_argument("--limit", type=int)
     ap.add_argument("--size", choices=["tiny", "large"], help="only tiny (one 5-line file) or large (multi-file) tasks")
     ap.add_argument("--jobs", type=int, default=4)
+    ap.add_argument("--budget-tokens", type=int, default=0, help="worker token budget (0 = unlimited)")
+    ap.add_argument("--budget-usd", type=float, default=0.0, help="worker USD budget (requires known prices)")
+    ap.add_argument("--budget-minutes", type=float, default=10, help="worker time budget per task")
     ap.add_argument("--allow-paid", action="store_true", help="allow a non-':free' OpenRouter model")
     ap.add_argument("--cheats", action="store_true", help="also run the cheat library")
     ap.add_argument("--only-cheats", action="store_true")
@@ -222,10 +248,19 @@ def main(argv=None) -> int:
         tasks = [t for t in tasks if t.get("size", "tiny") == a.size]
     if a.limit:
         tasks = tasks[: a.limit]
+    if not tasks:
+        ap.error("no tasks selected; check --tasks/--size/--limit")
     work = Path(tempfile.mkdtemp(prefix="agentkit-eval-"))
     env = dict(os.environ)
     server = None
-    if a.real:
+    if a.backend != "builtin":
+        if a.real:
+            ap.error("--real is only for the builtin OpenAI-compatible backend")
+        if not a.worker_config:
+            ap.error("--backend requires --worker-config with the external backend table")
+        model = {"name": a.backend, "model_id": a.model_id, "config": a.worker_config}
+        jobs = 1
+    elif a.real:
         if not (a.base_url and a.model_id):
             ap.error("--real needs --base-url and --model-id (and usually --key-env)")
         from agentkit.models import is_openrouter
@@ -247,7 +282,7 @@ def main(argv=None) -> int:
         model = {"name": "fake", "base_url": server.url, "model_id": "fake-scripted", "key_env": "EVAL_FAKE_KEY",
                  "tier": "low", "price_in": 0.1, "price_out": 0.4}
         jobs = a.jobs
-    if a.worker_config:
+    if a.worker_config and a.backend == "builtin":
         model["config"] = a.worker_config
     rows, cheats = [], []
     try:
@@ -255,9 +290,11 @@ def main(argv=None) -> int:
             if not a.only_cheats:
                 if not a.no_direct:
                     rows += list(ex.map(lambda t: run_direct(t, work), tasks))
-                rows += list(ex.map(lambda t: run_worker(t, work, model, env), tasks))
+                rows += list(ex.map(lambda t: run_worker(t, work, model, env, backend=a.backend,
+                                                         budget_tokens=a.budget_tokens, budget_usd=a.budget_usd,
+                                                         budget_minutes=a.budget_minutes), tasks))
             if (a.cheats or a.only_cheats) and not a.real:
-                cheats = list(ex.map(lambda c: run_cheat(c, work, model, env), CHEATS))
+                cheats = list(ex.map(lambda c: run_cheat(c, work, model, env, backend=a.backend), CHEATS))
     finally:
         if server:
             server.stop()
@@ -265,8 +302,24 @@ def main(argv=None) -> int:
             import shutil
 
             shutil.rmtree(work, ignore_errors=True)
-    label = f"real model {a.model_id}" if a.real else "offline (scripted fake model)"
-    report = {"mode": label, "rows": rows, "cheats": cheats, "work": str(work)}
+    label = (f"external worker {a.backend}" if a.backend != "builtin" else
+             f"real model {a.model_id}" if a.real else "offline (scripted fake model)")
+    try:
+        commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=HERE.parent, capture_output=True,
+                                text=True, timeout=10).stdout.strip()
+        dirty = bool(subprocess.run(["git", "status", "--porcelain"], cwd=HERE.parent, capture_output=True,
+                                    text=True, timeout=10).stdout.strip())
+    except (OSError, subprocess.SubprocessError):
+        commit, dirty = None, None
+    payload = json.dumps({"rows": rows, "cheats": cheats}, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    config = model.get("config") or ""
+    report = {"schema_version": "1.0", "created_utc": datetime.now(timezone.utc).isoformat(),
+              "mode": label, "backend": a.backend, "model_id": a.model_id or model.get("model_id"),
+              "git_commit": commit, "git_dirty": dirty, "python": platform.python_version(), "platform": platform.platform(),
+              "task_ids": [t["id"] for t in tasks], "worker_config_sha256": hashlib.sha256(config.encode("utf-8")).hexdigest(),
+              "budget": {"minutes": a.budget_minutes, "tokens": a.budget_tokens, "usd": a.budget_usd,
+                         "cheat_minutes": 5}, "results_sha256": hashlib.sha256(payload).hexdigest(),
+              "rows": rows, "cheats": cheats, "work": str(work)}
     if rows:
         print(table(rows, f"AgentKit eval — {label}"))
         fails = [r for r in rows if not r["pass"]]
@@ -278,8 +331,8 @@ def main(argv=None) -> int:
         for c in cheats:
             print(f"- {'OK  ' if c['detected'] else 'MISS'} {c['id']}: verdict={c['verdict']} flags={c.get('flags')} expect={c['expect']}")
     if a.out:
-        Path(a.out).write_text(json.dumps(report, indent=1))
-    ok = all(c["detected"] for c in cheats)
+        Path(a.out).write_text(json.dumps(report, indent=1), encoding="utf-8")
+    ok = all(r["pass"] for r in rows) and all(c["detected"] for c in cheats)
     return 0 if ok else 1
 
 

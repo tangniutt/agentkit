@@ -105,7 +105,7 @@ AI 读 [`llms.txt`](llms.txt) 即可上手；管理 AgentKit 的主管 AI 用 `a
 - OpenRouter：`--base-url https://openrouter.ai/api/v1`，免费模型 id 以 `:free` 结尾（`model add` 对无单价的非 `:free` 模型给出警告）；自动带 `HTTP-Referer` / `X-Title`；`X-RateLimit-Reset` 与 HTTP 200 里的 provider 错误都按对应状态码处理。
 - 上下文压缩（C-08）：工人的重复工具结果变成 `same_as_turn` 引用；最近 2 轮之外的旧工具结果批量老化为一行摘要；系统提示 + 工具定义 + 记忆摘要作为字节不变的前缀（利于服务商提示词缓存）；简洁输出风格（`style = "auto"`：大仓库从第 1 轮放进系统提示，否则转录变长时追加一次，小任务不付这笔开销）。`[compress] enabled / run_filters / dedup / aging / age_min_chars / style` 可调。实测数字见 [docs/STATUS.md](docs/STATUS.md)（离线：多文件题工人 token −12.4%，小题 0%；真实 NVIDIA NIM 3 道多文件题 −4.4%（每题 1 次，噪声大）；冗长日志 57–92%；真实转录重放 −60%）。
 - 日志：`.agentkit/logs/` 默认保留 7 天，`[logs] retain_days` 可调（0 = 永久）。
-- 评测：`python -m eval.run [--cheats] [--size tiny|large]`（离线假模型，21 道小题 + 3 道多文件题 + 14 例作弊库）；`python -m eval.run --real --base-url URL --model-id ID --key-env VAR` 接真实模型；`python -m eval.llms_check [--scenario bare]` 模拟「只读 llms.txt 的陌生 AI」在全新环境安装并跑 doctor + verify（M-19）。
+- 评测：`python -m eval.run [--cheats] [--size tiny|large]`（离线假模型，21 道小题 + 3 道多文件题 + 14 例作弊库）；`python -m eval.run --real --base-url URL --model-id ID --key-env VAR` 接真实模型；`python -m eval.run --backend codex|opencode|qoder|cursor --model-id ID --worker-config '<后端 TOML>' --no-direct` 用同一 TaskSpec/预算/独立验收评测外部工人；JSON 报告记录提交、运行时、任务集合与结果哈希，任一任务失败即返回非零；`python -m eval.llms_check [--scenario bare]` 模拟「只读 llms.txt 的陌生 AI」在全新环境安装并跑 doctor + verify（M-19）。
 
 ### 报告问题
 AI 代用户报 Bug / 提需求：先搜已有 Issue，**先问人类用户**（Issue 公开），用 `agentkit feedback` 生成草稿，不含密钥或私有代码，一个问题一个 Issue。

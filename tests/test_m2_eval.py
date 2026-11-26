@@ -66,7 +66,61 @@ def test_cheat_library_detection_is_100_percent(tmp_path, capsys):
         assert c["verdict"] in ("needs_review", "fail", "invalid")
 
 
+@pytest.mark.skipif(os.name != "posix", reason="external dispatch requires Linux")
+def test_eval_external_worker_uses_same_acceptance_contract(tmp_path):
+    script = tmp_path / "fake_opencode.py"
+    script.write_text('''import json, sys
+from pathlib import Path
+sys.stdin.read()
+p = Path("calc.py")
+p.write_text(p.read_text().replace("a - b", "a + b"))
+print(json.dumps({"type":"step_start","timestamp":1,"sessionID":"ses_eval","part":{"id":"p1","type":"step-start"}}))
+print(json.dumps({"type":"text","timestamp":2,"sessionID":"ses_eval","part":{"id":"p2","type":"text","text":"fixed"}}))
+finish = {"type":"step_finish","timestamp":3,"sessionID":"ses_eval"}
+finish["part"] = {"id":"p3","type":"step-finish","reason":"stop","cost":0.25}
+finish["part"]["tokens"] = {"input":100,"output":20,"reasoning":0}
+finish["part"]["tokens"]["cache"] = {"read":0,"write":0}
+print(json.dumps(finish))
+''', encoding="utf-8")
+    config = ("[workers.opencode]\n"
+              f"command = [{json.dumps(sys.executable)}, {json.dumps(str(script))}]\n"
+              "model = \"fake/model\"\nallow_unsandboxed = true\nprice_in = 1\nprice_out = 1\n")
+    out = tmp_path / "external.json"
+    code = R.main(["--backend", "opencode", "--model-id", "fake/model", "--worker-config", config,
+                   "--tasks", "ev-add", "--no-direct", "--budget-tokens", "1000", "--budget-usd", "1",
+                   "--budget-minutes", "2", "--out", str(out)])
+    res = json.loads(out.read_text())
+    assert code == 0 and res["backend"] == "opencode"
+    assert res["schema_version"] == "1.0" and res["git_commit"]
+    assert res["task_ids"] == ["ev-add"] and len(res["results_sha256"]) == 64
+    assert len(res["worker_config_sha256"]) == 64
+    assert res["budget"] == {"minutes": 2, "tokens": 1000, "usd": 1.0, "cheat_minutes": 5}
+    assert len(res["rows"]) == 1
+    row = res["rows"][0]
+    assert row["backend"] == "opencode" and row["pass"] and row["verdict"] == "pass"
+    assert row["worker_tokens"] == 120 and row["usd"] == pytest.approx(0.25)
+    assert row["host_tokens"] > 0
+    rendered = R.table(res["rows"], "external")
+    assert "| worker (opencode, tiny) |" in rendered
+
+
+def test_runner_returns_failure_when_any_task_fails(tmp_path, monkeypatch):
+    monkeypatch.setattr(R, "run_worker", lambda *_args, **_kwargs: {
+        "id": "ev-add", "mode": "worker", "backend": "builtin", "size": "tiny", "pass": False,
+        "verdict": "fail", "host_tokens": 1, "worker_tokens": 0, "usd": 0.0})
+    out = tmp_path / "failed.json"
+    code = R.main(["--tasks", "ev-add", "--no-direct", "--out", str(out)])
+    assert code == 1 and json.loads(out.read_text())["rows"][0]["pass"] is False
+
+
+def test_runner_rejects_empty_task_selection():
+    with pytest.raises(SystemExit) as error:
+        R.main(["--tasks", "missing-task"])
+    assert error.value.code == 2
+
+
 def test_runner_cli_help():
     r = subprocess.run([sys.executable, "-m", "eval.run", "--help"], capture_output=True, text=True,
                        cwd=str(R.HERE.parent))
-    assert r.returncode == 0 and "--real" in r.stdout
+    assert r.returncode == 0 and "--real" in r.stdout and "--backend" in r.stdout
+    assert "--budget-tokens" in r.stdout and "--budget-usd" in r.stdout and "--budget-minutes" in r.stdout
