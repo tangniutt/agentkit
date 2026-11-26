@@ -96,7 +96,7 @@ AgentKit 不能依靠“功能更多”建立差异。当前更有价值的方�
 - XERJ 已接入，但固定 benchmark 中返回字符仍高于内置后端，未达到 token 门槛；
 - 结构化 retrospective 与证据收据已有本地实现，缺 SWE-bench/Terminal-Bench 等外部 benchmark；
 - 已有本地固定版本构建、wheel/sdist SHA256、版本化清单、artifact 校验与显式回滚；远端发布、签名与自动升级仍未实现；
-- 生产目标平台为 Linux VPS；Windows 仅保留 direct-mode 开发兼容，派活沙箱不是当前生产门槛。OpenCode V2 接入后 Linux Python 3.10/3.12 + bubblewrap 最终全量均为 **541 passed, 4 skipped**；Windows 最终 **452 passed, 93 skipped** 只作开发兼容证据。远端 Linux GitHub Actions 仅覆盖旧提交 `e2600d4`，当前未提交变更尚未运行远端 CI。
+- 生产目标平台为 Linux VPS；Windows 仅保留 direct-mode 开发兼容，派活沙箱不是当前生产门槛。OpenCode V2 接入后 Linux Python 3.10/3.12 + bubblewrap 最终全量均为 **541 passed, 4 skipped**；Windows 最终 **452 passed, 93 skipped** 只作开发兼容证据。DCO 提交 `ae85bf3` 已推送，Linux GitHub Actions 通过；正式签名与发布仍未执行。
 
 ## 1.3 目标用户
 
