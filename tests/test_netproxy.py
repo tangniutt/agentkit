@@ -131,18 +131,16 @@ def test_plain_http_does_not_forward_a_second_pipelined_request(monkeypatch):
 
 def test_start_relay_waits_for_a_complete_port_file(tmp_path, monkeypatch):
     port_file = tmp_path / "relay.port"
+    original_read_text = Path.read_text
+    reads = iter(("", "12345\n"))
 
-    def publish():
-        port_file.write_text("", encoding="ascii")
-        time.sleep(0.05)
-        port_file.write_text("12345\n", encoding="ascii")
+    def read_text(path, *args, **kwargs):
+        return next(reads) if path == port_file else original_read_text(path, *args, **kwargs)
 
-    writer = threading.Thread(target=publish, daemon=True)
-    writer.start()
+    monkeypatch.setattr(Path, "read_text", read_text)
     proc = SimpleNamespace(poll=lambda: None, kill=lambda: None, wait=lambda timeout: None)
     monkeypatch.setattr(netproxy.subprocess, "Popen", lambda *_args, **_kwargs: proc)
     started, url = start_relay(tmp_path / "missing.sock", port_file, tmp_path / "relay.log")
-    writer.join(timeout=1)
     assert started is proc and url == "http://127.0.0.1:12345"
 
 
