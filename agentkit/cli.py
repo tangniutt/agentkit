@@ -327,12 +327,15 @@ def build_parser() -> argparse.ArgumentParser:
     fb.add_argument("--input", metavar="FILE|-", help="JSON with the same keys (verify, from[])")
 
     rel = sub.add_parser("release", help="local release: plan | build | verify | rollback (never publishes)")
-    rel.add_argument("action", nargs="?", choices=["plan", "build", "verify", "rollback"], default="plan")
+    rel.add_argument("action", nargs="?", choices=["plan", "build", "verify", "sign", "rollback"], default="plan")
     rel.add_argument("artifact", nargs="?")
     rel.add_argument("--out", default="dist")
     rel.add_argument("--allow-dirty", action="store_true")
     rel.add_argument("--overwrite", action="store_true")
     rel.add_argument("--yes", action="store_true")
+    rel.add_argument("--key", help="private key path for release sign")
+    rel.add_argument("--signature", help="detached signature path")
+    rel.add_argument("--public-key", help="public key path for signature verification")
 
     un = sub.add_parser("uninstall", help="remove agentkit: package, ~/.config + ~/.local/share/agentkit, .agentkit/ + worktrees "
                                         "in every repo it used (dry run unless --yes; never touches your code or git history)")

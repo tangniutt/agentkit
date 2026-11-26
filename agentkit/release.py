@@ -281,7 +281,50 @@ def _check_sdist(path: Path, version: str) -> None:
         raise AKError("release sdist validation failed", str(e), "rebuild the sdist", code="AK-RELEASE-HASH") from e
 
 
+def _external_path(raw: str) -> Path:
+    path = Path(str(raw)).expanduser()
+    return path.resolve() if path.is_absolute() else (Path.cwd() / path).resolve()
+
+
+def _openssl() -> str:
+    executable = shutil.which("openssl")
+    if not executable:
+        raise AKError("OpenSSL is required for release signatures", "install OpenSSL and retry", code="AK-RELEASE")
+    return executable
+
+
+def sign(ctx: Ctx, a) -> Result:
+    if not getattr(a, "artifact", ""):
+        raise AKError("release sign needs SHA256SUMS", "pass dist/SHA256SUMS",
+                      "agentkit release sign dist/SHA256SUMS --key PRIVATE_KEY", code="AK-USAGE")
+    if not getattr(a, "key", ""):
+        raise AKError("release sign needs a private key", "pass --key PRIVATE_KEY",
+                      "agentkit release sign dist/SHA256SUMS --key PRIVATE_KEY", code="AK-USAGE")
+    sums = ctx.resolve(a.artifact)
+    if not sums.is_file():
+        raise AKError("release checksum file is missing", str(sums), "run agentkit release build", code="AK-RELEASE-HASH")
+    key = _external_path(a.key)
+    if not key.is_file():
+        raise AKError("release private key is missing", str(key), "check --key", code="AK-RELEASE")
+    signature = _external_path(a.signature) if getattr(a, "signature", "") else sums.with_name(sums.name + ".sig")
+    command = [_openssl(), "dgst", "-sha256", "-sign", str(key), "-out", str(signature), str(sums)]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
+    except (OSError, subprocess.SubprocessError) as e:
+        raise AKError("release signing failed", str(e), "check OpenSSL and the private key", code="AK-RELEASE") from e
+    if result.returncode != 0:
+        raise AKError("release signing failed", (result.stderr or result.stdout).strip()[-500:],
+                      "check the private key format and permissions", code="AK-RELEASE")
+    return Result({"signed": True, "algorithm": "SHA256", "checksums": ctx.rel(sums),
+                   "signature": str(signature), "sha256": _sha256(signature)})
+
+
 def verify(ctx: Ctx, a) -> Result:
+    signature = getattr(a, "signature", "")
+    public_key = getattr(a, "public_key", "")
+    if bool(signature) != bool(public_key):
+        raise AKError("release signature verification needs both files", "pass --signature and --public-key",
+                      "agentkit release verify dist/release-manifest.json --signature SIG --public-key PUB", code="AK-USAGE")
     manifest_path = ctx.resolve(a.manifest)
     manifest = _load_manifest(manifest_path)
     base = manifest_path.parent
@@ -314,8 +357,25 @@ def verify(ctx: Ctx, a) -> Result:
         if sums.read_text(encoding="ascii").splitlines() != expected:
             raise AKError("release checksum file does not match the manifest", SUMS,
                           "restore SHA256SUMS or rebuild the release", code="AK-RELEASE-HASH")
-    return Result({"verified": True, "trusted": False, "manifest": ctx.rel(manifest_path), "version": manifest["version"],
-                   "git_commit": manifest["git_commit"], "artifacts": checked})
+    summary = {"verified": True, "trusted": False, "manifest": ctx.rel(manifest_path), "version": manifest["version"],
+               "git_commit": manifest["git_commit"], "artifacts": checked}
+    if signature:
+        if not sums.is_file():
+            raise AKError("signed release is missing SHA256SUMS", str(sums), "restore the checksum file", code="AK-RELEASE-HASH")
+        sig_path, key_path = _external_path(signature), _external_path(public_key)
+        if not sig_path.is_file() or not key_path.is_file():
+            raise AKError("release signature or public key is missing", f"{sig_path}, {key_path}",
+                          "check --signature and --public-key", code="AK-RELEASE-HASH")
+        command = [_openssl(), "dgst", "-sha256", "-verify", str(key_path), "-signature", str(sig_path), str(sums)]
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
+        except (OSError, subprocess.SubprocessError) as e:
+            raise AKError("release signature verification failed", str(e), "check OpenSSL", code="AK-RELEASE-HASH") from e
+        if result.returncode != 0:
+            raise AKError("release signature verification failed", (result.stderr or result.stdout).strip()[-500:],
+                          "restore the original signature and public key", code="AK-RELEASE-HASH")
+        summary.update({"signature_verified": True, "signature_sha256": _sha256(sig_path), "algorithm": "SHA256"})
+    return Result(summary)
 
 
 def _installed_version() -> str:
@@ -434,6 +494,8 @@ def cmd_release(ctx: Ctx, a) -> Result:
         return build(ctx, a)
     if command == "verify":
         return verify(ctx, a)
+    if command == "sign":
+        return sign(ctx, a)
     if command == "rollback":
         return rollback(ctx, a)
-    raise AKError(f"unknown release subcommand '{command}'", "use plan|build|verify|rollback", "agentkit release --help", code="AK-USAGE")
+    raise AKError(f"unknown release subcommand '{command}'", "use plan|build|verify|sign|rollback", "agentkit release --help", code="AK-USAGE")

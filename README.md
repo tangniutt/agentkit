@@ -115,9 +115,10 @@ AI 代用户报 Bug / 提需求：先搜已有 Issue，**先问人类用户**（
 
 - `agentkit release plan`：只读显示版本、git 提交、产物目录和构建计划。
 - `agentkit release build`：要求干净 git 工作树，构建 wheel/sdist、`SHA256SUMS` 和 `release-manifest.json`；`--allow-dirty` 仅用于测试构建，`--overwrite` 需显式确认。
-- `agentkit release verify dist/release-manifest.json`：校验文件哈希、大小、wheel METADATA/必需模块和 sdist 安全路径，不导入或执行 artifact；`trusted:false` 表示哈希不证明发布来源。
+- `agentkit release verify dist/release-manifest.json`：校验文件哈希、大小、wheel METADATA/必需模块和 sdist 安全路径，不导入或执行 artifact；`trusted:false` 表示哈希不证明发布来源。可加 `--signature SHA256SUMS.sig --public-key public.pem` 校验分离式签名。
+- `agentkit release sign dist/SHA256SUMS --key private.pem`：用系统 OpenSSL 对校验和文件做 SHA256 分离式签名，默认输出 `SHA256SUMS.sig`；私钥路径由用户提供，不写入仓库或日志。
 - `agentkit release rollback dist/release-manifest.json`：默认只显示安装计划；`--yes` 才安装私有暂存副本，使用隔离 pip 环境。Windows 控制台运行时采用退出后 helper 安装，并写入 `rollback-VERSION-result.json`。
-- 发布命令不推送、不发布、不签名，也不会自动升级用户环境；回滚保留 `.agentkit/` 状态。
+- 发布命令不自动签名、不推送、不发布，也不会自动升级用户环境；回滚保留 `.agentkit/` 状态。
 
 ## 文档
 - [PRD v1.0：可信执行与进化底座](docs/prd-v1.0.md)（目标需求，C-15 至 C-20）

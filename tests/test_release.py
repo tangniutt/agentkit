@@ -4,6 +4,7 @@
 import io
 import json
 import shutil
+import subprocess
 import tarfile
 import zipfile
 from pathlib import Path
@@ -27,7 +28,8 @@ def _ctx(root: Path) -> Ctx:
 
 
 def _args(**kw):
-    base = {"out": "dist", "allow_dirty": False, "overwrite": False, "manifest": "dist/release-manifest.json", "yes": False}
+    base = {"out": "dist", "allow_dirty": False, "overwrite": False, "manifest": "dist/release-manifest.json",
+            "artifact": "", "key": "", "signature": "", "public_key": "", "yes": False}
     base.update(kw)
     return SimpleNamespace(**base)
 
@@ -73,6 +75,37 @@ def test_release_build_and_verify_roundtrip(tmp_path, monkeypatch):
     assert manifest.exists() and (tmp_path / "dist" / release.SUMS).exists()
     verified = release.verify(_ctx(tmp_path), _args())
     assert verified.data["verified"] is True and verified.data["trusted"] is False and len(verified.data["artifacts"]) == 2
+
+
+def test_release_sign_and_verify_with_openssl(tmp_path, monkeypatch):
+    openssl = shutil.which("openssl")
+    if not openssl:
+        pytest.skip("OpenSSL is unavailable")
+    _project(tmp_path)
+    monkeypatch.setattr(release, "_git_state", lambda _root: {"commit": "a" * 40, "dirty": False, "epoch": 1})
+    monkeypatch.setattr(release, "_run_build", _fake_build)
+    release.build(_ctx(tmp_path), _args())
+    private, public = tmp_path / "private.pem", tmp_path / "public.pem"
+    subprocess.run([openssl, "genpkey", "-algorithm", "RSA", "-pkeyopt", "rsa_keygen_bits:2048", "-out", str(private)],
+                   check=True, capture_output=True, timeout=30)
+    subprocess.run([openssl, "pkey", "-in", str(private), "-pubout", "-out", str(public)],
+                   check=True, capture_output=True, timeout=30)
+    signed = release.sign(_ctx(tmp_path), _args(artifact="dist/SHA256SUMS", key=str(private)))
+    assert signed.data["signed"] is True and signed.data["algorithm"] == "SHA256"
+    signature = tmp_path / "dist" / (release.SUMS + ".sig")
+    verified = release.verify(_ctx(tmp_path), _args(signature=str(signature), public_key=str(public)))
+    assert verified.data["signature_verified"] is True and verified.data["trusted"] is False
+    sums = tmp_path / "dist" / release.SUMS
+    sums.write_text(sums.read_text(encoding="ascii") + "tampered\n", encoding="ascii")
+    with pytest.raises(AKError) as error:
+        release.verify(_ctx(tmp_path), _args(signature=str(signature), public_key=str(public)))
+    assert error.value.code == "AK-RELEASE-HASH"
+
+
+def test_release_signature_requires_both_files(tmp_path):
+    with pytest.raises(AKError) as error:
+        release.verify(_ctx(tmp_path), _args(signature="sig"))
+    assert error.value.code == "AK-USAGE"
 
 
 def test_release_required_files_match_source():

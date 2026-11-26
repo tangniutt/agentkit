@@ -6,7 +6,7 @@ AgentKit: token-frugal coding tools for AI agents + optional cheap worker with i
 
 Global options: --budget N (output tokens, default 2000), --human (text), --root DIR; anywhere on the line.
 
-JSON form: `agentkit manual` (overview, ~1792 tokens), `agentkit manual <command>` (one command), `agentkit manual --all` (everything, ~4959 tokens).
+JSON form: `agentkit manual` (overview, ~1792 tokens), `agentkit manual <command>` (one command), `agentkit manual --all` (everything, ~4978 tokens).
 
 ## Quick start (supervisor)
 
@@ -972,7 +972,7 @@ draft only; --improve adds evidence; dedup first
 
 ### `agentkit release`
 
-artifacts; never publishes
+artifacts/signatures; never publishes
 
 | arg | type | default | notes |
 |---|---|---|---|
@@ -982,8 +982,11 @@ artifacts; never publishes
 | `--allow-dirty` | bool |  |  |
 | `--overwrite` | bool |  |  |
 | `--yes` | bool |  |  |
+| `--key` | str |  | private key path for release sign |
+| `--signature` | str |  | detached signature path |
+| `--public-key` | str |  | public key path for signature verification |
 
-- **Output `data`:** `version,manifest,artifacts,verified?,installed?`
+- **Output `data`:** `version,manifest,artifacts,verified?,signature_verified?,signed?,installed?`
 - **Errors:** `AK-RELEASE` (release operation failed), `AK-RELEASE-HASH` (artifact or manifest invalid)
 - **Side effects:** state, exec, net
 - **Example:** `agentkit release plan`
