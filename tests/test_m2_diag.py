@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """C-03 diagnosability (run ids, error codes, event logs, logs/debug-bundle, AK-INTERNAL) and C-04 feedback."""
 import json
+import os
 import re
 import tarfile
 import urllib.parse
@@ -125,6 +126,7 @@ def test_debug_bundle_redacted(ak, repo):
     assert b"X_KEY" in blob and b"agentkit" in blob
 
 
+@pytest.mark.skipif(os.name != "posix", reason="dispatch mode requires Linux")
 def test_task_failure_shows_code_component_step_and_log(ak, repo, fake):
     from test_m2_tasks import project, create, wait
 
@@ -179,4 +181,4 @@ def test_issue_templates_match_feedback_fields():
     cfg = yaml.safe_load((t / "config.yml").read_text())
     assert cfg["blank_issues_enabled"] is False
     for doc in ("llms.txt", "AGENTS.md", "CONTRIBUTING.md"):
-        assert "agentkit feedback" in (ROOT / doc).read_text(), doc
+        assert "agentkit feedback" in (ROOT / doc).read_text(encoding="utf-8"), doc

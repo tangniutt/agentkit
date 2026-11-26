@@ -3,6 +3,7 @@
 """C-12 AI feedback loop: --improve drafts with redacted evidence, dedupe keywords + search URL,
 at most one feedback hint on runs with a signal (none on clean runs), improvement form, issue-triage workflow."""
 import json
+import os
 import re
 import sys
 import urllib.parse
@@ -158,6 +159,7 @@ def test_no_signal_on_ordinary_runs(tmp_path, case):
     assert diag.signal(tmp_path, "tdef456") is None and diag.feedback_hint(tmp_path, "tdef456") is None
 
 
+@pytest.mark.skipif(os.name != "posix", reason="dispatch mode requires Linux")
 def test_clean_task_has_no_hint_and_stuck_task_has_one(ak, repo, fake):
     from test_m2_tasks import FIX, create, project, wait
 
@@ -206,8 +208,8 @@ def test_issue_forms_carry_ai_fields():
     for name in ("bug_report.yml", "feature_request.yml"):
         assert "filed_via" in {b.get("id") for b in _form(name)["body"]}, name
     for doc in ("llms.txt", "AGENTS.md", "CONTRIBUTING.md", "docs/agent-manual.md"):
-        assert "feedback --improve" in (ROOT / doc).read_text(), doc
-    t = (ROOT / "docs" / "triage.md").read_text()
+        assert "feedback --improve" in (ROOT / doc).read_text(encoding="utf-8"), doc
+    t = (ROOT / "docs" / "triage.md").read_text(encoding="utf-8")
     for word in ("needs-eval", "accepted", "declined", "duplicate", "needs-info", "C-xx", "许可证"):
         assert word in t
 

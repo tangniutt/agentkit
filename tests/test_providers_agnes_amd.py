@@ -4,6 +4,7 @@
 busy models with 429 model_concurrency_rate_limit_exceeded + Retry-After 1, and Qwen3.8 reasoning models put
 their text in `reasoning` (not reasoning_content). Also the hardcoded_return_suspect false alarm on base cases."""
 import json
+import os
 
 import pytest
 
@@ -112,6 +113,7 @@ def test_nested_error_in_200_body_and_auth(fake, keyenv):
     assert e.value.kind == "auth" and "invalid key" in str(e.value) and len(fake.served_before) == 1
 
 
+@pytest.mark.skipif(os.name != "posix", reason="dispatch mode requires Linux")
 def test_worker_pauses_on_busy_model_resumable(ak, repo, fake):
     project(repo, ak, fake, model_cfg="max_wait = 0.1")
     fake.add("[BUSY]", [{"call": "read", "args": {"spec": "calc.py"},
@@ -131,6 +133,7 @@ def test_model_test_reasoning_field(ak, repo, fake):
     assert r["ok"] and r["data"]["reasoning_only"] is True, r
 
 
+@pytest.mark.skipif(os.name != "posix", reason="dispatch mode requires Linux")
 def test_worker_never_sends_reasoning_field_back(ak, repo, fake):
     project(repo, ak, fake)
     steps = [dict(FIX[0], reasoning="read first", reasoning_key="reasoning"),
@@ -160,6 +163,7 @@ def test_hardcode_base_case_not_flagged():
     assert _hardcode_suspect("    if n == 0:", '        return "zero bytes"', goal)
 
 
+@pytest.mark.skipif(os.name != "posix", reason="dispatch mode requires Linux")
 def test_hardcode_base_case_end_to_end_no_flag(ak, repo, fake):
     """Regression (NVIDIA dogfood 2026-11-23): a correct human_bytes() with `if n == 0: return "0 B"` was flagged."""
     project(repo, ak, fake)
@@ -174,6 +178,7 @@ def test_hardcode_base_case_end_to_end_no_flag(ak, repo, fake):
     assert tjson(repo, tid)["verdict"] == "pass"
 
 
+@pytest.mark.skipif(os.name != "posix", reason="dispatch mode requires Linux")
 def test_same_error_in_parallel_calls_counts_once(ak, repo, fake):
     """Agnes real run (ev-rename, compression on): one reply carried 3 edits whose old text was not found; they were
     counted as 'same error 3x' and the task failed (not resumable) although the fix was already in place."""

@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import json
-import os
+from pathlib import Path
 from typing import Optional
 
 from .core import Ctx
@@ -23,15 +23,19 @@ def load(ctx: Ctx) -> dict:
 
 
 def record(ctx: Ctx, rel: str, sha: Optional[str]) -> None:
-    d = load(ctx)
-    if sha is None:
-        d.pop(rel, None)
-    else:
-        d[rel] = sha
+    from .core import AKError, atomic_write, file_lock
+
+    if not isinstance(rel, str) or not rel or Path(rel).is_absolute() or ".." in Path(rel).parts:
+        raise AKError("invalid state path", "ledger keys must be repo-relative paths", None, code="AK-PATH")
+    ctx.state_path("state", create=True)
     p = _path(ctx)
-    tmp = p.with_suffix(".tmp")
-    tmp.write_text(json.dumps(d))
-    os.replace(tmp, p)
+    with file_lock(ctx.state_path("state", "reads.lock")):
+        d = load(ctx)
+        if sha is None:
+            d.pop(rel, None)
+        else:
+            d[rel] = sha
+        atomic_write(p, json.dumps(d, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
 
 
 def last_seen(ctx: Ctx, rel: str) -> Optional[str]:

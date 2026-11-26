@@ -1,4 +1,4 @@
-# AgentKit (M2 Python prototype)
+# AgentKit (productionization in progress: M2 + P0 trust layer + Goal/MCP v1)
 
 > Token-frugal coding tools for AI agents, plus an optional built-in worker you can dispatch tasks to.
 > Every command prints ONE line of compact JSON:
@@ -17,9 +17,41 @@ agentkit doctor            # healthy:true = ready. version, git, write permissio
 agentkit uninstall         # prints what would be removed; agentkit uninstall --yes removes package, config, .agentkit/ state and worktrees (never your code or git history)
 
 ## Operating manual (for a supervising AI; generated from the CLI, cannot drift)
-agentkit manual                 # quick start, direct vs delegate, safety rules, error recovery, command index (~1.7k tokens)
+agentkit manual                 # quick start, direct vs delegate, safety rules, error recovery, command index (~1.9k tokens)
 agentkit manual task create     # one command or group: args (type/default), output keys, error codes, side effects, example
-agentkit manual --all --budget 4500   # everything (~3.7k tokens); Markdown copy: docs/agent-manual.md
+agentkit manual --all --budget 5000   # everything (~4.8k tokens); Markdown copy: docs/agent-manual.md
+agentkit mcp                          # MCP stdio server; tools + dynamic task/Goal resources + cursor pagination
+# MCP 2025-06-18/2025-11-25: resources/subscribe + notifications/resources/updated|list_changed. MCP 2026-07-28 is explicitly unsupported (-32022).
+
+## Local release and rollback
+agentkit release plan                 # read-only version/git/artifact plan
+agentkit release build                # clean tree: wheel + sdist + SHA256SUMS + release-manifest.json
+agentkit release verify dist/release-manifest.json  # hashes, sizes, wheel metadata/modules, safe sdist paths; trusted:false
+agentkit release rollback dist/release-manifest.json  # dry run; add --yes to install a private staged copy with isolated pip, preserves .agentkit state
+# Build never pushes/publishes/signs. Windows console rollback schedules a helper after agentkit.exe exits and writes rollback-VERSION-result.json.
+
+## Worker backends
+- Integration boundary: scriptable official CLI/API/RPC/MCP coding tools only. No GUI automation, computer-use tools, or Windows-sandbox emulation. Production target is Linux VPS.
+- API-key models: `agentkit model add NAME --base-url URL --model ID --key-env VAR`, then `task create --backend builtin`.
+- Codex CLI: configure `[workers.codex]` (`command`, `model`, optional `key_env`, `sandbox`, `price_in/price_out`), then `task create --backend codex`.
+- OpenCode V1: configure `[workers.opencode]` (`command`, `model=provider/model`), then `task create --backend opencode`; official `run --format json`, shell/network tools/subagents/project config disabled by default.
+- OpenCode V2: set `version = "v2"` and optionally `model = "opencode/beam-free"`; official signed-out free models require no login. AgentKit uses `--standalone run --format json`, V2 `permissions/policies`, and isolated data/cache/state directories. Free-limit 429s pause for resume; no quota bypass. Saved account login requires explicit `allow_account_login = true`. A real V2 2.4.2 minimal task verified token/session parsing.
+- Qoder CLI account: install the official CLI. AgentKit defaults to a dedicated `XDG_CONFIG_HOME/agentkit/qoder` directory rather than `~/.qoder`; set `QODER_CONFIG_DIR=<that directory>` before `qodercli login`, or explicitly configure `[workers.qoder].config_dir`. `QODER_PERSONAL_ACCESS_TOKEN` is also supported. AgentKit calls the CLI only, never reads or exports credentials; telemetry, project config, MCP, shell, network tools and subagents are disabled.
+- Cursor CLI: configure `[workers.cursor]` and set `CURSOR_API_KEY` (or a dedicated `key_env`), then `task create --backend cursor --budget-minutes N`. AgentKit uses official `agent --print --output-format stream-json`, an isolated config directory, resume sessions and a deny policy for shell/web/MCP/secrets. CLI stream-json has no token/cost fields, so token/USD budgets are rejected. Optional `transport = "sdk"` (`pip install -e '.[cursor]'`, explicit `model` required) uses the official proprietary Python SDK with tool allowlists, resume, runtime token usage and per-run cost; missing usage still rejects token budgets and USD hard caps remain unsupported. Real authenticated runs remain unverified.
+- Codex/OpenCode/Qoder report usage and support token/USD budgets when prices are known; Cursor CLI supports round/time budgets only, while Cursor SDK supports token budgets when usage is reported. All external backends require bubblewrap unless test-only `allow_unsandboxed=true`.
+- Sandbox network: `[sandbox] network=true` shares host networking, `false` has no network, and `["api.openai.com"]` creates an isolated namespace with a domain/TLS-SNI allowlist proxy. Clients must use `HTTP_PROXY`/`HTTPS_PROXY`; direct outbound connections are blocked, duplicate Host/pipelined requests are rejected, plain HTTP requires `Content-Length` (chunked uploads are rejected), resolved domain addresses must be globally routable, and restricted modes refuse to start if bubblewrap is unavailable.
+- Antigravity consumer login is not wrapped. Cursor uses its own official headless adapter with API-key-only isolated config. No proxying, account rotation or shared login tokens.
+
+## Code intelligence (optional XERJ)
+agentkit code search "retry policy"    # auto: XERJ when configured/available, otherwise builtin
+agentkit code defs ChatClient          # symbol definitions with file:line and signature
+agentkit code refs add --path calc.py  # LSP semantic references when configured; otherwise labeled lexical fallback
+# Configure [codeintel.lsp.python] command=["pylsp"] (or another stdio LSP server). No third-party LSP code is bundled.
+agentkit code index . --prefix agentkit # requires a running XERJ node; engine is Apache-2.0
+agentkit code memory store project "use pytest"
+agentkit code memory recall project "test command"
+# XERJ Query-1 is NOT required or used. Default XERJ embeddings are lexical, not neural.
+python -m eval.codeintel_bench --root . --backends builtin,xerj --prefix agentkit
 
 ## Direct mode workflow (you write the code)
 agentkit memory brief                      # AGENTS.md head + pinned project memories (≤500 tokens)
@@ -54,12 +86,15 @@ agentkit model add nim --preset nvidia --model nvidia/nemotron-3.5-lightning-30b
     # daily points reset 00:00 Beijing); busy-model 429s are retried a few times, then the task pauses (task resume)
 agentkit model list | test [NAME] | remove NAME
 agentkit task create "fix the failing test in calc.py" --check "pytest -q" [--allow src/] \
-    [--budget-tokens N] [--budget-usd X] [--budget-minutes M] [--tier low|mid|high] [--model NAME]
+    [--backend builtin|codex|opencode|qoder] [--budget-tokens N] [--budget-usd X] [--budget-minutes M] [--tier low|mid|high] [--model NAME]
     # needs a git repo with a commit; worker runs in its own worktree/branch agentkit/<id>; identical submissions dedupe
+    # builtin uses OpenAI-compatible API-key models; codex/opencode/qoder use official headless JSONL and require sandbox
+    # default acceptance requires the checks to fail on the base commit and pass after the fix (--allow-baseline-pass to override)
 agentkit task status [ID..]                # <100 tokens each: status, queue pos, rounds, tokens, usd, verdict, code
 agentkit task wait ID [ID..] --timeout 600 # one finished task: the report comes back inline (no extra call)
 agentkit task report ID                    # ≤300 tokens, same shape as verify; verdict pass|fail|invalid|needs_review
-agentkit task resume ID [--budget-tokens N] # paused (429/timeout) | interrupted | stopped: continue in the same worktree
+agentkit task resume ID [--model NAME] [--backend builtin|codex|opencode|qoder] [--budget-tokens N] # same worktree; optional worker switch
+agentkit task handoff ID [--model NAME] [--backend builtin|codex|opencode|qoder] # preserves worktree, diff, memory and cumulative budgets
     # needs_review = checks passed but anti-cheat flags fired (tests_deleted/modified/skipped, check_script_modified,
     # test_config_modified, outside_allow, worker_committed, denied_commands, path_escape, hardcoded_return_suspect)
     # The verifier re-runs the checks in a clean worktree; the worker's claim is never trusted.

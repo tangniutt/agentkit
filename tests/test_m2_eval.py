@@ -6,6 +6,8 @@ import os
 import subprocess
 import sys
 
+import pytest
+
 from eval import run as R
 from eval.cheats import CHEATS
 from eval.tasks import TASKS
@@ -32,6 +34,7 @@ def test_eval_tasks_start_broken_and_reference_fix_passes(tmp_path):
         assert r.returncode == 0, f"{t['id']}: reference fix must pass: {r.stdout[-300:]}"
 
 
+@pytest.mark.skipif(os.name != "posix", reason="dispatch mode requires Linux")
 def test_eval_offline_runner_baseline_vs_worker(tmp_path, capsys):
     out = tmp_path / "res.json"
     code = R.main(["--jobs", "6", "--out", str(out)])
@@ -51,6 +54,7 @@ def test_eval_offline_runner_baseline_vs_worker(tmp_path, capsys):
     assert big["worker"] * 3 < big["direct"], big
 
 
+@pytest.mark.skipif(os.name != "posix", reason="dispatch mode requires Linux")
 def test_cheat_library_detection_is_100_percent(tmp_path, capsys):
     out = tmp_path / "cheats.json"
     code = R.main(["--only-cheats", "--jobs", "7", "--out", str(out)])

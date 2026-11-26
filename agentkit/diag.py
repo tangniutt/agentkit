@@ -165,7 +165,7 @@ def build_bundle(ctx: Ctx, rid: str, with_transcript: bool = False) -> tuple:
         files["crash.log"] = crash.read_text(errors="replace")
     if rid.startswith("t"):
         td = ctx.root / ".agentkit" / "tasks" / rid
-        for name in ("task.json", "report.json", "worker.log") + (("transcript.jsonl",) if with_transcript else ()):
+        for name in ("task.json", "report.json", "receipt.json", "worker.log") + (("transcript.jsonl",) if with_transcript else ()):
             p = td / name
             if p.exists():
                 files[name] = p.read_text(errors="replace")[-400_000:]

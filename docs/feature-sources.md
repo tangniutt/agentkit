@@ -13,6 +13,7 @@
 | [SWE-agent](https://github.com/SWE-agent/SWE-agent) | MIT | ~2.1 万星 | Python | 窗口式读文件、编辑后 lint 拒写、filemap | 可以 |
 | [Aider](https://github.com/Aider-AI/aider) | Apache-2.0 | ~5 万星 | Python | tree-sitter 仓库地图、编辑格式、lint | 可以（保留 NOTICE） |
 | [XERJ](https://github.com/xerj-org/xerj) | Apache-2.0 | ~1.9 万星 | Rust | 代码搜索 / 定义 / 引用、记忆、输出预算 | 可以；Query-1 模型闭源，只能作为可选组件 |
+| [pi](https://github.com/earendil-works/pi) | MIT | v1.6.1（2026-11-25） | TypeScript | 极简 agent harness、四工具默认集、树状会话、结构化压缩、JSONL/RPC | 可以；本轮只借鉴设计，不复制代码 |
 | [Grok Workhorse](https://github.com/mrchatam/Grok-workhorse) | MIT | 5 星，较新 | JavaScript | 主管派活 MCP 接口、守护进程跑测试、工人不能 push | 可以 |
 | [worker-bridge](https://github.com/trollbot2012/worker-bridge) | MIT | 0 星，较新 | Python | 独立 worktree、独立验证 diff、并发限制、日志脱敏 | 可以 |
 | [LooppooL](https://github.com/Penty-d/LooppooL) | MIT | 0 星，较新 | TypeScript | 「验证者假设工人会撒谎」、模型分档、预算上限 | 可以 |
@@ -118,6 +119,51 @@ Qoder 记忆系统闭源，但其文档和技术博客公开了设计；jcode �
 | 按需取单个对象的说明，避免一次读全部 | Kubernetes `kubectl explain <resource>[.field]`（Apache-2.0） | 主管只取它要用的命令详情，省 token | `agentkit manual <命令>`（单命令约 90–370 token） |
 | 错误码 → 修复动作 | 本项目 C-03 错误码登记表 | 手册的「错误恢复」直接读 `events.ERRORS`，不另写一份 | `manual.recover()` |
 
+### G. 可替换代码智能（变更 C-18）
+
+| 功能 | 借鉴 | 许可证 | 实现 |
+|---|---|---|---|
+| 文件夹索引、代码检索、定义查询 | XERJ `autoindex` / `search` / `def` | 引擎 Apache-2.0 | `agentkit/codeintel.py` 的 `XerjBackend` |
+| 记忆存取 | XERJ `/_memory` Elasticsearch-compatible API | 引擎 Apache-2.0 | `memory_store` / `memory_recall` |
+| 无 XERJ 时回退 | 本项目 rg + tree-sitter | Apache-2.0 | `BuiltinBackend` |
+| 统一后端选择 | 自研窄接口 | — | `backend=auto\|builtin\|xerj` |
+
+来源：<https://github.com/xerj-org/xerj>、<https://xerj.org/llms.txt>。只调用公开 CLI/HTTP，不复制代码。Query-1 是独立专有模型，本项目不依赖；默认 XERJ embedding 是词法特征，不是神经语义。验证使用 SHA-256 核验的 rc.105 Windows 二进制、临时节点和样例仓库，真实执行 search/def/memory store/recall。`eval.codeintel_bench` 在同一 AgentKit 仓库上对比内置与 XERJ 的 recall@5、MRR、返回字符和延迟；XERJ 原始 JSON 的大响应由适配层按 `--full` 截断。静态复核确认上游 MCP 已有词法 `xerj_references`，但不解析 alias/同名符号/调用边，注释与字符串也计入；AgentKit 尚未暴露或实测该接口。语义引用仍应走 LSP，结构匹配走 ast-grep。
+
+### H. pi 极简 harness 设计（2026-11-26 核验）
+
+| 功能 | 借鉴 | 许可证 | 实现 / 结论 |
+|---|---|---|---|
+| 默认四工具与按需工具 | pi `createCodingTools`、`--tools` | MIT | AgentKit 保留现有工具与验收契约；先测前缀和轮次，不按工具数量盲目删功能 |
+| 稳定分层系统提示 | pi `system-prompt.ts` | MIT | 已有稳定前缀；后续增加前缀体积与缓存命中评测 |
+| 树状会话与活动分支重放 | pi `session-manager.ts` | MIT | Goal/task 已有 worktree 与结构化 resume；V1.1 评估分支会话，不重放供应商 thought signature |
+| 结构化压缩 | pi `compaction.ts` / `utils.ts` | MIT | 已有规则老化与 70% 兜底；借鉴 Goal/Constraints/Progress/Decisions/Next Steps 摘要格式 |
+| 工具结果上限 | pi read/bash 50 KB、2,000 行；摘要序列化 2,000 字符 | MIT | 已有输出预算与过滤器；补真实任务的 token/轮次 A/B |
+| 无内置沙箱 | pi `security.md` | MIT | **不借鉴**；外部工人必须经过 AgentKit 权限、沙箱、独立验收 |
+
+来源：<https://github.com/earendil-works/pi>、<https://github.com/earendil-works/pi/blob/v1.6.1/packages/coding-agent/docs/how-pi-works.md>、<https://github.com/earendil-works/pi/blob/v1.6.1/packages/coding-agent/docs/compaction.md>、<https://github.com/earendil-works/pi/blob/v1.6.1/packages/coding-agent/docs/security.md>。本轮临时安装 v1.6.1，用本地假 OpenAI 兼容服务器真实执行 JSON mode，核验 session/message/tool/agent_settled 事件；未复制代码，NOTICE 不变。
+
+### I. 外部编程工具接力接口核验（2026-11-26）
+
+| 工具 | 官方接口 | 可借鉴 / 结论 |
+|---|---|---|
+| Antigravity CLI | `agy -p`、`--output-format json\|stream-json`、`agy acp` | headless 技术可行，JSON 有 status/response/usage，stream-json 有工具事件；但官方 FAQ 明确 consumer 计划不支持第三方包装 `agy`，AgentKit 不接 consumer 登录态 |
+| Codex CLI | `codex exec --json`、`codex exec resume`、官方 Python SDK 控制 `codex app-server` | v0.172.0 已核验 JSONL、thread resume、output schema、read-only/workspace-write 沙箱与 usage；`agentkit/backends.py` 已实现 exec JSONL 适配、usage/预算、取消和 builtin↔Codex 接力。无内置总超时，旧 MCP server 已移除；使用工具自身认证，不提取登录态，不反代后端 |
+| OpenCode | `opencode run --format json --dir DIR --model provider/model [--session ID]` | v1.19.6（commit `f4e363c8295fa90a03dddc451882fffe8fbce357`，MIT）已核验 JSONL、`step_finish.part.tokens/cost`、V1 `permission` 与最后匹配优先规则，并用真实 `debug config` 确认注入策略原样解析；适配器禁用项目配置、插件、网络工具、子 Agent，默认禁用 shell，支持预算/续跑/接力。当前 dev/V2 的 `--standalone/--archived` 不用于稳定版。2026-11-26 官方 providers 文档确认：当前版本凭证存于本地 SQLite（通常 `~/.local/share/opencode/opencode.db`），`XDG_DATA_HOME` 与 `OPENCODE_DB` 可改变路径；旧版使用数据目录中的 `auth.json`。因此默认必须隔离数据目录，环境变量 API Key 不写入凭证库。2026-11-26 官方 V2 2.4.2 二进制进一步核验：`opencode run` 仅支持 `--format default|json`（JSON 仍为逐行事件），凭 `cwd` 定位仓库，支持 `--standalone/--session/--model`；隔离环境无需登录即可列出 `opencode/beam-free`、`opencode/hy4-flash-free` 等免费模型，但免费额度用完会返回 `provider.free-limit`/429，官方建议连接 provider、订阅 Go 或切换模型，不允许绕过限额。V2 权限字段改为 `permissions`/`shell`/`subagent`，并新增 `policies` 硬拒绝；现有 V1 适配器不能直接用于 V2。 |
+| Qoder CLI | `qodercli --print --output-format stream-json --permission-mode dont_ask --setting-sources user --strict-mcp-config` | 1.1.98（npm 官方包，Apache-2.0）已核验帮助与公开 SDK 契约：`system/init`、`assistant.message.usage`、`result.subtype/error_code/permission_denials`、session resume；适配器复用官方账号登录或 PAT，不读取凭证，PAT 注册进日志脱敏，禁用遥测/项目配置/MCP/shell/网络工具/子 Agent，记录 token 与请求 Credits。真实账号任务尚未执行 |
+| Cursor CLI / SDK | `agent -p/--print`、`--output-format stream-json`、`--resume`、`CURSOR_API_KEY`；可选 `cursor-sdk` 的 `Agent.create/resume/send/get_usage` | 2026-11-26 官方 headless/output/auth/parameters 与 Python SDK 1.5.2 文档及安装包签名已核验：CLI 适配器使用独立配置、默认权限和 Shell/WebFetch/MCP/密钥 deny，不读取登录态、不用 `--force`；SDK 为可选专有依赖（不 vendored），支持本地工具白名单、setting_sources、session resume、TokenUsage 与 UsageCost。CLI 与 SDK 均未完成真实 API Key 任务；CLI 无 token/成本字段，SDK 未报告用量时拒绝 token 预算，USD 硬预算均不支持 |
+
+来源：<https://antigravity.google/docs/cli/headless/>、<https://antigravity.google/docs/faq/>、<https://github.com/openai/codex/blob/main/docs/exec.md>、<https://github.com/anomalyco/opencode/tree/v1.19.6>、<https://opencode.ai/docs/cli/providers/>、<https://opencode.ai/docs/>、<https://opencode.ai/docs/cli/>、<https://opencode.ai/docs/permissions/>、<https://opencode.ai/docs/policies/>、<https://opencode.ai/docs/console/go/>、<https://docs.qoder.com/cli/run-in-scripts>、<https://docs.qoder.com/cli/authentication>、<https://docs.qoder.com/cli/sdk/references-typescript>、<https://cursor.com/docs/cli/headless>、<https://cursor.com/docs/cli/reference/output-format>、<https://cursor.com/docs/cli/reference/permissions>、<https://cursor.com/docs/cli/reference/authentication>、<https://cursor.com/docs/cli/using>、<https://cursor.com/docs/sdk/python>。本轮未复制代码，NOTICE 不变；真实接入须逐账号/计划核实服务条款。
+
+### J. LSP 窄客户端（2026-11-26 核验）
+
+| 功能 | 借鉴 | 许可证 | 实现 / 结论 |
+|---|---|---|---|
+| stdio JSON-RPC 生命周期 | Serena SolidLSP `ls_request.py` / `ls.py` / `initialize_params.py` | 文件头 MIT；Serena 主体 GitHub NOASSERTION | 只读参考接口边界，未复制代码；自研 `agentkit/lsp.py`，支持 Content-Length 帧、initialize/didOpen/definition/references/shutdown、UTF-16 坐标、超时和进程清理 |
+| 语义引用与回退 | LSP 3.17 `textDocument/references` | 协议规范 | `agentkit code refs` 优先使用配置的 stdio LSP，否则返回 `semantic:false` 的词法引用；真实 pylsp/多语言服务器矩阵待测 |
+
+来源：<https://github.com/oraios/serena/tree/main/src/solidlsp>、<https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/>。NOTICE 不变。
+
 ## 三、开工克隆清单（已克隆到开发环境）
 
-jcode、mini-swe-agent、SWE-agent、Aider、XERJ、Grok Workhorse、worker-bridge、LooppooL 、OmniRoute（C-08）已浅克隆（只取最新版本），仅供阅读参考，不提交到本仓库。M1 原型以 mini-swe-agent 的循环 + SWE-agent 的工具 + Aider 的仓库地图为骨架；M4 正式版参考 jcode 的 Rust 架构。
+jcode、mini-swe-agent、SWE-agent、Aider、XERJ、Grok Workhorse、worker-bridge、LooppooL 、OmniRoute（C-08）已浅克隆（只取最新版本），仅供阅读参考，不提交到本仓库。pi v1.6.1、OpenCode v1.19.6 与 Qoder CLI 1.1.98 临时安装在开发机用户临时目录（非全局、非仓库内），仅用于接口核验；Qoder 包已检查 postinstall 后未执行。M1 原型以 mini-swe-agent 的循环 + SWE-agent 的工具 + Aider 的仓库地图为骨架；M4 正式版参考 jcode 的 Rust 架构。

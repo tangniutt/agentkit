@@ -270,7 +270,8 @@ class ChatClient:
         req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers=headers, method="POST")
         host = (urllib.parse.urlsplit(url).hostname or "").lower()
         opener = (urllib.request.build_opener(urllib.request.ProxyHandler({}))
-                  if host in ("127.0.0.1", "localhost", "::1") else urllib.request.build_opener())
+                  if host in ("127.0.0.1", "localhost", "::1") and os.environ.get("AGENTKIT_NETWORK_MODE") != "allowlist"
+                  else urllib.request.build_opener())
         try:
             with opener.open(req, timeout=timeout) as r:
                 raw = r.read().decode("utf-8", "replace")
@@ -306,6 +307,8 @@ class ChatClient:
             if isinstance(e.reason, (socket.timeout, TimeoutError)):
                 raise ModelError("timeout", f"no response in {timeout:g}s")
             raise ModelError("network", redact_text(str(e.reason))[:200])
+        except OSError as e:
+            raise ModelError("network", redact_text(str(e))[:200])
         try:
             data = json.loads(raw)
         except ValueError:

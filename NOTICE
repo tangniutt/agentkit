@@ -109,3 +109,6 @@ validation.ts, prefixFreeze / cache-aware config and output-style ("caveman" ter
 https://github.com/rtk-ai/rtk) command-aware filters as data with inline tests and raw-output recovery.
 
 Runtime dependency (not vendored): tree-sitter-language-pack (MIT/Apache-2.0 per grammar).
+Optional external integration (not vendored): cursor-sdk 1.5.2 is proprietary software by Cursor,
+installed only through the explicit `.[cursor]` extra. AgentKit calls its public API and does not
+copy or redistribute its source; users must evaluate and accept its license before installation.

@@ -208,6 +208,8 @@ def _remove_repo_state(root: Path, plan: dict, delete_branches: bool) -> dict:
             except OSError:
                 pass
         done["kept_tracked"] = len(plan["kept_tracked"])
+    if (root / ".git").exists():
+        _git(root, "worktree", "prune")
     return done
 
 

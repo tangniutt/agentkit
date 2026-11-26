@@ -11,8 +11,8 @@ import sys
 import tempfile
 
 from . import __version__
-from .config import model_configured, user_config_path
-from .core import AKError, Ctx, Result
+from .config import model_configured
+from .core import Ctx, Result
 
 
 def _check(name, ok, value, fix=None):
@@ -60,6 +60,50 @@ def cmd_doctor(ctx: Ctx, a) -> Result:
     model = model_configured(ctx.config)
     checks.append(_check("model_config", model, "configured" if model else "none -> direct mode",
                          "optional: direct mode needs no model; for dispatch: agentkit model add NAME --base-url URL --key-env VAR"))
+    from . import sandbox
+
+    smode = sandbox.mode(ctx.config)
+    savail = sandbox.available() if os.name == "posix" and smode != "off" else False
+    try:
+        network_label = sandbox.network_label(ctx.config)
+        network_ok = True
+    except ValueError as e:
+        network_label, network_ok = str(e), False
+    checks.append(_check("sandbox", smode == "off" or savail,
+                         f"mode={smode}, bubblewrap={'available' if savail else 'unavailable'}, network={network_label}",
+                         "install bubblewrap or set [sandbox] mode=required to refuse unsandboxed dispatch"))
+    checks.append(_check("sandbox_network_policy", network_ok, network_label,
+                         "use true, false, or an array of bare hostnames/IP addresses"))
+    from . import codeintel
+    from .backends import (codex_available, codex_config, cursor_available, cursor_config,
+                           opencode_available, opencode_config, qoder_available, qoder_config, qoder_config_dir)
+
+    if codex_config(ctx.config):
+        cavail = codex_available(ctx.config)
+        checks.append(_check("codex_backend", cavail, "configured" if cavail else "not found",
+                             "set workers.codex.command or install Codex CLI"))
+    if opencode_config(ctx.config):
+        oavail = opencode_available(ctx.config)
+        checks.append(_check("opencode_backend", oavail, "configured" if oavail else "not found",
+                             "set workers.opencode.command or install OpenCode v1 CLI"))
+    if qoder_config(ctx.config):
+        qavail = qoder_available(ctx.config)
+        qdir = qoder_config_dir(ctx.config, ctx.root)
+        checks.append(_check("qoder_backend", qavail, "configured; dedicated login directory" if qavail else "not found",
+                             f"set QODER_CONFIG_DIR={qdir} then run qodercli login"))
+    if cursor_config(ctx.config):
+        cavail = cursor_available(ctx.config)
+        checks.append(_check("cursor_backend", cavail, "configured; CURSOR_API_KEY required" if cavail else "not found",
+                             "set workers.cursor.command, install Cursor CLI, then set CURSOR_API_KEY"))
+    ccfg = ctx.config.get("codeintel") or {}
+    cmode = codeintel._backend(ccfg)
+    checks.append(_check("codeintel", cmode != "xerj" or codeintel.xerj_available(ccfg),
+                         f"backend={cmode}, xerj={'available' if codeintel.xerj_available(ccfg) else 'not found'}",
+                         "optional: install xerj or set codeintel.xerj_path; builtin search remains available"))
+    for language in sorted((ccfg.get("lsp") or {}).keys()):
+        available = codeintel.lsp_available(ccfg, language)
+        checks.append(_check(f"lsp:{language}", available, "configured" if available else "not found",
+                             f"install the server or fix [codeintel.lsp.{language}] command"))
     from .models import ChatClient, ModelError, all_models
 
     for m in all_models(ctx.config).values():
@@ -78,9 +122,12 @@ def cmd_doctor(ctx: Ctx, a) -> Result:
         checks.append(_check(f"model:{m.name}", key_ok, val, fix))
     if ctx.config.get("_error"):
         checks.append(_check("config_parse", False, ctx.config["_error"][:160], "fix the TOML syntax in .agentkit/config.toml"))
-    required = {"python>=3.10", "write_permission", "disk_space", "config_parse"}
+    required = {"python>=3.10", "write_permission", "disk_space", "config_parse", "sandbox_network_policy"}
     ok = all(c["ok"] for c in checks if c["name"] in required)
-    return Result({"healthy": ok, "mode": "dispatch" if model else "direct", "checks": checks})
+    external = bool(codex_config(ctx.config) or opencode_config(ctx.config) or qoder_config(ctx.config)
+                    or cursor_config(ctx.config))
+    dispatch = (bool(model) or external) and os.name == "posix"
+    return Result({"healthy": ok, "mode": "dispatch" if dispatch else "direct", "checks": checks})
 
 
 _ = os

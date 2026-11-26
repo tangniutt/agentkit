@@ -197,11 +197,21 @@ def test_memory_anchor_stale_flag(ak, repo):
 def test_doctor(ak, repo):
     r = ak("doctor")
     names = {c["name"] for c in r["data"]["checks"]}
-    assert {"version", "git", "write_permission", "disk_space", "model_config"} <= names
+    assert {"version", "git", "write_permission", "disk_space", "model_config", "sandbox_network_policy"} <= names
     assert r["data"]["mode"] == "direct"
     for c in r["data"]["checks"]:
         if not c["ok"]:
             assert c.get("fix"), c
+
+
+def test_doctor_rejects_invalid_network_allowlist(ak, repo):
+    cfg = repo / ".agentkit" / "config.toml"
+    cfg.parent.mkdir(exist_ok=True)
+    cfg.write_text('[sandbox]\nnetwork = ["https://example.com"]\n', encoding="utf-8")
+    result = ak("doctor")
+    assert result["data"]["healthy"] is False
+    check = next(c for c in result["data"]["checks"] if c["name"] == "sandbox_network_policy")
+    assert check["ok"] is False and check["fix"]
 
 
 def test_task_create_direct_mode(ak, repo):

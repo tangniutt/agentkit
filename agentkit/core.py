@@ -4,14 +4,17 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
 import shlex
+import stat
 import subprocess
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Iterator, Optional
 
 from .redact import redact
 
@@ -29,6 +32,100 @@ memory/index.sqlite*
 tasks/
 worktrees/
 """
+
+def _norm_path(path: Path) -> Path:
+    return Path(os.path.normcase(str(path)))
+
+
+def _within(path: Path, base: Path) -> bool:
+    try:
+        _norm_path(path).relative_to(_norm_path(base))
+        return True
+    except ValueError:
+        return False
+
+
+def _is_reparse_point(path: Path) -> bool:
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True  # fail closed when the path cannot be inspected
+    return stat.S_ISLNK(st.st_mode) or bool(getattr(st, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0))
+
+
+def _path_has_reparse_point(path: Path, base: Path) -> bool:
+    """Check every existing component below base, including Windows junctions."""
+    try:
+        parts = path.relative_to(base).parts
+    except ValueError:
+        return True
+    cur = base
+    for part in parts:
+        cur = cur / part
+        if _is_reparse_point(cur):
+            return True
+        if not cur.exists():
+            break
+    return False
+
+
+def atomic_write(path: Path, data: bytes, mode: Optional[int] = None) -> None:
+    """Atomically replace path using an exclusive, unpredictable temporary file."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(prefix=".agentkit-", suffix=".tmp", dir=str(path.parent))
+    tmp = Path(name)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        if mode is not None:
+            os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    finally:
+        try:
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
+
+
+@contextlib.contextmanager
+def file_lock(path: Path) -> Iterator[None]:
+    """Cross-process read-modify-write lock (flock on POSIX, msvcrt on Windows)."""
+    path = Path(path)
+    flags = os.O_RDWR | os.O_CREAT
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(path, flags, 0o600)
+    with os.fdopen(fd, "r+b") as f:
+        if os.name == "posix":
+            import fcntl
+
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        else:
+            import msvcrt
+
+            f.seek(0, os.SEEK_END)
+            if f.tell() == 0:
+                f.write(b"\0")
+                f.flush()
+            f.seek(0)
+            msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)
+        try:
+            yield
+        finally:
+            if os.name == "posix":
+                import fcntl
+
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+            else:
+                import msvcrt
+
+                f.seek(0)
+                msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
 
 
 class AKError(Exception):
@@ -88,6 +185,10 @@ class Ctx:
     config: dict = field(default_factory=dict)
     run_id: str = ""
 
+    def __post_init__(self) -> None:
+        self.root = Path(self.root).expanduser().resolve()
+        self.cwd = Path(self.cwd).expanduser().resolve()
+
     @property
     def budget_chars(self) -> int:
         return self.budget * CHARS_PER_TOKEN
@@ -96,24 +197,70 @@ class Ctx:
     def is_git(self) -> bool:
         return (self.root / ".git").exists()
 
-    def state(self, *parts: str, create: bool = True) -> Path:
+    def state_path(self, *parts: str, create: bool = False) -> Path:
+        """Safe path inside .agentkit; internal callers may use state, user paths may not."""
         base = self.root / STATE_DIR
-        if create and not base.exists():
+        for part in parts:
+            if not isinstance(part, str) or Path(part).is_absolute() or ".." in Path(part).parts:
+                raise AKError("invalid agentkit state path", "state paths must stay inside .agentkit", None, code="AK-PATH")
+        p = base.joinpath(*parts)
+        try:
+            base_real = base.resolve(strict=False)
+            real = p.resolve(strict=False)
+        except (OSError, RuntimeError) as e:
+            raise AKError(f"cannot resolve agentkit state path: {p}", str(e), None, code="AK-PATH")
+        if not _within(base_real, self.root) or not _within(real, base_real):
+            raise AKError("agentkit state path escapes repo", f"{p} is not inside {base}", None, code="AK-PATH")
+        if _path_has_reparse_point(p, self.root):
+            raise AKError("refused: agentkit state path uses a link or junction", str(p), None, code="AK-PATH")
+        if base.exists() and not base.is_dir():
+            raise AKError("agentkit state path is not a directory", str(base), None, code="AK-PATH")
+        if create:
+            new_base = not base.exists()
             base.mkdir(parents=True, exist_ok=True)
-            (base / ".gitignore").write_text(_AGENTKIT_GITIGNORE)
+            if new_base:
+                (base / ".gitignore").write_text(_AGENTKIT_GITIGNORE)
             from .lifecycle import register_repo
 
             register_repo(self.root)  # so `agentkit uninstall` can find every repo it wrote to
-        p = base.joinpath(*parts)
-        if create:
+            if p.exists() and not p.is_dir():
+                raise AKError("agentkit state path is not a directory", str(p), None, code="AK-PATH")
             p.mkdir(parents=True, exist_ok=True)
-        return p
+            real = p.resolve(strict=False)
+            if not _within(real, base_real) or _path_has_reparse_point(p, self.root):
+                raise AKError("agentkit state path changed while creating it", str(p), None, code="AK-PATH")
+        return real
 
-    def resolve(self, path: str) -> Path:
-        p = Path(os.path.expanduser(path))
+    def state(self, *parts: str, create: bool = True) -> Path:
+        return self.state_path(*parts, create=create)
+
+    def resolve(self, path: str | os.PathLike, *, allow_secret: bool = False, allow_artifact: bool = False) -> Path:
+        p = Path(os.path.expanduser(os.fspath(path)))
         if not p.is_absolute():
             p = self.cwd / p
-        return Path(os.path.normpath(str(p)))
+        p = Path(os.path.abspath(str(p)))
+        try:
+            real = p.resolve(strict=False)
+        except (OSError, RuntimeError) as e:
+            raise AKError(f"cannot resolve path: {path}", str(e), "agentkit ls", code="AK-PATH")
+        if not _within(p, self.root) or not _within(real, self.root):
+            raise AKError(f"path outside repo root: {path}", f"paths are limited to {self.root}", "agentkit --root DIR ...", code="AK-PATH")
+        if _path_has_reparse_point(p, self.root):
+            raise AKError(f"refused: {path} uses a symbolic link or junction", "linked paths are not allowed across the repo boundary", None, code="AK-PATH")
+        rel_parts = real.relative_to(self.root).parts
+        folded = [part.casefold() if os.name == "nt" else part for part in rel_parts]
+        if ".git" in folded:
+            raise AKError(f"refused: {path}", ".git is protected", None, code="AK-PATH")
+        if ".agentkit" in folded:
+            artifact = len(folded) >= 2 and folded[0] == ".agentkit" and folded[1] in ("logs", "verify")
+            if not (allow_artifact and artifact):
+                raise AKError(f"refused: {path}", ".agentkit state is protected", None, code="AK-PATH")
+        if not allow_secret:
+            from .fsutil import is_secret_path
+
+            if is_secret_path(real, root=self.root):
+                raise AKError(f"refused: {path} looks like a secret file", "secret paths are blocked by default", None, code="AK-PATH")
+        return real
 
     def rel(self, p: Path) -> str:
         try:
@@ -121,11 +268,11 @@ class Ctx:
         except ValueError:
             return str(p)
 
-    def inside_root(self, p: Path) -> bool:
+    def inside_root(self, p: str | os.PathLike, *, allow_secret: bool = False, allow_artifact: bool = False) -> bool:
         try:
-            Path(os.path.normpath(str(p))).relative_to(self.root)
+            self.resolve(p, allow_secret=allow_secret, allow_artifact=allow_artifact)
             return True
-        except ValueError:
+        except AKError:
             return False
 
     def next_cmd(self, *args: Any) -> str:
@@ -146,14 +293,18 @@ class Ctx:
 def make_ctx(root: Optional[str], budget: Optional[int], human: bool, argv: list) -> Ctx:
     cwd = Path(os.getcwd()).resolve()
     if root:
-        r = Path(root).resolve()
+        r = Path(root).expanduser().resolve()
     else:
         r = find_git_root(cwd) or cwd
+    ctx = Ctx(root=r, cwd=cwd, budget=DEFAULT_BUDGET, human=human, argv=argv)
+    ctx.state_path()  # reject a pre-planted .agentkit link before reading config
     from .config import load_config
 
     cfg = load_config(r)
     b = budget if budget is not None else int(cfg.get("output", {}).get("budget", DEFAULT_BUDGET))
-    return Ctx(root=r, cwd=cwd, budget=max(50, b), human=human, argv=argv, config=cfg)
+    ctx.budget = max(50, b)
+    ctx.config = cfg
+    return ctx
 
 
 # ---------------------------------------------------------------- envelope + budget
@@ -259,6 +410,13 @@ def finalize(ctx: Ctx, env: dict, budget_chars: Optional[int] = None) -> dict:
                 env = fit(env, budget_chars)
     if env.get("truncated") and not env.get("next"):
         env["next"] = ctx.with_args({"--budget": ctx.budget * 2})
+    if len(dumps(env)) > budget_chars:
+        original_error = env.get("error") if isinstance(env.get("error"), dict) else {}
+        ok = bool(env.get("ok"))
+        err = None if ok else {"what": "output truncated", "why": "", "next": None,
+                               "code": str(original_error.get("code") or "AK-USAGE")[:24],
+                               "run": str(original_error.get("run") or ctx.run_id or "")[:16]}
+        env = envelope(ok, None, err, True, "agentkit manual")
     return env
 
 

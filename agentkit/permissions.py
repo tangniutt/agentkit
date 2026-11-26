@@ -32,18 +32,41 @@ def _tokens(seg: str) -> list:
 
 
 def _strip_prefix(tok: list) -> list:
-    # env assignments, `env`, `command`, `nohup`, `time`, `exec` wrappers
+    # Strip common wrappers before applying built-in rules. This remains a guard rail,
+    # not a shell parser or sandbox.
     i = 0
     while i < len(tok):
         t = tok[i]
         if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", t):
             i += 1
-        elif t in ("env", "command", "nohup", "time", "exec", "builtin", "nice", "timeout") or (
-            tok[i - 1] == "timeout" if i else False
-        ):
+            continue
+        if t == "env":
             i += 1
-        else:
-            break
+            while i < len(tok):
+                x = tok[i]
+                if x in ("-u", "--unset", "-C", "--chdir"):
+                    i += 2
+                elif x.startswith("-") or re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", x):
+                    i += 1
+                else:
+                    break
+            continue
+        if t in ("timeout", "nice"):
+            i += 1
+            while i < len(tok) and tok[i].startswith("-"):
+                if tok[i] in ("-n", "--adjustment") and i + 1 < len(tok):
+                    i += 2
+                else:
+                    i += 1
+            if t == "timeout" and i < len(tok) and re.fullmatch(r"\d+(?:\.\d+)?[smhd]?", tok[i]):
+                i += 1
+            continue
+        if t in ("command", "nohup", "time", "exec", "builtin"):
+            i += 1
+            while i < len(tok) and tok[i].startswith("-"):
+                i += 1
+            continue
+        break
     return tok[i:]
 
 
@@ -72,6 +95,8 @@ def builtin_rules(seg: str) -> Optional[Verdict]:
     if not tok:
         return None
     head = tok[0].rsplit("/", 1)[-1]
+    if "$(" in tok[0] or "`" in tok[0]:
+        return Verdict(False, "obfuscated-command", "command substitution in command position is not allowed", seg)
     if head in ("sudo", "doas", "su", "pkexec"):
         return Verdict(False, "sudo", "privilege escalation is not allowed", seg)
     if head == "git":
@@ -107,16 +132,30 @@ def check(command: str, config: dict) -> Verdict:
         if r.search(command):
             return Verdict(False, "config-deny", f"matches deny pattern {r.pattern!r} in .agentkit/config.toml", command)
     for seg in _SEP.split(command):
-        seg = seg.strip().lstrip("(").rstrip(")").strip()
+        seg = seg.strip()
+        if seg.startswith("(") and seg.endswith(")"):
+            seg = seg[1:-1].strip()
         if not seg:
             continue
-        # unwrap `bash -c "..."` / `sh -c '...'`
+        # Unwrap shell -c forms, including combined flags such as `bash -lc`.
         tok = _strip_prefix(_tokens(seg))
-        if len(tok) >= 3 and tok[0].rsplit("/", 1)[-1] in ("sh", "bash", "zsh", "dash") and tok[1] == "-c":
-            inner = check(tok[2], config)
+        head = tok[0].rsplit("/", 1)[-1] if tok else ""
+        if head in ("sh", "bash", "zsh", "dash"):
+            for j in range(1, len(tok) - 1):
+                if tok[j].startswith("-") and "c" in tok[j][1:]:
+                    inner = check(tok[j + 1], config)
+                    if not inner.allowed:
+                        return inner
+                    break
+            else:
+                v = builtin_rules(seg)
+                if v and not any(r.search(seg) for r in allow):
+                    return v
+            continue
+        for m in re.finditer(r"\$\(([^()]*)\)|`([^`]*)`", seg):
+            inner = check(m.group(1) or m.group(2), config)
             if not inner.allowed:
                 return inner
-            continue
         v = builtin_rules(seg)
         if v and not any(r.search(seg) for r in allow):
             return v

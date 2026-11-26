@@ -7,7 +7,11 @@ import os
 import signal
 import time
 
+import pytest
+
 from test_m2_tasks import CHECK, create, project, tjson, wait
+
+pytestmark = pytest.mark.skipif(os.name != "posix", reason="dispatch mode requires Linux")
 
 RESUMED = "Resuming task"  # marker only present in the resume context -> its own fake script
 
@@ -102,3 +106,48 @@ def test_cleaned_task_cannot_resume(ak, repo, fake):
     assert ak("task", "clean", tid)["ok"]
     r = ak("task", "resume", tid)
     assert not r["ok"] and "worktree is gone" in r["error"]["what"]
+
+
+def test_handoff_switches_model_and_preserves_worktree_budget(ak, repo, fake):
+    project(repo, ak, fake)
+    assert ak("model", "add", "fake-b", "--base-url", fake.url, "--key-env", "FAKE_KEY",
+              "--price-in", "1", "--price-out", "2")["ok"]
+    fake.add("[HANDOFF]", [
+        {"call": "edit", "args": {"path": "calc.py", "old": "a - b", "new": "a + b"}},
+        {"call": "run", "args": {"command": CHECK}, "before": [{"http": 429, "retry_after": 1}] * 2},
+    ])
+    tid = create(ak, "fix add [HANDOFF]", "--budget-tokens", "100000")
+    assert wait(ak, tid)["status"] == "paused"
+    before = tjson(repo, tid)
+    wt = repo / before["worktree"]
+    assert "a + b" in (wt / "calc.py").read_text()
+
+    fake.add(RESUMED, [{"call": "run", "args": {"command": CHECK}},
+                       {"call": "finish", "args": {"summary": "done after handoff"}}])
+    r = ak("task", "handoff", tid, "--model", "fake-b")
+    assert r["ok"] and r["data"]["handoff"] and r["data"]["from_model"] == "fake"
+    assert r["data"]["to_model"] == "fake-b" and r["data"]["handoffs"] == 1
+    s = wait(ak, tid)
+    assert s["status"] == "done" and s["verdict"] == "pass", s
+    after = tjson(repo, tid)
+    assert after["worktree"] == before["worktree"] and after["branch"] == before["branch"]
+    assert after["model"] == "fake-b" and after["handoffs"] == 1
+    assert after["model_history"][-1]["from"] == "fake" and after["model_history"][-1]["to"] == "fake-b"
+    assert after["tokens"] >= before["tokens"] and after["rounds"] >= before["rounds"]
+
+
+def test_handoff_requires_different_model_and_respects_limit(ak, repo, fake):
+    project(repo, ak, fake, cfg="", model_cfg="")
+    p = repo / ".agentkit" / "config.toml"
+    p.write_text(p.read_text() + "\n[tasks]\nmax_handoffs = 0\n")
+    assert ak("model", "add", "fake-b", "--base-url", fake.url, "--key-env", "FAKE_KEY")["ok"]
+    fake.add("[HANDOFF-LIMIT]", [{"call": "read", "args": {"spec": "calc.py"},
+                                  "before": [{"http": 429, "retry_after": 1}] * 2}])
+    tid = create(ak, "fix add [HANDOFF-LIMIT]")
+    assert wait(ak, tid)["status"] == "paused"
+    same = ak("task", "handoff", tid, "--model", "fake")
+    assert not same["ok"] and "already uses model" in same["error"]["what"]
+    over = ak("task", "handoff", tid, "--model", "fake-b")
+    assert not over["ok"] and "max_handoffs" in over["error"]["what"]
+    missing = ak("task", "handoff", tid)
+    assert not missing["ok"] and missing["error"]["code"] == "AK-USAGE"

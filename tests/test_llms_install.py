@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """M-19: an AI that only reads llms.txt can install AgentKit and run one verify (eval/llms_check.py)."""
 import json
+import os
 import shutil
 import socket
 import subprocess
@@ -16,7 +17,7 @@ from eval import llms_check as L  # noqa: E402
 
 
 def test_llms_install_section_is_mechanically_followable():
-    text = (ROOT / "llms.txt").read_text()
+    text = (ROOT / "llms.txt").read_text(encoding="utf-8")
     alts, follow = L.split_install(L.install_commands(text))
     assert alts[0].startswith("pip install " + L.GIT_URL)
     assert any(a.startswith("pipx install") for a in alts) and any(a.startswith("uv tool install") for a in alts)
@@ -35,7 +36,7 @@ def _online() -> bool:
         return False
 
 
-@pytest.mark.skipif(not _online(), reason="needs network to fetch dependencies from PyPI")
+@pytest.mark.skipif(os.name != "posix" or not _online(), reason="POSIX and network required")
 def test_fresh_venv_install_from_llms_txt_then_doctor_and_verify():
     p = subprocess.run([sys.executable, "-m", "eval.llms_check", "--src", str(ROOT)], cwd=str(ROOT),
                        capture_output=True, text=True, timeout=600)
@@ -44,8 +45,8 @@ def test_fresh_venv_install_from_llms_txt_then_doctor_and_verify():
     assert [s["cmd"].split()[1] for s in res["steps"] if s["cmd"].startswith("agentkit")] == ["doctor", "verify"]
 
 
-@pytest.mark.skipif(not _online() or not shutil.which("uv") and not shutil.which("pipx"),
-                    reason="bare-system scenario needs network and uv or pipx")
+@pytest.mark.skipif(os.name != "posix" or not _online() or not shutil.which("uv") and not shutil.which("pipx"),
+                    reason="bare-system scenario needs POSIX, network and uv or pipx")
 def test_bare_system_python_without_pip_falls_through_to_pipx_or_uv():
     p = subprocess.run([sys.executable, "-m", "eval.llms_check", "--src", str(ROOT), "--scenario", "bare"], cwd=str(ROOT),
                        capture_output=True, text=True, timeout=600)

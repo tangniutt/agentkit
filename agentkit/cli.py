@@ -33,6 +33,7 @@ def build_parser() -> argparse.ArgumentParser:
     r = sub.add_parser("read", help="read file | file:START-END | file#Symbol")
     r.add_argument("spec")
     r.add_argument("--allow-secret-file", action="store_true")
+    r.add_argument("--full-lines", action="store_true", help="keep long lines; follow next with a larger budget")
 
     s = sub.add_parser("search", help="regex/keyword search, results path:line:text")
     s.add_argument("pattern")
@@ -164,18 +165,20 @@ def build_parser() -> argparse.ArgumentParser:
     mor = mos.add_parser("remove")
     mor.add_argument("name")
 
-    t = sub.add_parser("task", help="dispatch to a worker: create|status|wait|report|resume|cancel|clean")
+    t = sub.add_parser("task", help="dispatch to a worker: create|status|wait|report|resume|handoff|cancel|clean")
     ts = t.add_subparsers(dest="task_cmd", parser_class=_Parser)
     tc = ts.add_parser("create")
     tc.add_argument("goal", nargs="?", help="what the worker must achieve")
     tc.add_argument("--goal", dest="goal_opt", help="same as the positional goal")
     tc.add_argument("--check", action="append", default=[], help="acceptance command run by the verifier, e.g. 'pytest -q'")
+    tc.add_argument("--allow-baseline-pass", action="store_true", help="allow checks that already pass on the base commit (default: baseline must fail)")
     tc.add_argument("--allow", action="append", default=[], help="glob/dir the worker may change")
     tc.add_argument("--budget-tokens", type=int, help="stop after this many worker tokens")
     tc.add_argument("--budget-usd", type=float, help="stop after this many USD (needs model prices)")
     tc.add_argument("--budget-minutes", type=float, help="stop after this many minutes")
     tc.add_argument("--tier", help="low|mid|high: pick a model by tier")
-    tc.add_argument("--model", help="configured model NAME")
+    tc.add_argument("--model", help="builtin name, Codex id, OpenCode provider/model, Qoder model, or Cursor model")
+    tc.add_argument("--backend", choices=("builtin", "codex", "opencode", "qoder", "cursor"), default="builtin", help="worker backend")
     for name in ("status", "report", "cancel"):
         x = ts.add_parser(name)
         x.add_argument("ids", nargs="*")
@@ -188,10 +191,116 @@ def build_parser() -> argparse.ArgumentParser:
     trs.add_argument("--budget-tokens", type=int, help="new total token budget for the task")
     trs.add_argument("--budget-usd", type=float)
     trs.add_argument("--budget-minutes", type=float, help="time budget for this resumed run")
+    trs.add_argument("--model", help="target model")
+    trs.add_argument("--backend", choices=("builtin", "codex", "opencode", "qoder", "cursor"), help="target backend")
+    th = ts.add_parser("handoff", help="resume a paused/interrupted/stopped task with another model/backend")
+    th.add_argument("ids", nargs="*")
+    th.add_argument("--model", help="target model")
+    th.add_argument("--backend", choices=("builtin", "codex", "opencode", "qoder", "cursor"), help="target backend")
+    th.add_argument("--budget-tokens", type=int, help="new total token budget for the task")
+    th.add_argument("--budget-usd", type=float)
+    th.add_argument("--budget-minutes", type=float, help="time budget for this resumed run")
+    td = ts.add_parser("diff")
+    td.add_argument("id")
+    td.add_argument("--offset", type=int, default=0)
+    tst = ts.add_parser("steer")
+    tst.add_argument("id")
+    tst.add_argument("text")
+    ta = ts.add_parser("answer")
+    ta.add_argument("id")
+    ta.add_argument("text")
+    tac = ts.add_parser("accept")
+    tac.add_argument("id")
+    trej = ts.add_parser("reject")
+    trej.add_argument("id")
+    trej.add_argument("reason", nargs="?")
     tcl = ts.add_parser("clean")
     tcl.add_argument("ids", nargs="*")
     tcl.add_argument("--all", action="store_true", help="every finished task")
     tcl.add_argument("--keep-branch", action="store_true", help="keep agentkit/<id> branches")
+
+    g = sub.add_parser("goal", help="bounded result loop: create|run|status|wait|report|steer|answer|cancel|resume")
+    gs = g.add_subparsers(dest="goal_cmd", parser_class=_Parser)
+    gc = gs.add_parser("create")
+    gc.add_argument("outcome", nargs="?", help="verifiable outcome")
+    gc.add_argument("--input", help="GoalSpec JSON file")
+    gc.add_argument("--check", action="append", default=[], help="acceptance command (repeatable)")
+    gc.add_argument("--non-goal", action="append", default=[])
+    gc.add_argument("--allow", action="append", default=[])
+    gc.add_argument("--allow-baseline-pass", action="store_true")
+    gc.add_argument("--budget-tokens", type=int)
+    gc.add_argument("--budget-usd", type=float)
+    gc.add_argument("--budget-minutes", type=float)
+    gc.add_argument("--max-rounds", type=int)
+    gc.add_argument("--max-iterations", type=int, default=3)
+    gc.add_argument("--max-handoffs", type=int, default=2)
+    gc.add_argument("--failover", action="append", default=[])
+    gc.add_argument("--model")
+    gc.add_argument("--tier")
+    gx = gs.add_parser("status")
+    gx.add_argument("id", nargs="?")
+    for name in ("report", "cancel"):
+        gx = gs.add_parser(name)
+        gx.add_argument("id")
+    gr = gs.add_parser("run")
+    gr.add_argument("id")
+    gr.add_argument("--timeout", type=float, default=600)
+    gr.add_argument("--budget-tokens", type=int)
+    gr.add_argument("--budget-usd", type=float)
+    gr.add_argument("--budget-minutes", type=float)
+    gw = gs.add_parser("wait")
+    gw.add_argument("id")
+    gw.add_argument("--timeout", type=float, default=600)
+    gst = gs.add_parser("steer")
+    gst.add_argument("id")
+    gst.add_argument("text")
+    gres = gs.add_parser("resume")
+    gres.add_argument("id")
+    gres.add_argument("--model")
+    gres.add_argument("--budget-tokens", type=int)
+    gres.add_argument("--budget-usd", type=float)
+    gres.add_argument("--budget-minutes", type=float)
+    gans = gs.add_parser("answer")
+    gans.add_argument("id")
+    gans.add_argument("text")
+
+    c = sub.add_parser("code", help="pluggable code intelligence: search|defs|index|memory")
+    cs = c.add_subparsers(dest="code_cmd", parser_class=_Parser)
+    cse = cs.add_parser("search")
+    cse.add_argument("query")
+    cse.add_argument("--prefix", default="")
+    cse.add_argument("-k", type=int, default=5)
+    cse.add_argument("--full", type=int, default=600)
+    cse.add_argument("--backend", choices=["auto", "builtin", "xerj"], default="auto")
+    cdf = cs.add_parser("defs")
+    cdf.add_argument("symbol")
+    cdf.add_argument("--prefix", default="")
+    cdf.add_argument("-k", type=int, default=5)
+    cdf.add_argument("--kind", default="")
+    cdf.add_argument("--lang", default="")
+    cdf.add_argument("--backend", choices=["auto", "builtin", "xerj"], default="auto")
+    crf = cs.add_parser("refs")
+    crf.add_argument("symbol")
+    crf.add_argument("--path")
+    crf.add_argument("--line", type=int)
+    crf.add_argument("--column", type=int)
+    crf.add_argument("-k", type=int, default=5)
+    crf.add_argument("--include-declaration", action="store_true")
+    crf.add_argument("--backend", choices=["auto", "builtin", "lsp"], default="auto")
+    cin = cs.add_parser("index")
+    cin.add_argument("path", nargs="?", default=".")
+    cin.add_argument("--prefix", default="")
+    cin.add_argument("--backend", choices=["auto", "builtin", "xerj"], default="auto")
+    cm = cs.add_parser("memory")
+    cms = cm.add_subparsers(dest="memory_cmd", parser_class=_Parser)
+    cmst = cms.add_parser("store")
+    cmst.add_argument("namespace")
+    cmst.add_argument("text")
+    cmst.add_argument("--id", default="")
+    cmrc = cms.add_parser("recall")
+    cmrc.add_argument("namespace")
+    cmrc.add_argument("query")
+    cmrc.add_argument("-k", type=int, default=5)
 
     lg = sub.add_parser("logs", help="structured event log of a run / task: logs ID [--errors] [--tail N]")
     lg.add_argument("id")
@@ -217,6 +326,14 @@ def build_parser() -> argparse.ArgumentParser:
     fb.add_argument("--title")
     fb.add_argument("--input", metavar="FILE|-", help="JSON with the same keys (verify, from[])")
 
+    rel = sub.add_parser("release", help="local release: plan | build | verify | rollback (never publishes)")
+    rel.add_argument("action", nargs="?", choices=["plan", "build", "verify", "rollback"], default="plan")
+    rel.add_argument("artifact", nargs="?")
+    rel.add_argument("--out", default="dist")
+    rel.add_argument("--allow-dirty", action="store_true")
+    rel.add_argument("--overwrite", action="store_true")
+    rel.add_argument("--yes", action="store_true")
+
     un = sub.add_parser("uninstall", help="remove agentkit: package, ~/.config + ~/.local/share/agentkit, .agentkit/ + worktrees "
                                         "in every repo it used (dry run unless --yes; never touches your code or git history)")
     un.add_argument("--yes", action="store_true", help="really delete (default: print the plan only)")
@@ -228,6 +345,8 @@ def build_parser() -> argparse.ArgumentParser:
     mn.add_argument("words", nargs="*", help="a command or group, e.g. task create")
     mn.add_argument("--all", action="store_true", help="every command in full (≈4k tokens; may need --budget)")
     mn.add_argument("--format", choices=["json", "md"], default="json", help="md prints Markdown text (docs/agent-manual.md)")
+
+    sub.add_parser("mcp", help="run the MCP stdio server (JSON-RPC on stdin/stdout)")
 
     tr = sub.add_parser("_task-run", help=argparse.SUPPRESS)
     tr.add_argument("id")
@@ -243,9 +362,9 @@ def _handlers():
         "edit": edit.cmd_edit, "patch": edit.cmd_patch, "create": edit.cmd_create, "delete": edit.cmd_delete,
         "rename": edit.cmd_rename, "run": run.cmd_run, "checkpoint": checkpoint.cmd_checkpoint,
         "verify": verify.cmd_verify, "memory": memory.cmd_memory, "doctor": doctor.cmd_doctor,
-        "task": _task, "model": _model, "_task-run": _task_run,
+        "task": _task, "goal": _goal, "code": _code, "model": _model, "_task-run": _task_run,
         "logs": _diag("cmd_logs"), "uninstall": _uninstall, "debug-bundle": _diag("cmd_debug_bundle"), "feedback": _diag("cmd_feedback"),
-        "manual": _manual,
+        "manual": _manual, "mcp": _mcp, "release": _release,
     }
 
 
@@ -255,6 +374,10 @@ def _manual(ctx, a):
     return manual.cmd_manual(ctx, a)
 
 
+def _mcp(ctx, a):
+    return Result({"server": "mcp", "hint": "use agentkit mcp as a subprocess"})
+
+
 def _diag(name):
     def h(ctx, a):
         from . import diag
@@ -262,6 +385,17 @@ def _diag(name):
         return getattr(diag, name)(ctx, a)
 
     return h
+
+
+def _release(ctx, a):
+    from . import release
+
+    a.release_cmd = a.action or "plan"
+    if a.artifact:
+        a.manifest = a.artifact
+    elif not hasattr(a, "manifest"):
+        a.manifest = ""
+    return release.cmd_release(ctx, a)
 
 
 def _uninstall(ctx, a):
@@ -278,6 +412,18 @@ def _task(ctx, a):
     if a.task_cmd == "create":
         a.goal = a.goal or getattr(a, "goal_opt", None)
     return tasks.cmd_task(ctx, a)
+
+
+def _goal(ctx, a):
+    from . import goals
+
+    return goals.cmd_goal(ctx, a)
+
+
+def _code(ctx, a):
+    from . import codeintel
+
+    return codeintel.cmd_code(ctx, a)
 
 
 def _model(ctx, a):
@@ -463,7 +609,14 @@ def _fin_noctx(env: dict) -> dict:
 
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    rest, _budget, _human, root = split_globals(argv)
+    if rest == ["mcp"]:
+        from .mcp_server import main as mcp_main
+
+        return mcp_main(["--root", root] if root else [])
     env, code, human = run_cli(argv)
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     if "_text" in env:
         sys.stdout.write(env["_text"])
     else:

@@ -16,6 +16,8 @@ from conftest import git
 PY = sys.executable
 KEY = "fk" + "-" + "task" + "5" * 20  # fake, assembled at runtime
 CHECK = f"{PY} -m pytest -q -p no:cacheprovider tests"
+pytestmark = pytest.mark.skipif(os.name != "posix", reason="dispatch mode requires Linux")
+
 FIX = [{"call": "read", "args": {"spec": "calc.py"}},
        {"call": "edit", "args": {"path": "calc.py", "old": "a - b", "new": "a + b"}},
        {"call": "run", "args": {"command": CHECK}},
@@ -268,8 +270,21 @@ def test_time_budget_kills_running_command(ak, repo, fake):
     assert s["stopped"] == "budget"
     t = tjson(repo, tid)
     assert t["stopped_at"] - (t["started"] + 3) < 5
-    out = subprocess.run(["pgrep", "-f", "sleep 60"], capture_output=True, text=True).stdout
-    assert not out.strip(), "the command's process group must be killed"
+    if Path("/proc").is_dir():
+        leftovers = []
+        for proc in Path("/proc").iterdir():
+            if not proc.name.isdigit():
+                continue
+            try:
+                cmd = (proc / "cmdline").read_bytes()
+            except OSError:
+                continue
+            if b"sleep\x0060\x00" in cmd:
+                leftovers.append(proc.name)
+    else:
+        out = subprocess.run(["pgrep", "-f", "sleep 60"], capture_output=True, text=True).stdout
+        leftovers = [out.strip()] if out.strip() else []
+    assert not leftovers, "the command's process group must be killed"
 
 
 def test_rate_limit_pauses_and_reports(ak, repo, fake):

@@ -39,7 +39,8 @@ GIT_ENV = {"GIT_AUTHOR_NAME": "eval", "GIT_AUTHOR_EMAIL": "eval@example.invalid"
 
 
 def sub(s: str) -> str:
-    return s.replace("{py}", PY)
+    py = f'"{PY}"' if os.name == "nt" else shlex.quote(PY)
+    return s.replace("{py}", py)
 
 
 def make_repo(root: Path, files: dict) -> Path:

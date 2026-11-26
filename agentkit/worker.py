@@ -50,15 +50,23 @@ TOOLS_SPEC = [
      {"command": "string", "timeout": "number"}, ["command"]),
     ("memory_search", "Search project memory.", {"query": "string"}, ["query"]),
     ("memory_show", "Show one project memory by id.", {"id": "string"}, ["id"]),
+    ("ask", "Ask the supervisor a blocking question instead of guessing.",
+     {"question": "string", "options": "array", "recommendation": "string", "blocking": "boolean"}, ["question"]),
+    ("code_search", "Search code passages with the configured code-intelligence backend.",
+     {"query": "string", "prefix": "string", "k": "integer"}, ["query"]),
+    ("code_defs", "Find symbol definitions with the configured code-intelligence backend.",
+     {"symbol": "string", "prefix": "string", "k": "integer", "kind": "string", "lang": "string"}, ["symbol"]),
     ("finish", "Call when you believe the goal is met. Your claim is NOT trusted: the checks are re-run independently.",
      {"summary": "string"}, ["summary"]),
 ]
 TOOL_NAMES = {t[0] for t in TOOLS_SPEC}
 
 
-def tool_schemas() -> list:
+def tool_schemas(include_code: bool = False) -> list:
     out = []
     for name, desc, props, req in TOOLS_SPEC:
+        if name in ("code_search", "code_defs") and not include_code:
+            continue
         p = {}
         for k, t in props.items():
             p[k] = {"type": t} if t != "array" else {"type": "array", "items": {"type": "string"}}
@@ -109,11 +117,12 @@ class StopWorker(BaseException):
 
 class Outcome:
     def __init__(self, status: str, reason: str = "", stopped: Optional[str] = None, claim: str = "",
-                 code: Optional[str] = None):
+                 code: Optional[str] = None, question: Optional[dict] = None):
         self.status = status  # submitted | failed | stopped | paused
         self.reason = reason
         self.stopped = stopped
         self.claim = claim
+        self.question = question
         if code is None and stopped == "budget":
             code = "AK-BUDGET"
         elif code is None and stopped == "rounds":
@@ -231,7 +240,7 @@ class Worker:
         self.repairs = 0
         self.denied: list = []
         self.messages: list = []
-        self.tools = tool_schemas()
+        self.tools = tool_schemas(bool((cfg.get("codeintel") or {}).get("worker_tools", False)))
         from .context import TranscriptCompressor
 
         self.ccfg = dict(cfg.get("compress") or {})
@@ -375,6 +384,17 @@ class Worker:
                 return self._cli(["memory", "search", str(s("query", ""))], root=self.main_root)
             if name == "memory_show":
                 return self._cli(["memory", "show", str(s("id", ""))], root=self.main_root)
+            if name == "code_search":
+                argv = ["code", "search", str(s("query", "")), "-k", str(int(s("k", 5)))]
+                if s("prefix"):
+                    argv += ["--prefix", str(s("prefix"))]
+                return self._cli(argv)
+            if name == "code_defs":
+                argv = ["code", "defs", str(s("symbol", "")), "-k", str(int(s("k", 5)))]
+                for key, flag in (("prefix", "--prefix"), ("kind", "--kind"), ("lang", "--lang")):
+                    if s(key):
+                        argv += [flag, str(s(key))]
+                return self._cli(argv)
         finally:
             for p in tmpfiles:
                 try:
@@ -579,6 +599,16 @@ class Worker:
                     finished = str(args.get("summary", ""))[:500]
                     self._add({"role": "tool", "tool_call_id": tc["id"], "content": '{"ok":true,"data":"submitted for independent verification"}'})
                     continue
+                if name == "ask":
+                    question = str(args.get("question") or "").strip()
+                    if not question:
+                        self._add({"role": "tool", "tool_call_id": tc["id"], "content": dumps(_err("ask needs a question"))})
+                        continue
+                    q = {"question": question[:500], "options": [str(x)[:200] for x in (args.get("options") or [])[:4]],
+                         "recommendation": str(args.get("recommendation") or "")[:300],
+                         "blocking": bool(args.get("blocking", True))}
+                    self._add({"role": "tool", "tool_call_id": tc["id"], "content": '{"ok":true,"data":"waiting for supervisor"}'})
+                    return Outcome("paused", "waiting for supervisor", code="AK-TASK-WAITING", question=q)
                 tt = time.monotonic()
                 env = self.run_tool(name, args)
                 self._ev("tool", f"tool:{name}", time.monotonic() - tt,
@@ -675,7 +705,8 @@ def resume_context(transcript: Optional[Path], wt: Path, base: str, task: dict, 
                     pass
     except (OSError, subprocess.SubprocessError):
         stat, diff = "", ""
-    head = (f"Resuming task {task['id']} (resume #{segments + 1}) after: {task.get('reason') or task.get('status')}.\n"
+    head = (f"Resuming task {task['id']} (resume #{segments + 1}) after: "
+            f"{task.get('resumed_from') or task.get('reason') or task.get('status')}.\n"
             f"GOAL: {task['goal']}\nThe worktree still holds your earlier changes. Do not redo work that is already in the diff;"
             f" continue from here, run the checks, then call finish.\n")
     body = "ACTIONS SO FAR (compacted):\n" + ("\n".join(lines) or "- none") + "\n"

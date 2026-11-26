@@ -3,6 +3,7 @@
 """Third provider (NVIDIA NIM) + free-tier pacing: presets, 504 as upstream-unavailable, reasoning models
 (content null, text in reasoning_content, finish_reason=length), Retry-After up to max_wait, rpm pacing."""
 import json
+import os
 
 import pytest
 
@@ -69,6 +70,18 @@ def test_504_is_upstream_unavailable_retried_then_raised(fake, keyenv):
     assert e.value.kind == "unavailable"
 
 
+def test_connection_reset_is_retried_as_network_error(monkeypatch, keyenv):
+    class ResetOpener:
+        def open(self, *args, **kwargs):
+            raise ConnectionResetError("reset by peer")
+
+    monkeypatch.setattr("agentkit.models.urllib.request.build_opener", lambda *a, **k: ResetOpener())
+    with pytest.raises(ModelError) as e:
+        ChatClient(_spec("http://127.0.0.1:9/v1"), backoff=0, sleep=lambda s: None).chat(
+            [{"role": "user", "content": "q"}])
+    assert e.value.kind == "network" and "reset by peer" in str(e.value)
+
+
 def test_retry_after_waited_up_to_max_wait(fake, keyenv):
     """Gemini free tier answers per-minute 429s with Retry-After ~50 s: the default 30 s cap pauses the task,
     a model with max_wait=65 sits it out once and carries on."""
@@ -101,6 +114,7 @@ def test_model_test_reasoning_only_reply_is_ok(ak, repo, fake):
     assert r["ok"] and r["data"]["reasoning_only"] is True and r["data"]["finish_reason"] == "length", r
 
 
+@pytest.mark.skipif(os.name != "posix", reason="dispatch mode requires Linux")
 def test_worker_with_reasoning_model(ak, repo, fake):
     """content null + reasoning_content, and one reply cut at the token limit while thinking: the task still
     passes, the worker says what happened, and reasoning is never sent back to the model."""

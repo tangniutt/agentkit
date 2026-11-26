@@ -12,7 +12,7 @@ from pathlib import Path
 
 from . import state
 from .core import AKError, Ctx, Result, dumps, room_for, sha256_bytes
-from .fsutil import MAX_TEXT_BYTES_SNIFF, is_binary_bytes, is_secret_path
+from .fsutil import MAX_TEXT_BYTES_SNIFF, is_binary_bytes
 from .symbols import find_symbol
 
 MAX_LINE_CHARS = 400
@@ -36,26 +36,21 @@ def parse_spec(spec: str):
 
 def cmd_read(ctx: Ctx, a) -> Result:
     path_s, start, end, sym = parse_spec(a.spec)
-    p = ctx.resolve(path_s)
-    if not p.exists() and ":" in a.spec and "#" not in a.spec and ctx.resolve(a.spec).exists():
-        p, start, end = ctx.resolve(a.spec), None, None  # filename that contains ':'
+    p = ctx.resolve(path_s, allow_artifact=True, allow_secret=a.allow_secret_file)
+    if not p.exists() and ":" in a.spec and "#" not in a.spec:
+        candidate = ctx.resolve(a.spec, allow_artifact=True, allow_secret=a.allow_secret_file)
+        if candidate.exists():
+            p, start, end = candidate, None, None  # filename that contains ':'
     if not p.exists():
         raise AKError(f"not found: {path_s}", "file does not exist", "agentkit glob '**/" + Path(path_s).name + "'")
     if p.is_dir():
         raise AKError(f"is a directory: {path_s}", "read takes a file", ctx.next_cmd("ls", path_s))
-    if is_secret_path(p) and not a.allow_secret_file:
-        raise AKError(
-            f"refused: {path_s} looks like a secret file",
-            "reading .env / ~/.ssh / private keys is blocked by default",
-            "ask the user; or rerun with --allow-secret-file (output is still redacted)",
-        )
     raw = p.read_bytes()
     if is_binary_bytes(raw[:MAX_TEXT_BYTES_SNIFF]):
         raise AKError(f"binary file: {path_s}", f"{len(raw)} bytes, not UTF-8 text", "use run with a dedicated tool (xxd, file)")
     sha = sha256_bytes(raw)
     rel = ctx.rel(p)
-    if ctx.inside_root(p):
-        state.record(ctx, rel, sha)
+    state.record(ctx, rel, sha)
     text = raw.decode("utf-8", errors="replace")
     lines = text.splitlines()
     total = len(lines)
@@ -101,7 +96,7 @@ def cmd_read(ctx: Ctx, a) -> Result:
     cut_line = False
     for i in range(start, end + 1):
         ln = lines[i - 1]
-        if len(ln) > MAX_LINE_CHARS:
+        if len(ln) > MAX_LINE_CHARS and not getattr(a, "full_lines", False):
             ln = ln[:MAX_LINE_CHARS] + f"…[+{len(ln) - MAX_LINE_CHARS} chars]"
             cut_line = True
         piece = f"{i}|{ln}\n"
@@ -119,8 +114,12 @@ def cmd_read(ctx: Ctx, a) -> Result:
     skeleton["content"] = "".join(out)
     if cut_line:
         skeleton["long_lines_cut"] = True
-    truncated = last < full_end
+    truncated = last < full_end or cut_line
     nxt = None
     if truncated:
-        nxt = ctx.next_cmd("read", f"{path_s}:{last + 1}-{full_end}")
+        if cut_line:
+            nxt = ctx.next_cmd("read", f"{path_s}:{start}-{full_end}", "--full-lines",
+                               "--budget", str(max(ctx.budget * 2, 2000)))
+        else:
+            nxt = ctx.next_cmd("read", f"{path_s}:{last + 1}-{full_end}")
     return Result(skeleton, truncated, nxt)

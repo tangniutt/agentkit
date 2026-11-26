@@ -16,12 +16,13 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from .core import AKError, Ctx, Result, dumps, fill_lines, room_for, sha256_bytes
+from .core import AKError, Ctx, Result, atomic_write, dumps, fill_lines, room_for, sha256_bytes
 from .redact import redact_text
 from .symbols import find_symbol
 
 CATEGORIES = ("project-info", "conventions", "lessons", "tools-models", "preferences")
 BRIEF_TOKENS = 500
+_ID_RE = re.compile(r"[\w-]{1,80}\Z", re.UNICODE)
 
 
 def _dir(ctx: Ctx) -> Path:
@@ -55,6 +56,12 @@ def _parse(p: Path) -> dict:
     return meta
 
 
+def _memory_path(ctx: Ctx, mid: str) -> Path:
+    if not isinstance(mid, str) or not _ID_RE.fullmatch(mid) or mid in (".", ".."):
+        raise AKError(f"invalid memory id '{str(mid)[:40]}'", "use letters, numbers, underscores or hyphens only", None, code="AK-MEMORY")
+    return _dir(ctx) / f"{mid}.md"
+
+
 def _write(ctx: Ctx, m: dict):
     keys = ["id", "title", "category", "pinned", "related", "anchors", "source", "created", "updated"]
     lines = ["---"]
@@ -63,10 +70,7 @@ def _write(ctx: Ctx, m: dict):
             lines.append(f"{k}: {json.dumps(m[k], ensure_ascii=False)}")
     lines.append("---")
     text = "\n".join(lines) + "\n" + m.get("body", "").rstrip() + "\n"
-    p = _dir(ctx) / f"{m['id']}.md"
-    tmp = p.with_suffix(".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    tmp.replace(p)
+    atomic_write(_memory_path(ctx, m["id"]), text.encode("utf-8"))
 
 
 def load_all(ctx: Ctx) -> list:
@@ -74,7 +78,7 @@ def load_all(ctx: Ctx) -> list:
 
 
 def get(ctx: Ctx, mid: str) -> dict:
-    p = _dir(ctx) / f"{mid}.md"
+    p = _memory_path(ctx, mid)
     if not p.exists():
         raise AKError(f"no memory '{mid}'", "id not found", ctx.next_cmd("memory", "list"))
     return _parse(p)
@@ -129,7 +133,7 @@ def add(ctx: Ctx, title: str, body: str, category: str, pinned=False, related=No
         raise AKError(f"bad category: {category}", f"use one of {', '.join(CATEGORIES)}", None)
     now = time.strftime("%Y-%m-%dT%H:%M:%S")
     mid = mid or slugify(title)
-    existing = _dir(ctx) / f"{mid}.md"
+    existing = _memory_path(ctx, mid)
     created = now
     if existing.exists():
         old = _parse(existing)
@@ -207,7 +211,7 @@ def cmd_memory(ctx: Ctx, a) -> Result:
         m = add(ctx, a.title, body, a.category, a.pin, a.related or [], a.anchor or [], a.id)
         return Result({"id": m["id"], "category": m["category"], "pinned": m["pinned"], "anchors": m["anchors"]})
     if sub == "forget":
-        p = _dir(ctx) / f"{a.id}.md"
+        p = _memory_path(ctx, a.id)
         if not p.exists():
             raise AKError(f"no memory '{a.id}'", "id not found", ctx.next_cmd("memory", "list"))
         p.unlink()

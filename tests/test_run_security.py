@@ -36,6 +36,10 @@ def _alive(pid):
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
+    except OSError as e:
+        if getattr(e, "winerror", None) == 87:
+            return False
+        raise
     try:  # zombie?
         with open(f"/proc/{pid}/stat") as f:
             return f.read().split()[2] != "Z"
@@ -81,6 +85,12 @@ DENY = [
     ("source .env.local", "env-file"),
     ("grep KEY config/.env", "env-file"),
     ("bash -c 'git push'", "git-push"),
+    ("bash -lc 'git push'", "git-push"),
+    ("env -i rm -rf /", "rm-root"),
+    ("timeout 5 git push", "git-push"),
+    ("nice -n 5 git commit -m x", "git-commit"),
+    ("echo $(git push)", "git-push"),
+    ("$(echo git) -c core.hooksPath=/dev/null commit --no-verify -qam done", "obfuscated-command"),
     ("FOO=1 env git push", "git-push"),
 ]
 ALLOW = ["git status", "git diff HEAD", "rm -rf build/", "pytest -q", "cat .env.example", "python -m venv .venv",

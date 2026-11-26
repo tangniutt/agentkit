@@ -1,6 +1,6 @@
 # 参与贡献
 
-1. **先看范围**：V1.0 只做 `docs/v1.0-baseline.md` 第 1.1 节的 Must 项。新功能请开 Issue，标注 Should / Could，V1.0 发布后评估。
+1. **先看范围**：旧 V1.0 实现范围仍是 `docs/v1.0-baseline.md` 第 1.1 节的 Must 项；2026-11-25 批准的 C-15 至 C-20 目标需求见 `docs/prd-v1.0.md`，按 P0–P3 顺序实施。其他新功能请开 Issue，标注 Should / Could，不在当前范围内直接实现。
 2. **先找参考**：实现较大功能前，先在 Issue 里列出参考过的开源项目及其许可证。
 3. **复用代码**：仅限 MIT / Apache-2.0 / BSD，保留原版权声明并登记到 `NOTICE`；GPL / AGPL 只借鉴思路，不复制代码。
 4. **DCO 签名**：每个提交用 `git commit -s`，表示你有权按 Apache-2.0 贡献这段代码。

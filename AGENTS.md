@@ -13,10 +13,10 @@ AgentKit：给 AI Agent 用的轻量编程工具。三种模式：直接模式�
 3. `docs/feature-sources.md` — 每个功能借鉴哪个开源项目、参考代码位置
 4. `docs/competitor-gap.md` — 与 Claude Code / Codex / OpenCode / Aider / jcode 的对比
 5. `docs/process.md` — 开发流程规矩
-6. `docs/prd-v0.3.md` — 完整需求（首节是核心设计理念；第 12 节需求追溯表；v0.1 / v0.2 仅存档）
+6. `docs/prd-v1.0.md` — 下一阶段目标需求：可信协议、Goal、沙箱验收、MCP、XERJ、模型接力与评测；`docs/prd-v0.3.md` 及更早版本作为历史存档
 
 ## 主管 AI 操作手册（C-09）
-- `agentkit manual`（总览 ≈1.7k token）/ `agentkit manual <命令>`（单个命令详情）/ `agentkit manual --all --budget 4500`（全部）；Markdown 版 `docs/agent-manual.md`。
+- `agentkit manual`（总览 ≈1.9k token）/ `agentkit manual <命令>`（单个命令详情）/ `agentkit manual --all --budget 5000`（全部，约 4.8k token）；Markdown 版 `docs/agent-manual.md`。
 - 手册由 `agentkit/cli.py` 的真实参数定义 + `agentkit/manual.py` 的 SPEC + 错误码登记表生成。**新增或修改命令时必须同步 SPEC 并重新生成**：`agentkit manual --format md > docs/agent-manual.md`（`tests/test_manual.py` 检查覆盖、示例可解析、错误码存在、文档无漂移、大小）。
 
 ## 硬规矩

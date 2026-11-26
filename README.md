@@ -5,7 +5,7 @@
 >
 > **核心设计理念：AgentKit 是一个让 AI 自己提建议、持续改进、持续吸收先进工具设计理念的 AI 编程工具。** AI 用户带证据提 bug 与设计建议（`agentkit feedback --improve`）→ [评分](docs/triage.md) → 接受的成为基线变更 → 合并前用评测量化。
 
-**状态：M2 Python 原型——直接模式工具集 + 派活（内置工人、OpenAI 兼容接口、独立验收与防作弊）可用。**
+**状态：生产化进行中——M2 Python 原型 + P0 可信基座 + Goal/MCP 2025 + 任务控制面 + Builtin/XERJ/LSP 代码智能已落地；Linux VPS 最终全量门禁已通过，Cursor/Qoder 真实账号任务、强凭证隔离、其余 LSP 服务器与正式发布待完成。Windows 仅保留开发机 direct-mode 兼容，不作为生产部署平台或验收门槛。**
 
 ## 它解决什么
 - 现有编程工具为人设计，AI 用起来读得多、改容易失败、不知道改得对不对。
@@ -59,17 +59,34 @@ AI 读 [`llms.txt`](llms.txt) 即可上手；管理 AgentKit 的主管 AI 用 `a
 | `agentkit memory brief / add / list / search / show / forget` | 项目记忆（Markdown + front matter，SQLite FTS5 检索，代码锚定失效标记） |
 | `agentkit doctor` | 自检，每项给修复建议 |
 | `agentkit model add/list/test/remove` | 配置工人模型（任意 OpenAI 兼容接口）；配置里只存 Key 的**环境变量名** |
-| `agentkit task create "目标" --check "pytest -q" [--allow DIR] [--budget-tokens/--budget-usd/--budget-minutes] [--tier]` | 派活：工人在独立 worktree/分支 `agentkit/<id>` 干活；无模型时返回「直接模式」提示 |
-| `agentkit task status / wait / report / cancel / clean` | status <100 token；report ≤300 token（与 verify 同格式，verdict 多一个 `needs_review` = 测试过了但有作弊嫌疑）；`wait` 单个任务结束时直接带回报告（省一次调用） |
-| `agentkit task resume ID [--budget-*]` | 续跑 paused（429/超时）/ interrupted / stopped 任务：沿用原 worktree 和分支，工人拿到压缩后的历史（做过的动作 + 当前 diff），token / 金额预算按整个任务累计 |
+| `agentkit task create "目标" --check "pytest -q" [--backend builtin\|codex\|opencode\|qoder\|cursor\|cursor] [--model NAME] [--allow DIR] [--budget-tokens/--budget-usd/--budget-minutes] [--tier]` | 派活：builtin API Key 模型、Codex、OpenCode、Qoder 或 Cursor CLI 在独立 worktree/分支 `agentkit/<id>` 干活；默认要求验收在基线失败、修复后通过；无模型时返回「直接模式」提示 |
+| `agentkit task status / wait / report / diff / steer / answer / accept / reject / cancel / clean` | status <100 token；report ≤300 token；支持预算内 diff、中途纠偏、工人提问回答和接受/拒绝记录 |
+| `agentkit task resume ID [--model NAME] [--backend builtin\|codex\|opencode\|qoder\|cursor] [--budget-*]` | 续跑 paused（429/超时）/ interrupted / stopped 任务：沿用原 worktree 和分支；可换模型或后端，token / 金额预算按整个任务累计 |
+| `agentkit task handoff ID [--model NAME] [--backend builtin\|codex\|opencode\|qoder\|cursor]` | 显式换工人接力，保留 worktree、diff、记忆和累计预算，记录接力历史 |
+| `agentkit goal create/run/status/wait/report/steer/answer/cancel/resume` | 有界结果闭环：执行、独立验收、失败反馈、提问回答、续跑或换模型，只有验收通过才完成 |
 | `agentkit uninstall [--yes] [--this-repo] [--delete-branches]` | 卸载：不带 `--yes` 只列出将删除的内容；删除包、`~/.config/agentkit`、`~/.local/share/agentkit`、各仓库 `.agentkit/` 与 worktree；**不动你的代码和 git 历史**（任务分支默认保留，git 已跟踪的共享记忆保留） |
 | `agentkit logs <id> [--errors]` / `agentkit debug-bundle <id>` | 定位失败：结构化事件（哪一步、哪个组件、错误码）；脱敏归档用于报 Bug（错误码见 [docs/errors.md](docs/errors.md)） |
 | `agentkit feedback --bug <id> \| --idea "..."` | 生成脱敏的 Issue 草稿和预填链接，**从不自动提交** |
-| `agentkit manual [命令] [--all] [--format md]` | 主管 AI 操作手册（C-09）：快速上手、直接 / 派活模式取舍、安全规则、错误恢复、每个命令的参数 / 输出 / 错误码 / 副作用 / 示例；由 CLI 定义自动生成，见 [docs/agent-manual.md](docs/agent-manual.md) |
+| `agentkit manual [命令] [--all] [--format md]` | 主管 AI 操作手册（C-09）：总览约 1.9k token，全量约 4.8k token；由 CLI 定义自动生成，见 [docs/agent-manual.md](docs/agent-manual.md) |
+| `agentkit mcp` | 启动 MCP stdio 服务端，向 Muse 等 Agent 暴露核心工具、动态任务/Goal 资源、资源分页；支持 2025-06-18/2025-11-25 的资源订阅与状态变更通知，2026-07-28 明确不支持 |
+| `agentkit code search/defs/refs/index` | 可替换代码智能：内置词法/符号检索、LSP 语义引用、可选 XERJ 索引/代码检索/定义/记忆；XERJ 不可用时自动回退 |
 
-安全默认：`run`/`verify` 拒绝 `git push`、`git commit`、`sudo`、`rm -rf /`/`~`、`curl | sh`、读取 `~/.ssh` 和 `.env`；可在 `.agentkit/config.toml` 的 `[run] allow/deny` 调整。所有输出与日志自动脱敏（`sk-...`、`ghp_...`、`AKIA...` 等）。
+安全默认：`run`/`verify` 拒绝 `git push`、`git commit`、`sudo`、`rm -rf /`/`~`、`curl | sh`、读取 `~/.ssh` 和 `.env`；可在 `.agentkit/config.toml` 的 `[run] allow/deny` 调整。Linux bubblewrap 支持 `[sandbox] network=false` 硬隔离，也支持 `network = ["api.openai.com"]` 域名白名单：沙箱内只能访问回环中继，宿主代理按域名与 TLS SNI 放行，拒绝重复 Host、管道后续请求和非全局解析地址，任务报告会记录 shared/isolated/allowlist/host。所有输出与日志自动脱敏（`sk-...`、`ghp_...`、`AKIA...` 等）。
 
 运行状态写在仓库内 `.agentkit/`（快照、日志、记忆、任务、worktree；其中 `.gitignore` 只放行 `config.toml` 与记忆文件），除了调用你配置的模型接口外不上传任何数据。
+
+### 多工人后端
+
+- 接入边界：只接可脚本化的官方 CLI/API/RPC/MCP 编程工具；不接 GUI 自动化、电脑操作工具，也不为需要模拟 Windows 沙箱的工具做兼容层。生产运行平台为 Linux VPS。
+- API Key 模型：`agentkit model add ... --key-env VAR`，使用 builtin OpenAI 兼容工人。
+- Codex CLI：配置 `[workers.codex]` 的 `command`、`model`、可选 `key_env`、`sandbox` 和 `price_in/price_out`，然后 `task create ... --backend codex`。
+- OpenCode V1：配置 `[workers.opencode]` 的 `command` 与 `model=provider/model`，使用官方 `opencode run --format json`；默认禁用 shell、网络工具、子 Agent 和项目配置，验收由 AgentKit 执行。
+- OpenCode V2：设置 `version = "v2"`，可指定 `model = "opencode/beam-free"` 等官方免费模型，无需登录；AgentKit 使用 `--standalone run --format json`、V2 `permissions/policies` 和独立数据目录。免费额度用尽返回 429 并暂停续跑，不绕过限额；需要保存账号登录时必须显式 `allow_account_login = true`。真实 V2 2.4.2 最小任务已验证 token/session 解析。
+- Qoder CLI 账号：安装官方 Qoder CLI。AgentKit 默认使用专用 `XDG_CONFIG_HOME/agentkit/qoder` 目录，不复用 `~/.qoder`；先设置 `QODER_CONFIG_DIR=<该目录>` 再运行 `qodercli login`，或显式配置 `[workers.qoder].config_dir` 后使用 `--backend qoder`。也可用 `QODER_PERSONAL_ACCESS_TOKEN`。适配器只调用 CLI，不读取登录文件；默认关闭遥测、项目配置、MCP、shell、网络工具和子 Agent，并记录请求 Credits。Credits 不等同于 USD；`--budget-usd` 需配置价格或确认零成本。
+- Cursor CLI：安装官方 `agent` CLI，配置 `[workers.cursor]` 并设置 `CURSOR_API_KEY`（或专用 `key_env`），使用 `--backend cursor --budget-minutes N`。适配器使用官方 headless/stream-json、独立配置目录和 session resume，默认拒绝 shell、网络、MCP 与密钥路径；CLI 模式不报告 token/成本，因此拒绝 token/USD 预算。可选 `transport = "sdk"`（需 `pip install -e '.[cursor]'` 和显式 `model`）使用官方 Python SDK，支持工具白名单、session resume、运行时 token 用量与按运行成本；SDK 未报告用量时仍拒绝 token 预算，USD 硬预算仍不支持。真实 Cursor API Key 任务尚未验证。
+- 所有外部后端默认要求 bubblewrap；`allow_unsandboxed` 仅供测试。接力可在 builtin/Codex/OpenCode/Qoder/Cursor 间进行，保留同一 worktree、diff、AgentKit 记忆和累计预算；Cursor 仅支持轮次/时间预算。
+- 域名白名单要求模型 CLI/工具遵守 `HTTP_PROXY`/`HTTPS_PROXY`；不遵守代理的客户端会在独立网络命名空间内直连失败，不会自动回退到共享网络。`network=false` 或白名单在 bubblewrap 不可用时也会拒绝启动。
+- Antigravity 只接官方条款明确允许的企业/API 方案；consumer 登录态不包装。所有外部工具均不做反代、不共享登录态、不轮换账号。
 
 ### 派活模式要点
 - 工人只能用上面的工具（外加 `finish` 提交），不能 commit / push；工人说「完成」不算数：验收器把它的改动复制到全新 worktree 独立重跑检查，并标记删测试、跳过测试、改验收脚本、改白名单外文件、偷偷提交等行为。
@@ -94,7 +111,16 @@ AI 代用户报 Bug / 提需求：先搜已有 Issue，**先问人类用户**（
 
 开发：`pip install -e .[dev] && pytest -q`。
 
+### 本地发布与回滚
+
+- `agentkit release plan`：只读显示版本、git 提交、产物目录和构建计划。
+- `agentkit release build`：要求干净 git 工作树，构建 wheel/sdist、`SHA256SUMS` 和 `release-manifest.json`；`--allow-dirty` 仅用于测试构建，`--overwrite` 需显式确认。
+- `agentkit release verify dist/release-manifest.json`：校验文件哈希、大小、wheel METADATA/必需模块和 sdist 安全路径，不导入或执行 artifact；`trusted:false` 表示哈希不证明发布来源。
+- `agentkit release rollback dist/release-manifest.json`：默认只显示安装计划；`--yes` 才安装私有暂存副本，使用隔离 pip 环境。Windows 控制台运行时采用退出后 helper 安装，并写入 `rollback-VERSION-result.json`。
+- 发布命令不推送、不发布、不签名，也不会自动升级用户环境；回滚保留 `.agentkit/` 状态。
+
 ## 文档
+- [PRD v1.0：可信执行与进化底座](docs/prd-v1.0.md)（目标需求，C-15 至 C-20）
 - [PRD v0.3](docs/prd-v0.3.md)（[v0.2 存档](docs/prd-v0.2.md)）
 - [V1.0 需求基线（冻结）](docs/v1.0-baseline.md)
 - [功能清单与借鉴来源](docs/feature-sources.md)

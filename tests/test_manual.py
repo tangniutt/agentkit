@@ -3,6 +3,7 @@
 """C-09: the supervisor manual is generated from the live CLI and cannot drift."""
 import argparse
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -46,14 +47,14 @@ def test_example_parses_to_its_own_command(path):
     assert words[0] == "agentkit"
     rest, *_ = split_globals(words[1:])
     a = build_parser().parse_args(rest)
-    got = [a.cmd] + [getattr(a, d) for d in ("cp_cmd", "mem_cmd", "model_cmd", "task_cmd") if getattr(a, d, None)]
+    got = [a.cmd] + [getattr(a, d) for d in ("cp_cmd", "mem_cmd", "model_cmd", "task_cmd", "goal_cmd", "code_cmd", "memory_cmd", "release_cmd") if getattr(a, d, None)]
     primary = {"repo-map": "repo_map", "map": "repo_map"}
     got[0] = primary.get(got[0], got[0])
     assert " ".join(got) == path, (ex, got)
 
 
 def test_error_codes_exist_in_registry_and_docs():
-    docs = (ROOT / "docs" / "errors.md").read_text()
+    docs = (ROOT / "docs" / "errors.md").read_text(encoding="utf-8")
     used = set(M.COMMON_ERR) | set(M.RECOVER) | {c for s in M.SPEC.values() for c in s["err"]}
     for c in used:
         assert c in ERRORS, c
@@ -91,7 +92,7 @@ def test_overview_is_valid_json_fits_default_budget(ak):
     assert set(d["commands"]) == set(M.SPEC)
     assert any("--yes" in s for s in d["safety"]) and any("never printed" in s for s in d["safety"])
     assert any("posted:false" in s for s in d["safety"])
-    assert len(r["_raw"]) // TOK < 1900, len(r["_raw"]) // TOK
+    assert len(r["_raw"]) // TOK < 2000, len(r["_raw"]) // TOK
 
 
 def test_full_manual_compact_and_paged_by_budget(ak):
@@ -100,7 +101,7 @@ def test_full_manual_compact_and_paged_by_budget(ak):
     full = ak.next(r)
     assert full["ok"] and not full["truncated"] and set(full["data"]["commands"]) == set(M.SPEC)
     n = len(full["_raw"]) // TOK
-    assert n < 4000, f"full manual is {n} tokens"
+    assert n < 5000, f"full manual is {n} tokens"
     for path, d in full["data"]["commands"].items():
         assert d["do"] and d["out"] and d["fx"] and d["ex"].startswith("agentkit "), path
 
@@ -129,25 +130,28 @@ def test_unknown_command_is_usage_error(ak):
 
 
 def test_markdown_doc_is_generated_and_committed():
-    doc = (ROOT / "docs" / "agent-manual.md").read_text()
+    doc = (ROOT / "docs" / "agent-manual.md").read_text(encoding="utf-8")
     assert doc == M.markdown(), "docs/agent-manual.md is stale: agentkit manual --format md > docs/agent-manual.md"
     for k in M.SPEC:
         assert f"### `agentkit {k}`" in doc
-    p = subprocess.run([sys.executable, "-m", "agentkit", "manual", "--format", "md"], cwd=ROOT, capture_output=True, text=True)
+    p = subprocess.run([sys.executable, "-m", "agentkit", "manual", "--format", "md"], cwd=ROOT, capture_output=True,
+                       text=True, encoding="utf-8", env={**os.environ, "PYTHONIOENCODING": "utf-8"})
     assert p.returncode == 0 and p.stdout == doc
 
 
 def test_human_renders_text(repo):
-    p = subprocess.run([sys.executable, "-m", "agentkit", "manual", "--human"], cwd=repo, capture_output=True, text=True)
+    p = subprocess.run([sys.executable, "-m", "agentkit", "manual", "--human"], cwd=repo, capture_output=True,
+                       text=True, encoding="utf-8", env={**os.environ, "PYTHONIOENCODING": "utf-8"})
     assert p.returncode == 0 and p.stdout.startswith("# AgentKit operating manual") and "## Quick start" in p.stdout
     assert "### `agentkit" not in p.stdout  # overview: index only
-    p = subprocess.run([sys.executable, "-m", "agentkit", "manual", "task", "wait", "--human"], cwd=repo, capture_output=True, text=True)
+    p = subprocess.run([sys.executable, "-m", "agentkit", "manual", "task", "wait", "--human"], cwd=repo, capture_output=True,
+                       text=True, encoding="utf-8", env={**os.environ, "PYTHONIOENCODING": "utf-8"})
     assert "### `agentkit task wait`" in p.stdout and "--no-report" in p.stdout
 
 
 def test_manual_is_linked_from_entry_docs():
     for f in ("llms.txt", "AGENTS.md", "README.md"):
-        t = (ROOT / f).read_text()
+        t = (ROOT / f).read_text(encoding="utf-8")
         assert "agentkit manual" in t and "docs/agent-manual.md" in t, f
 
 

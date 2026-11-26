@@ -9,6 +9,8 @@
 from __future__ import annotations
 
 import os
+import re
+import shutil
 import signal
 import subprocess
 import time
@@ -21,6 +23,45 @@ from .redact import redact_text
 
 DEFAULT_TIMEOUT = 120
 ACTIVE: set = set()  # running Popen objects; the task watchdog kills their groups on budget/cancel
+_ACTIVE_JOBS: dict = {}
+
+
+def _windows_job(proc: subprocess.Popen):
+    import ctypes
+
+    kernel = ctypes.windll.kernel32
+    job = kernel.CreateJobObjectW(None, None)
+    if not job:
+        raise OSError("CreateJobObjectW failed")
+    class JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
+        _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64), ("PerJobUserTimeLimit", ctypes.c_int64),
+                    ("LimitFlags", ctypes.c_uint32), ("MinimumWorkingSetSize", ctypes.c_size_t),
+                    ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", ctypes.c_uint32),
+                    ("Affinity", ctypes.c_size_t), ("PriorityClass", ctypes.c_uint32),
+                    ("SchedulingClass", ctypes.c_uint32)]
+    class IO_COUNTERS(ctypes.Structure):
+        _fields_ = [("ReadOperationCount", ctypes.c_uint64), ("WriteOperationCount", ctypes.c_uint64),
+                    ("OtherOperationCount", ctypes.c_uint64), ("ReadTransferCount", ctypes.c_uint64),
+                    ("WriteTransferCount", ctypes.c_uint64), ("OtherTransferCount", ctypes.c_uint64)]
+    class JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
+        _fields_ = [("BasicLimitInformation", JOBOBJECT_BASIC_LIMIT_INFORMATION), ("IoInfo", IO_COUNTERS)]
+    info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+    info.BasicLimitInformation.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    if not kernel.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info)):
+        kernel.CloseHandle(job)
+        raise OSError("SetInformationJobObject failed")
+    if not kernel.AssignProcessToJobObject(job, int(proc._handle)):
+        kernel.CloseHandle(job)
+        raise OSError("AssignProcessToJobObject failed")
+    return job
+
+
+def _close_windows_job(proc: subprocess.Popen):
+    import ctypes
+
+    job = _ACTIVE_JOBS.pop(proc, None)
+    if job:
+        ctypes.windll.kernel32.CloseHandle(job)
 
 
 def kill_active():
@@ -33,7 +74,17 @@ def kill_active():
 
 def _kill_group(proc: subprocess.Popen):
     if os.name != "posix":
-        proc.kill()
+        job = _ACTIVE_JOBS.get(proc)
+        if job:
+            import ctypes
+
+            ctypes.windll.kernel32.TerminateJobObject(job, 1)
+        else:
+            proc.kill()
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
         return
     for sig in (signal.SIGTERM, signal.SIGKILL):
         try:
@@ -60,11 +111,22 @@ def execute(command: str, cwd: Path, timeout: float, log_dir: Path, env: Optiona
     t0 = time.monotonic()
     timed_out = False
     with open(out_p, "wb") as fo, open(err_p, "wb") as fe:
-        proc = subprocess.Popen(
-            command, shell=True, cwd=str(cwd), stdout=fo, stderr=fe, stdin=subprocess.DEVNULL,
-            start_new_session=os.name == "posix", env=env,
-        )
+        windows_path = bool(re.search(r"[A-Za-z]:[\\/]", command))
+        bash = shutil.which("bash") if os.name == "nt" and not windows_path else None
+        if bash:
+            proc = subprocess.Popen([bash, "-c", command], cwd=str(cwd), stdout=fo, stderr=fe,
+                                    stdin=subprocess.DEVNULL, env=env)
+        else:
+            proc = subprocess.Popen(
+                command, shell=True, cwd=str(cwd), stdout=fo, stderr=fe, stdin=subprocess.DEVNULL,
+                start_new_session=os.name == "posix", env=env,
+            )
         ACTIVE.add(proc)
+        if os.name == "nt":
+            try:
+                _ACTIVE_JOBS[proc] = _windows_job(proc)
+            except OSError:
+                pass
         try:
             proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -72,15 +134,24 @@ def execute(command: str, cwd: Path, timeout: float, log_dir: Path, env: Optiona
             _kill_group(proc)
             proc.wait()
         else:
-            # leader exited: reap any background children left in its group
+            # leader exited: reap any background children left in its group/job
             if os.name == "posix":
                 try:
                     os.killpg(proc.pid, signal.SIGKILL)
                 except (ProcessLookupError, PermissionError):
                     pass
+            else:
+                _kill_group(proc)
         finally:
             ACTIVE.discard(proc)
+            if os.name == "nt":
+                _close_windows_job(proc)
     dur = time.monotonic() - t0
+    if os.name == "nt" and bash:
+        for p in (out_p, err_p):
+            data = p.read_bytes()
+            if b"\r\n" in data:
+                p.write_bytes(data.replace(b"\r\n", b"\n"))
     for p in (out_p, err_p):
         _redact_file(p)
     return {"exit_code": proc.returncode, "timed_out": timed_out, "duration_s": round(dur, 2),

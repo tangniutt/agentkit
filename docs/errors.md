@@ -46,10 +46,13 @@ draft an issue (never posted automatically): `agentkit feedback --bug <id>`.
 | `AK-TASK-NOGIT` | dispatch needs a git repo with at least one commit | git init && git add -A && git commit -m init |
 | `AK-TASK-UNKNOWN` | unknown or invalid task id | agentkit task status |
 | `AK-TASK-STATE` | operation not allowed in the task's current state | agentkit task status ID |
+| `AK-TASK-WAITING` | worker is waiting for a supervisor answer | agentkit task answer ID 'answer' |
 | `AK-GIT` | a git command failed | agentkit doctor |
 | `AK-DISK-FULL` | not enough free disk space | agentkit task clean --all |
 | `AK-LOGS-UNKNOWN` | no events for that run / task id | ids are in error.run, task ids in task status |
 | `AK-MODEL-UNAVAILABLE` | model endpoint overloaded / server error (500/502/503) after 2 retries | re-submit later or use another model |
+| `AK-RELEASE` | release operation failed | agentkit release plan |
+| `AK-RELEASE-HASH` | artifact or manifest invalid | restore or rebuild artifacts |
 | `AK-INTERNAL` | bug in agentkit (uncaught exception) | agentkit debug-bundle RUN and attach it to an issue |
 
 Event log line fields (JSONL, redacted): `ts, run_id, step, component, event, duration, error_code` + event-specific extras.

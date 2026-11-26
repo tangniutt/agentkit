@@ -14,12 +14,11 @@ from __future__ import annotations
 
 import difflib
 import json
-import os
 import sys
 from pathlib import Path
 
 from . import checkpoint, state
-from .core import AKError, Ctx, Result, sha256_bytes
+from .core import AKError, Ctx, Result, atomic_write, sha256_bytes
 from .fsutil import read_text
 from .symbols import syntax_errors
 
@@ -84,11 +83,11 @@ class _Plan:
 def _current(ctx: Ctx, plan: _Plan, rel: str):
     if rel in plan.writes:
         return plan.writes[rel]
-    p = ctx.root / rel
+    p = ctx.resolve(rel)
     if not p.exists():
         return None
     if p.is_dir():
-        raise AKError(f"is a directory: {rel}", "", None)
+        raise AKError(f"is a directory: {rel}", "", None, code="AK-PATH")
     return read_text(p)
 
 
@@ -96,7 +95,7 @@ def _check_fresh(ctx: Ctx, rel: str):
     seen = state.last_seen(ctx, rel)
     if seen is None:
         return
-    cur = sha256_bytes((ctx.root / rel).read_bytes())
+    cur = sha256_bytes(ctx.resolve(rel).read_bytes())
     if cur != seen:
         raise AKError(
             f"{rel} changed since you last read it",
@@ -106,13 +105,7 @@ def _check_fresh(ctx: Ctx, rel: str):
 
 
 def _rel_checked(ctx: Ctx, path: str) -> str:
-    p = ctx.resolve(path)
-    if not ctx.inside_root(p):
-        raise AKError(f"path outside repo: {path}", f"edits are limited to {ctx.root}", None)
-    rel = ctx.rel(p)
-    if rel.startswith(".agentkit/") or rel == ".agentkit" or rel.startswith(".git/"):
-        raise AKError(f"refused: {rel}", "agentkit state and .git are not editable via edit", None)
-    return rel
+    return ctx.rel(ctx.resolve(path))
 
 
 def plan_ops(ctx: Ctx, ops: list) -> _Plan:
@@ -131,7 +124,12 @@ def plan_ops(ctx: Ctx, ops: list) -> _Plan:
             old, new = op["old"], op.get("new", "")
             if old == "":
                 raise AKError(f"{tag}: empty old text", "old must be a unique snippet of the file", ctx.next_cmd("read", rel))
-            occ = _occurrences(cur, old)
+            match_old = old
+            if "\n" in old and "\r\n" not in old and old not in cur:
+                crlf_old = old.replace("\n", "\r\n")
+                if crlf_old in cur:
+                    match_old = crlf_old
+            occ = _occurrences(cur, match_old)
             if not occ:
                 cands = _closest(cur, old)
                 raise AKError(
@@ -152,7 +150,10 @@ def plan_ops(ctx: Ctx, ops: list) -> _Plan:
                     ctx.next_cmd("read", f"{rel}:{cands[0]['line']}-{cands[0]['line'] + 10}"),
                     data={"path": rel, "matches": len(occ), "candidates": cands},
                 )
-            plan.writes[rel] = cur.replace(old, new) if op.get("all") else cur[:occ[0]] + new + cur[occ[0] + len(old):]
+            match_new = new
+            if "\r\n" in cur and "\n" in new and "\r\n" not in new:
+                match_new = new.replace("\n", "\r\n")
+            plan.writes[rel] = cur.replace(match_old, match_new) if op.get("all") else cur[:occ[0]] + match_new + cur[occ[0] + len(match_old):]
         elif kind == "create":
             rel = _rel_checked(ctx, op["path"])
             cur = _current(ctx, plan, rel)
@@ -217,14 +218,8 @@ def check_syntax(plan: _Plan, ctx: Ctx, force: bool):
 
 
 def _write(p: Path, text: str):
-    p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_name(p.name + ".agentkit-tmp")
     mode = p.stat().st_mode & 0o777 if p.exists() else None
-    with open(tmp, "w", encoding="utf-8", newline="") as f:
-        f.write(text)
-    if mode is not None:
-        os.chmod(tmp, mode)
-    os.replace(tmp, p)
+    atomic_write(p, text.encode("utf-8"), mode)
 
 
 def apply(ctx: Ctx, ops: list, reason: str, force_syntax: bool = False, dry_run: bool = False) -> dict:
@@ -236,18 +231,19 @@ def apply(ctx: Ctx, ops: list, reason: str, force_syntax: bool = False, dry_run:
     cid = checkpoint.snapshot(ctx, changed, reason)
     try:
         for rel, new in plan.writes.items():
-            p = ctx.root / rel
+            p = ctx.resolve(rel)
             if new is None:
                 if p.exists():
                     p.unlink()
             else:
-                _write(p, new)
+                p.parent.mkdir(parents=True, exist_ok=True)
+                _write(ctx.resolve(rel), new)
     except BaseException as e:
         checkpoint.restore(ctx, checkpoint.load(ctx, cid))
         raise AKError("write failed; all files restored", f"{type(e).__name__}: {e}", ctx.next_cmd("checkpoint", "diff", cid))
     files = []
     for rel in changed:
-        p = ctx.root / rel
+        p = ctx.resolve(rel)
         sha = sha256_bytes(p.read_bytes()) if p.exists() else None
         state.record(ctx, rel, sha)
         old = plan.orig.get(rel)

@@ -21,12 +21,46 @@ DEFAULT_SKIP_DIRS = {
 MAX_TEXT_BYTES_SNIFF = 8192
 
 _SECRET_PATH = re.compile(
-    r"(^|/)\.ssh(/|$)|(^|/)\.env(\.(?!example$|sample$|template$|dist$)[\w.-]+)?$|(^|/)id_(rsa|ed25519|ecdsa|dsa)$"
+    r"(^|/)\.ssh(/|$)|(^|/)\.env(\.(?!example$|sample$|template$|dist$)[\w.-]+)?$|(^|/)id_(rsa|ed25519|ecdsa|dsa)$",
+    re.IGNORECASE,
 )
+_SECRET_DIRS = {".ssh", "secret", "secrets"}
 
 
-def is_secret_path(p: Path) -> bool:
-    return bool(_SECRET_PATH.search(p.as_posix()))
+def _secret_name(name: str) -> bool:
+    folded = name.casefold()
+    return folded in _SECRET_DIRS or bool(_SECRET_PATH.fullmatch(folded))
+
+
+def _secret_candidates(root: Path) -> Iterable[Path]:
+    for dirpath, dirnames, filenames in os.walk(root):
+        skipped = {name.casefold() for name in ALWAYS_SKIP_DIRS}
+        dirnames[:] = [name for name in dirnames if name.casefold() not in skipped]
+        for name in filenames:
+            if _secret_name(name):
+                yield Path(dirpath) / name
+
+
+def is_secret_path(p: Path, root: Optional[Path] = None) -> bool:
+    if any(_secret_name(part) for part in p.parts):
+        return True
+    # A hard link has no target path to resolve. Compare inode identity with
+    # secret-named files in the repo so an innocuous alias cannot bypass policy.
+    if root is None:
+        return False
+    try:
+        st = p.stat()
+        if not p.is_file() or getattr(st, "st_nlink", 1) <= 1:
+            return False
+        for candidate in _secret_candidates(Path(root)):
+            try:
+                if os.path.samestat(st, candidate.stat()):
+                    return True
+            except OSError:
+                continue
+    except OSError:
+        return False
+    return False
 
 
 def is_binary_bytes(head: bytes) -> bool:
@@ -189,12 +223,26 @@ def _git_files(root: Path, start: Path) -> Optional[list]:
 
 
 def list_files(ctx: Ctx, start: Optional[Path] = None, no_ignore: bool = False) -> list:
-    """Repo-relative posix paths of files under start, respecting .gitignore."""
-    start = start or ctx.root
-    if not ctx.inside_root(start):
-        raise AKError("path outside repo root", f"{start} is not under {ctx.root}", "agentkit --root DIR ...")
-    if not no_ignore and ctx.is_git:
-        files = _git_files(ctx.root, start)
-        if files is not None:
-            return files
-    return list(_walk_python(ctx.root, start, no_ignore))
+    """Repo-relative posix paths of safe files under start, respecting .gitignore."""
+    start = ctx.resolve(start or ".")
+    if not start.exists():
+        raise AKError(f"not found: {start}", "search path does not exist", ctx.next_cmd("ls"))
+    if start.is_file():
+        candidates = [ctx.rel(start)]
+    elif not start.is_dir():
+        raise AKError(f"not a file or directory: {start}", "unsupported path type", None, code="AK-PATH")
+    elif not no_ignore and ctx.is_git:
+        candidates = _git_files(ctx.root, start)
+        if candidates is None:
+            candidates = list(_walk_python(ctx.root, start, no_ignore))
+    else:
+        candidates = list(_walk_python(ctx.root, start, no_ignore))
+    safe = []
+    for rel in candidates:
+        try:
+            p = ctx.resolve(rel)
+        except AKError:
+            continue  # never follow a planted link or expose a protected/secret alias
+        if p.is_file():
+            safe.append(ctx.rel(p))
+    return sorted(set(safe))

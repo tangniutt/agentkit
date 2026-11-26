@@ -6,17 +6,16 @@ AgentKit: token-frugal coding tools for AI agents + optional cheap worker with i
 
 Global options: --budget N (output tokens, default 2000), --human (text), --root DIR; anywhere on the line.
 
-JSON form: `agentkit manual` (overview, ~1720 tokens), `agentkit manual <command>` (one command), `agentkit manual --all` (everything, ~3869 tokens).
+JSON form: `agentkit manual` (overview, ~1792 tokens), `agentkit manual <command>` (one command), `agentkit manual --all` (everything, ~4959 tokens).
 
 ## Quick start (supervisor)
 
-1. `agentkit doctor` — healthy:true? mode direct|dispatch; each failed check has fix
-2. `agentkit memory brief; agentkit repo_map` — orient (≤500 + paged tokens)
-3. `agentkit model add NAME --base-url URL --model ID --key-env VAR` — once, only for delegate mode; then model test NAME
-4. `agentkit task create 'GOAL' --check 'pytest -q' --budget-tokens N` — -> id
-5. `agentkit task wait ID --timeout 600` — finished -> ≤300-token report inline
-6. review report: pass -> git diff HEAD...agentkit/ID, then git merge agentkit/ID yourself; needs_review -> inspect suspicious flags + diff; fail/invalid -> read checks[].why
-7. paused/interrupted/stopped -> agentkit task resume ID [--budget-tokens N]; stop -> agentkit task cancel ID; done with it -> agentkit task clean ID
+1. `agentkit doctor; agentkit memory brief; agentkit repo_map`
+2. `agentkit model add NAME --base-url URL --model ID --key-env VAR; agentkit model test NAME`
+3. `agentkit task create 'GOAL' --check 'pytest -q' --budget-tokens N`
+4. `agentkit task wait ID --timeout 600`
+5. pass -> review/merge; needs_review -> inspect diff; fail -> read checks/logs
+6. paused/interrupted/stopped -> agentkit task resume ID; cancel -> agentkit task cancel ID; done -> agentkit task clean ID
 
 ## Direct vs delegate mode
 
@@ -26,8 +25,8 @@ JSON form: `agentkit manual` (overview, ~1720 tokens), `agentkit manual <command
 
 ## Budget and safety rules
 
-- keys: only the env var NAME is stored (--key-env); values are redacted everywhere and never printed; never pass a key as an argument
-- feedback only drafts (posted:false); ask your human before filing; no secrets/private code; a task/verify next may suggest feedback once (a signal: AK-INTERNAL, repeated tool errors, stuck, false alarm)
+- keys: store only env var NAME (--key-env); values redacted/never printed; never pass keys as args
+- feedback only drafts (posted:false); ask before filing; no secrets/private code; next may suggest once on signals
 - uninstall is a dry run unless --yes; show the plan to your human first; never touches source or git history
 - workers cannot commit/push; you merge agentkit/<id>; run/verify refuse git push/commit, sudo, rm -rf /|~, curl|sh, .env/~/.ssh
 - edit/create/delete/rename/patch are checkpointed: checkpoint rollback ID
@@ -80,6 +79,7 @@ read file | file:START-END | file#Symbol
 |---|---|---|---|
 | `spec` | str |  |  |
 | `--allow-secret-file` | bool |  |  |
+| `--full-lines` | bool |  | keep long lines; follow next with a larger budget |
 
 - **Output `data`:** `path,lines[a,b],total_lines,sha,content('N|text')`
 - **Errors:** `AK-PATH` (path missing, outside the repo, a directory, or protected), `AK-READ-BINARY` (file is binary), `AK-READ-SECRET` (refused to read a secret file (.env, ~/.ssh ...)), `AK-READ-SPEC` (bad read spec or range)
@@ -314,7 +314,7 @@ run checks in a clean worktree/copy, ≤300-token report
 | `--timeout` | float |  | seconds per check |
 | `--base` | str | `HEAD` | git ref the clean worktree starts from |
 
-- **Output `data`:** `verdict(pass|fail|invalid),checks[{result,exit,s,why?,log?}],changed,suspicious,cost,code?`
+- **Output `data`:** `verdict,checks,changed,suspicious,cost,code?`
 - **Errors:** `AK-VERIFY-NOCHECK` (verify/task has no check command), `AK-VERIFY-INVALID` (a check command is missing or broken), `AK-RUN-DENIED` (command refused by a permission rule (M-22)), `AK-GIT` (a git command failed), `AK-DISK-FULL` (not enough free disk space)
 - **Side effects:** exec
 - **Example:** `agentkit verify --check 'pytest -q'`
@@ -417,7 +417,7 @@ self check with fix hints
 
 ### `agentkit model add`
 
-register an OpenAI-compatible worker model (stores the key's env var NAME only); --preset nvidia|gemini|openrouter|agnes|amd-cn fills base URL, key var, pacing
+add OpenAI-compatible model; store key env name
 
 | arg | type | default | notes |
 |---|---|---|---|
@@ -445,7 +445,7 @@ register an OpenAI-compatible worker model (stores the key's env var NAME only);
 
 configured models (no keys)
 
-- **Output `data`:** `models[{name,model,tier,context,price,key_env,key_set,base_url}],default`
+- **Output `data`:** `models[{name,model,tier,context,price,key_env,key_set}],default`
 - **Errors:** only the common ones
 - **Side effects:** ro
 - **Example:** `agentkit model list`
@@ -460,7 +460,7 @@ one tiny chat call to a model
 | `--timeout` | float | `60` |  |
 
 - **Output `data`:** `model,ok,latency_s,reply,usage,reasoning_only?`
-- **Errors:** `AK-MODEL-NONE` (no worker model configured (direct mode)), `AK-MODEL-KEYENV` (the model's key environment variable is not set), `AK-MODEL-AUTH` (model rejected the key (401/403)), `AK-MODEL-429` (model rate limit / quota exhausted (429)), `AK-MODEL-TIMEOUT` (model did not answer after 2 retries), `AK-MODEL-NETWORK` (cannot reach the model endpoint), `AK-MODEL-UNAVAILABLE` (model endpoint overloaded / server error (500/502/503) after 2 retries), `AK-MODEL-HTTP` (model endpoint returned an HTTP error (e.g. 400/404 bad model id)), `AK-MODEL-BAD-RESPONSE` (model endpoint did not return an OpenAI chat completion)
+- **Errors:** `AK-MODEL-NONE` (no worker model configured (direct mode)), `AK-MODEL-AUTH` (model rejected the key (401/403)), `AK-MODEL-429` (model rate limit / quota exhausted (429)), `AK-MODEL-TIMEOUT` (model did not answer after 2 retries), `AK-MODEL-NETWORK` (cannot reach the model endpoint)
 - **Side effects:** tokens, net
 - **Example:** `agentkit model test cheap`
 
@@ -479,28 +479,30 @@ remove a model from config
 
 ### `agentkit task create`
 
-dispatch a goal to a worker in its own worktree/branch agentkit/<id>
+dispatch worker with fail-to-pass
 
 | arg | type | default | notes |
 |---|---|---|---|
 | `goal` | str |  | optional; what the worker must achieve |
 | `--goal` | str |  | same as the positional goal |
 | `--check` | str |  | repeatable; acceptance command run by the verifier, e.g. 'pytest -q' |
+| `--allow-baseline-pass` | bool |  | allow checks that already pass on the base commit (default: baseline must fail) |
 | `--allow` | str |  | repeatable; glob/dir the worker may change |
 | `--budget-tokens` | int |  | stop after this many worker tokens |
 | `--budget-usd` | float |  | stop after this many USD (needs model prices) |
 | `--budget-minutes` | float |  | stop after this many minutes |
 | `--tier` | str |  | low\|mid\|high: pick a model by tier |
-| `--model` | str |  | configured model NAME |
+| `--model` | str |  | builtin name, Codex id, OpenCode provider/model, Qoder model, or Cursor model |
+| `--backend` | str | `builtin` | worker backend |
 
-- **Output `data`:** `id,status,deduped?,warnings? (next: task wait)`
-- **Errors:** `AK-MODEL-NONE` (no worker model configured (direct mode)), `AK-MODEL-KEYENV` (the model's key environment variable is not set), `AK-VERIFY-NOCHECK` (verify/task has no check command), `AK-TASK-NOGIT` (dispatch needs a git repo with at least one commit), `AK-DISK-FULL` (not enough free disk space), `AK-GIT` (a git command failed)
+- **Output `data`:** `id,status,deduped?,warnings?`
+- **Errors:** `AK-MODEL-NONE` (no worker model configured (direct mode)), `AK-VERIFY-NOCHECK` (verify/task has no check command), `AK-TASK-STATE` (operation not allowed in the task's current state)
 - **Side effects:** tokens, net, exec, state
 - **Example:** `agentkit task create 'fix the failing test in calc.py' --check 'pytest -q' --budget-tokens 200000`
 
 ### `agentkit task status`
 
-<100 tokens per task; bare `task` = recent tasks
+<100 tokens/task; bare task = recent
 
 | arg | type | default | notes |
 |---|---|---|---|
@@ -513,13 +515,13 @@ dispatch a goal to a worker in its own worktree/branch agentkit/<id>
 
 ### `agentkit task report`
 
-≤300-token verdict; the worker's claim is never trusted
+≤300-token verdict; never trust worker
 
 | arg | type | default | notes |
 |---|---|---|---|
 | `ids` | str |  | zero or more |
 
-- **Output `data`:** `task,status,verdict(pass|fail|invalid|needs_review),checks,changed,suspicious,cost,error{code,component,step,log}?`
+- **Output `data`:** `task,status,verdict,checks,changed,suspicious,cost,error?`
 - **Errors:** `AK-TASK-UNKNOWN` (unknown or invalid task id)
 - **Side effects:** ro
 - **Example:** `agentkit task report t1a2b3c`
@@ -554,7 +556,7 @@ block until done/timeout; one finished task returns its report inline
 
 ### `agentkit task resume`
 
-continue a paused/interrupted/stopped task in its worktree
+resume task; switch model/backend in place
 
 | arg | type | default | notes |
 |---|---|---|---|
@@ -562,11 +564,100 @@ continue a paused/interrupted/stopped task in its worktree
 | `--budget-tokens` | int |  | new total token budget for the task |
 | `--budget-usd` | float |  |  |
 | `--budget-minutes` | float |  | time budget for this resumed run |
+| `--model` | str |  | target model |
+| `--backend` | str |  | target backend |
 
-- **Output `data`:** `id,status (next: task wait)`
-- **Errors:** `AK-TASK-UNKNOWN` (unknown or invalid task id), `AK-TASK-STATE` (operation not allowed in the task's current state), `AK-BUDGET` (task stopped: token / USD / time budget exceeded), `AK-MODEL-KEYENV` (the model's key environment variable is not set)
+- **Output `data`:** `id,status,resumes,handoff?,models? (next: task wait)`
+- **Errors:** `AK-TASK-STATE` (operation not allowed in the task's current state), `AK-BUDGET` (task stopped: token / USD / time budget exceeded)
 - **Side effects:** tokens, net, exec, state
 - **Example:** `agentkit task resume t1a2b3c --budget-tokens 400000`
+
+### `agentkit task handoff`
+
+resume with another model/backend; keep budgets
+
+| arg | type | default | notes |
+|---|---|---|---|
+| `ids` | str |  | zero or more |
+| `--model` | str |  | target model |
+| `--backend` | str |  | target backend |
+| `--budget-tokens` | int |  | new total token budget for the task |
+| `--budget-usd` | float |  |  |
+| `--budget-minutes` | float |  | time budget for this resumed run |
+
+- **Output `data`:** `id,status,resumes,from_model,to_model,handoffs`
+- **Errors:** `AK-TASK-STATE` (operation not allowed in the task's current state), `AK-BUDGET` (task stopped: token / USD / time budget exceeded)
+- **Side effects:** tokens, net, exec, state
+- **Example:** `agentkit task handoff t1a2b3c --model worker-b`
+
+### `agentkit task diff`
+
+budgeted tracked and untracked diff
+
+| arg | type | default | notes |
+|---|---|---|---|
+| `id` | str |  |  |
+| `--offset` | int | `0` |  |
+
+- **Output `data`:** `task,offset,diff`
+- **Errors:** `AK-TASK-UNKNOWN` (unknown or invalid task id), `AK-TASK-STATE` (operation not allowed in the task's current state), `AK-GIT` (a git command failed)
+- **Side effects:** ro
+- **Example:** `agentkit task diff t1a2b3c`
+
+### `agentkit task steer`
+
+append a constraint while queued or paused
+
+| arg | type | default | notes |
+|---|---|---|---|
+| `id` | str |  |  |
+| `text` | str |  |  |
+
+- **Output `data`:** `id,status,steering`
+- **Errors:** `AK-TASK-STATE` (operation not allowed in the task's current state), `AK-USAGE` (bad command line arguments)
+- **Side effects:** state
+- **Example:** `agentkit task steer t1a2b3c 'keep API'`
+
+### `agentkit task answer`
+
+answer a worker question and resume
+
+| arg | type | default | notes |
+|---|---|---|---|
+| `id` | str |  |  |
+| `text` | str |  |  |
+
+- **Output `data`:** `id,status,resumes`
+- **Errors:** `AK-TASK-STATE` (operation not allowed in the task's current state), `AK-TASK-WAITING` (worker is waiting for a supervisor answer), `AK-USAGE` (bad command line arguments)
+- **Side effects:** tokens, net, exec, state
+- **Example:** `agentkit task answer t1a2b3c 'yes'`
+
+### `agentkit task accept`
+
+record acceptance of a verified pass; does not merge
+
+| arg | type | default | notes |
+|---|---|---|---|
+| `id` | str |  |  |
+
+- **Output `data`:** `id,accepted,verdict,merged(false),next`
+- **Errors:** `AK-TASK-STATE` (operation not allowed in the task's current state)
+- **Side effects:** state
+- **Example:** `agentkit task accept t1a2b3c`
+
+### `agentkit task reject`
+
+record rejection and reason
+
+| arg | type | default | notes |
+|---|---|---|---|
+| `id` | str |  |  |
+| `reason` | str |  | optional |
+
+- **Output `data`:** `id,rejected,verdict`
+- **Errors:** `AK-TASK-UNKNOWN` (unknown or invalid task id)
+- **Side effects:** state
+- **Example:** `agentkit task reject t1a2b3c 'wrong approach'`
 
 ### `agentkit task clean`
 
@@ -583,9 +674,250 @@ remove finished tasks' worktrees (and branches unless --keep-branch)
 - **Side effects:** destructive
 - **Example:** `agentkit task clean --all --keep-branch`
 
+### `agentkit goal create`
+
+create bounded Goal over one task
+
+| arg | type | default | notes |
+|---|---|---|---|
+| `outcome` | str |  | optional; verifiable outcome |
+| `--input` | str |  | GoalSpec JSON file |
+| `--check` | str |  | repeatable; acceptance command (repeatable) |
+| `--non-goal` | str |  | repeatable |
+| `--allow` | str |  | repeatable |
+| `--allow-baseline-pass` | bool |  |  |
+| `--budget-tokens` | int |  |  |
+| `--budget-usd` | float |  |  |
+| `--budget-minutes` | float |  |  |
+| `--max-rounds` | int |  |  |
+| `--max-iterations` | int | `3` |  |
+| `--max-handoffs` | int | `2` |  |
+| `--failover` | str |  | repeatable |
+| `--model` | str |  |  |
+| `--tier` | str |  |  |
+
+- **Output `data`:** `id,task_id,status,iterations`
+- **Errors:** `AK-USAGE` (bad command line arguments), `AK-MODEL-NONE` (no worker model configured (direct mode)), `AK-TASK-STATE` (operation not allowed in the task's current state)
+- **Side effects:** tokens, net, exec, state
+- **Example:** `agentkit goal create 'coverage >80%' --check pytest`
+
+### `agentkit goal status`
+
+Goal/task status
+
+| arg | type | default | notes |
+|---|---|---|---|
+| `id` | str |  | optional |
+
+- **Output `data`:** `id,status,iteration`
+- **Errors:** `AK-TASK-UNKNOWN` (unknown or invalid task id)
+- **Side effects:** ro
+- **Example:** `agentkit goal status g1a2b3c`
+
+### `agentkit goal report`
+
+Goal plus task evidence
+
+| arg | type | default | notes |
+|---|---|---|---|
+| `id` | str |  |  |
+
+- **Output `data`:** `id,status,iteration,task,receipt`
+- **Errors:** `AK-TASK-UNKNOWN` (unknown or invalid task id)
+- **Side effects:** ro
+- **Example:** `agentkit goal report g1a2b3c`
+
+### `agentkit goal cancel`
+
+cancel Goal/task
+
+| arg | type | default | notes |
+|---|---|---|---|
+| `id` | str |  |  |
+
+- **Output `data`:** `status`
+- **Errors:** `AK-TASK-UNKNOWN` (unknown or invalid task id)
+- **Side effects:** state
+- **Example:** `agentkit goal cancel g1a2b3c`
+
+### `agentkit goal run`
+
+execute, verify and retry within limits
+
+| arg | type | default | notes |
+|---|---|---|---|
+| `id` | str |  |  |
+| `--timeout` | float | `600` |  |
+| `--budget-tokens` | int |  |  |
+| `--budget-usd` | float |  |  |
+| `--budget-minutes` | float |  |  |
+
+- **Output `data`:** `id,status,verdict?,iterations,receipt?`
+- **Errors:** `AK-TASK-STATE` (operation not allowed in the task's current state)
+- **Side effects:** tokens, net, exec, state
+- **Example:** `agentkit goal run g1a2b3c --timeout 60`
+
+### `agentkit goal wait`
+
+wait for terminal Goal
+
+| arg | type | default | notes |
+|---|---|---|---|
+| `id` | str |  |  |
+| `--timeout` | float | `600` |  |
+
+- **Output `data`:** `status`
+- **Errors:** `AK-TASK-UNKNOWN` (unknown or invalid task id)
+- **Side effects:** ro
+- **Example:** `agentkit goal wait g1a2b3c --timeout 60`
+
+### `agentkit goal steer`
+
+append constraint; keep outcome
+
+| arg | type | default | notes |
+|---|---|---|---|
+| `id` | str |  |  |
+| `text` | str |  |  |
+
+- **Output `data`:** `id,status,steering`
+- **Errors:** `AK-TASK-STATE` (operation not allowed in the task's current state), `AK-USAGE` (bad command line arguments)
+- **Side effects:** state
+- **Example:** `agentkit goal steer g1a2b3c 'keep API'`
+
+### `agentkit goal resume`
+
+resume unfinished Goal/task
+
+| arg | type | default | notes |
+|---|---|---|---|
+| `id` | str |  |  |
+| `--model` | str |  |  |
+| `--budget-tokens` | int |  |  |
+| `--budget-usd` | float |  |  |
+| `--budget-minutes` | float |  |  |
+
+- **Output `data`:** `id,status,task_id`
+- **Errors:** `AK-TASK-STATE` (operation not allowed in the task's current state), `AK-BUDGET` (task stopped: token / USD / time budget exceeded)
+- **Side effects:** tokens, net, exec, state
+- **Example:** `agentkit goal resume g1a2b3c --budget-tokens 400000`
+
+### `agentkit goal answer`
+
+answer the worker question and continue Goal
+
+| arg | type | default | notes |
+|---|---|---|---|
+| `id` | str |  |  |
+| `text` | str |  |  |
+
+- **Output `data`:** `id,status,task_id,task_resumes`
+- **Errors:** `AK-TASK-STATE` (operation not allowed in the task's current state), `AK-TASK-WAITING` (worker is waiting for a supervisor answer), `AK-USAGE` (bad command line arguments)
+- **Side effects:** tokens, net, exec, state
+- **Example:** `agentkit goal answer g1a2b3c 'yes'`
+
+### `agentkit code search`
+
+search code passages; auto falls back to builtin
+
+| arg | type | default | notes |
+|---|---|---|---|
+| `query` | str |  |  |
+| `--prefix` | str | `` |  |
+| `-k` | int | `5` |  |
+| `--full` | int | `600` |  |
+| `--backend` | str | `auto` |  |
+
+- **Output `data`:** `backend,query,hits`
+- **Errors:** `AK-USAGE` (bad command line arguments), `AK-INTERNAL` (bug in agentkit (uncaught exception))
+- **Side effects:** ro, net
+- **Example:** `agentkit code search 'retry policy'`
+
+### `agentkit code defs`
+
+find symbol definitions
+
+| arg | type | default | notes |
+|---|---|---|---|
+| `symbol` | str |  |  |
+| `--prefix` | str | `` |  |
+| `-k` | int | `5` |  |
+| `--kind` | str | `` |  |
+| `--lang` | str | `` |  |
+| `--backend` | str | `auto` |  |
+
+- **Output `data`:** `backend,symbol,hits`
+- **Errors:** `AK-USAGE` (bad command line arguments), `AK-INTERNAL` (bug in agentkit (uncaught exception))
+- **Side effects:** ro, net
+- **Example:** `agentkit code defs ChatClient`
+
+### `agentkit code refs`
+
+find references (LSP or lexical)
+
+| arg | type | default | notes |
+|---|---|---|---|
+| `symbol` | str |  |  |
+| `--path` | str |  |  |
+| `--line` | int |  |  |
+| `--column` | int |  |  |
+| `-k` | int | `5` |  |
+| `--include-declaration` | bool |  |  |
+| `--backend` | str | `auto` |  |
+
+- **Output `data`:** `backend,symbol,semantic,hits`
+- **Errors:** `AK-USAGE` (bad command line arguments)
+- **Side effects:** ro, net
+- **Example:** `agentkit code refs add --path calc.py`
+
+### `agentkit code index`
+
+index a folder with XERJ
+
+| arg | type | default | notes |
+|---|---|---|---|
+| `path` | str | `.` | optional |
+| `--prefix` | str | `` |  |
+| `--backend` | str | `auto` |  |
+
+- **Output `data`:** `backend,prefix,files_indexed,records_total`
+- **Errors:** `AK-PATH` (path missing, outside the repo, a directory, or protected), `AK-MODEL-NONE` (no worker model configured (direct mode)), `AK-INTERNAL` (bug in agentkit (uncaught exception))
+- **Side effects:** state, net
+- **Example:** `agentkit code index . --prefix agentkit`
+
+### `agentkit code memory store`
+
+store a note in XERJ memory
+
+| arg | type | default | notes |
+|---|---|---|---|
+| `namespace` | str |  |  |
+| `text` | str |  |  |
+| `--id` | str | `` |  |
+
+- **Output `data`:** `backend,namespace,result`
+- **Errors:** `AK-INTERNAL` (bug in agentkit (uncaught exception))
+- **Side effects:** state, net
+- **Example:** `agentkit code memory store project 'use pytest'`
+
+### `agentkit code memory recall`
+
+recall XERJ memory
+
+| arg | type | default | notes |
+|---|---|---|---|
+| `namespace` | str |  |  |
+| `query` | str |  |  |
+| `-k` | int | `5` |  |
+
+- **Output `data`:** `backend,namespace,hits`
+- **Errors:** `AK-INTERNAL` (bug in agentkit (uncaught exception))
+- **Side effects:** ro, net
+- **Example:** `agentkit code memory recall project 'test command'`
+
 ### `agentkit logs`
 
-structured event log of a run/task (where it failed); --raw: unfiltered run output
+run/task events; --raw shows output
 
 | arg | type | default | notes |
 |---|---|---|---|
@@ -594,28 +926,28 @@ structured event log of a run/task (where it failed); --raw: unfiltered run outp
 | `--tail` | int |  | last N events |
 | `--raw` | bool |  | raw (redacted) stdout/stderr of a run log id (run-...) |
 
-- **Output `data`:** `id,events,shown,format,lines,hints{code:fix} | --raw: id,stdout,stderr,logs`
+- **Output `data`:** `id,events,shown,format,lines,hints | --raw: id,stdout,stderr,logs`
 - **Errors:** `AK-LOGS-UNKNOWN` (no events for that run / task id)
 - **Side effects:** ro
 - **Example:** `agentkit logs t1a2b3c --errors`
 
 ### `agentkit debug-bundle`
 
-redacted .tar.gz of config (no keys), events, report for a bug report
+redacted bug-report archive
 
 | arg | type | default | notes |
 |---|---|---|---|
 | `id` | str |  |  |
 | `--with-transcript` | bool |  | include the worker transcript (may contain code) |
 
-- **Output `data`:** `bundle,bytes,files,error_codes,note (next: feedback --bug)`
+- **Output `data`:** `bundle,bytes,files,error_codes,note`
 - **Errors:** `AK-LOGS-UNKNOWN` (no events for that run / task id)
 - **Side effects:** state
 - **Example:** `agentkit debug-bundle t1a2b3c`
 
 ### `agentkit feedback`
 
-draft an issue, never posts; --improve: proposal + redacted evidence from --from ids; open search_first, +1 a duplicate; ask your human first
+draft only; --improve adds evidence; dedup first
 
 | arg | type | default | notes |
 |---|---|---|---|
@@ -638,9 +970,27 @@ draft an issue, never posts; --improve: proposal + redacted evidence from --from
 - **Side effects:** ro
 - **Example:** `agentkit feedback --improve 'edit: show nearest match' --from t1a2b3c`
 
+### `agentkit release`
+
+artifacts; never publishes
+
+| arg | type | default | notes |
+|---|---|---|---|
+| `action` | str | `plan` | optional |
+| `artifact` | str |  | optional |
+| `--out` | str | `dist` |  |
+| `--allow-dirty` | bool |  |  |
+| `--overwrite` | bool |  |  |
+| `--yes` | bool |  |  |
+
+- **Output `data`:** `version,manifest,artifacts,verified?,installed?`
+- **Errors:** `AK-RELEASE` (release operation failed), `AK-RELEASE-HASH` (artifact or manifest invalid)
+- **Side effects:** state, exec, net
+- **Example:** `agentkit release plan`
+
 ### `agentkit uninstall`
 
-remove package, user config/data, .agentkit/ + worktrees; dry run unless --yes
+remove package/config/data/worktrees; dry run
 
 | arg | type | default | notes |
 |---|---|---|---|
@@ -649,7 +999,7 @@ remove package, user config/data, .agentkit/ + worktrees; dry run unless --yes
 | `--keep-package` | bool |  | do not pip uninstall the package |
 | `--delete-branches` | bool |  | also delete agentkit/<task> branches |
 
-- **Output `data`:** `plan: repos,user_paths,package,dry_run,hint (next: --yes) | uninstalled,repos,user_paths_removed`
+- **Output `data`:** `plan{repos,user_paths,package,dry_run,hint}|uninstalled,repos,package,never_touched`
 - **Errors:** `AK-TASK-STATE` (operation not allowed in the task's current state)
 - **Side effects:** destructive
 - **Example:** `agentkit uninstall --this-repo`
@@ -668,3 +1018,12 @@ this manual: overview | <command> detail | --all
 - **Errors:** only the common ones
 - **Side effects:** ro
 - **Example:** `agentkit manual task create`
+
+### `agentkit mcp`
+
+run MCP stdio JSON-RPC server
+
+- **Output `data`:** `tools/resources`
+- **Errors:** only the common ones
+- **Side effects:** state, net
+- **Example:** `agentkit mcp`

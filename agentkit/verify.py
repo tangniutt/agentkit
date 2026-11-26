@@ -33,23 +33,41 @@ _TEST_CONFIG = re.compile(
 _NOT_FOUND = re.compile(r"command not found|No such file or directory|not recognized as an internal|can't open file|No module named")
 
 
-def _git(root: Path, *args, check=True) -> str:
-    r = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, timeout=120)
+def _git(root: Path, *args, check=True, raw=False) -> str | bytes:
+    r = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=not raw, timeout=120)
     if check and r.returncode != 0:
-        raise AKError(f"git {' '.join(args[:2])} failed", r.stderr.strip()[-300:], "agentkit doctor")
+        err = r.stderr.decode("utf-8", "replace") if isinstance(r.stderr, bytes) else r.stderr
+        raise AKError(f"git {' '.join(args[:2])} failed", err.strip()[-300:], "agentkit doctor")
     return r.stdout
 
 
 def _git_changes(root: Path, base: str) -> dict:
-    """path -> status (A/M/D) for working tree vs base, including untracked files."""
+    """path -> status for working tree vs base, including untracked files.
+
+    NUL-delimited bytes avoid Git's C-style path quoting. Renames keep the
+    historical report/copy behavior: D for the old path and A for the new one.
+    """
     out = {}
-    for line in _git(root, "diff", "--name-status", "--no-renames", base, "--").splitlines():
-        parts = line.split("\t")
-        if len(parts) >= 2:
-            out[parts[-1]] = parts[0][0]
-    for f in _git(root, "ls-files", "--others", "--exclude-standard").splitlines():
-        if f:
-            out.setdefault(f, "A")
+    fields = _git(root, "diff", "--name-status", "-z", "--find-renames", base, "--", raw=True).split(b"\0")
+    i = 0
+    while i < len(fields):
+        status = fields[i]
+        i += 1
+        if not status:
+            continue
+        code = status[:1]
+        count = 2 if code in (b"R", b"C") else 1
+        paths = fields[i:i + count]
+        i += count
+        if len(paths) != count or any(not p for p in paths):
+            raise AKError("git diff returned malformed -z output", "incomplete name-status record", "agentkit doctor")
+        names = [os.fsdecode(p) for p in paths]
+        if code == b"R":
+            out[names[0]] = "D"
+        out[names[-1]] = "A" if code in (b"R", b"C") else code.decode("ascii")
+    for path in _git(root, "ls-files", "--others", "--exclude-standard", "-z", raw=True).split(b"\0"):
+        if path:
+            out.setdefault(os.fsdecode(path), "A")
     return {k: v for k, v in out.items() if not k.startswith(".agentkit/")}
 
 
@@ -71,30 +89,55 @@ def _snapshot_changes(ctx: Ctx) -> dict:
     return out
 
 
+def _inside_worktree(root: Path, rel: str) -> tuple[Path, Path]:
+    """Return a path and its resolved target, refusing symlink/junction escapes."""
+    path = root / rel
+    try:
+        real = path.resolve()
+        real.relative_to(root.resolve())
+    except ValueError as e:
+        raise AKError("path outside worktree", f"{rel} resolves outside {root}",
+                      "remove the escaping symlink/junction and retry") from e
+    except (OSError, RuntimeError) as e:
+        raise AKError("path outside worktree", f"cannot safely resolve {rel}: {e}",
+                      "remove the escaping symlink/junction and retry") from e
+    return path, real
+
+
 def _prepare_copy(ctx: Ctx, tmp: Path, base: str) -> tuple[Path, dict, str]:
     if ctx.is_git and shutil.which("git"):
         head_ok = subprocess.run(["git", "-C", str(ctx.root), "rev-parse", "--verify", base], capture_output=True).returncode == 0
         if head_ok:
             wt = tmp / "wt"
             _git(ctx.root, "worktree", "add", "--detach", "--force", str(wt), base)
-            changes = _git_changes(ctx.root, base)
-            for rel, st in changes.items():
-                src, dst = ctx.root / rel, wt / rel
-                if st == "D":
-                    if dst.exists() or dst.is_symlink():
-                        dst.unlink()
-                elif src.is_file():
-                    dst.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(src, dst)
+            try:
+                changes = _git_changes(ctx.root, base)
+                for rel, st in changes.items():
+                    _, src_real = _inside_worktree(ctx.root, rel)
+                    dst, _ = _inside_worktree(wt, rel)
+                    if st == "D":
+                        if dst.exists() or dst.is_symlink():
+                            dst.unlink()
+                    elif src_real.is_file():
+                        dst.parent.mkdir(parents=True, exist_ok=True)
+                        if dst.is_symlink():
+                            dst.unlink()
+                        shutil.copy2(src_real, dst)
+            except Exception:
+                # cmd_verify cannot clean up a worktree that _prepare_copy never returns.
+                _cleanup(ctx, wt, "git-worktree")
+                raise
             return wt, changes, "git-worktree"
     # non-git (or no commits yet): copy non-ignored files
     cp = tmp / "copy"
     for rel in list_files(ctx, ctx.root):
-        src = ctx.root / rel
-        dst = cp / rel
+        _, src_real = _inside_worktree(ctx.root, rel)
+        dst, _ = _inside_worktree(cp, rel)
         dst.parent.mkdir(parents=True, exist_ok=True)
         try:
-            shutil.copy2(src, dst)
+            if dst.is_symlink():
+                dst.unlink()
+            shutil.copy2(src_real, dst)
         except OSError:
             pass
     cp.mkdir(exist_ok=True)
@@ -110,6 +153,16 @@ def _cleanup(ctx: Ctx, where: Path, mode: str):
 _INTERP = {"sh", "bash", "zsh", "dash", "python", "python3", "node", "ruby", "perl", "deno", "bun", "pwsh"}
 
 
+def _shell_tokens(cmd: str) -> list:
+    try:
+        toks = shlex.split(cmd, posix=os.name != "nt")
+    except ValueError:
+        toks = cmd.split()
+    if os.name == "nt":
+        toks = [t[1:-1] if len(t) >= 2 and t[0] == t[-1] and t[0] in ("'", '"') else t for t in toks]
+    return toks
+
+
 def _check_paths(cmd: str, root: Path) -> set:
     """Repo files a check command depends on: the script it executes, and test files/dirs it names.
 
@@ -118,10 +171,7 @@ def _check_paths(cmd: str, root: Path) -> set:
     """
     paths = set()
     rroot = root.resolve()
-    try:
-        toks = shlex.split(cmd)
-    except ValueError:
-        toks = cmd.split()
+    toks = _shell_tokens(cmd)
     i = 0
     while i < len(toks) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", toks[i]):
         i += 1
@@ -166,10 +216,7 @@ def _check_paths(cmd: str, root: Path) -> set:
 
 
 def _missing_command(cmd: str, cwd: Path) -> bool:
-    try:
-        toks = shlex.split(cmd)
-    except ValueError:
-        return False
+    toks = _shell_tokens(cmd)
     i = 0
     while i < len(toks) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", toks[i]):
         i += 1

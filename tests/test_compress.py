@@ -3,7 +3,10 @@
 """C-08: command-aware output filters, safety validator, raw recovery, session dedup,
 progressive aging, terse style and the byte-stable prompt prefix."""
 import json
+import os
 import random
+
+import pytest
 
 from conftest import git
 
@@ -194,6 +197,7 @@ def test_recent_turns_never_aged_early():
 
 # ---------------------------------------------------------------- worker end-to-end (fake model)
 
+@pytest.mark.skipif(os.name != "posix", reason="dispatch mode requires Linux")
 def test_worker_compression_end_to_end_stable_prefix(ak, repo, fake):
     project(repo, ak, fake, cfg="\n[compress]\nage_min_chars = 500\n")
     (repo / "big.py").write_text("".join(f"VALUE_{i} = {i}  # filler line to make the file large\n" for i in range(120)))
@@ -230,6 +234,7 @@ def _style_hits(body) -> list:
     return [i for i, m in enumerate(body["messages"]) if "Output style: terse" in str(m.get("content"))]
 
 
+@pytest.mark.skipif(os.name != "posix", reason="dispatch mode requires Linux")
 def test_style_note_costs_tiny_tasks_nothing(ak, repo, fake):
     """C-08 follow-up: the ~70-token style note made tiny tasks +5.7% worker tokens. With style=auto a short
     task in a small repo never gets it (not in the prefix, never appended)."""
@@ -242,6 +247,7 @@ def test_style_note_costs_tiny_tasks_nothing(ak, repo, fake):
     assert tjson(repo, tid)["compression"]["style"] == "off"
 
 
+@pytest.mark.skipif(os.name != "posix", reason="dispatch mode requires Linux")
 def test_style_note_appended_once_when_transcript_grows(ak, repo, fake):
     project(repo, ak, fake, cfg="\n[compress]\naging = false\ndedup = false\nstyle_after_chars = 1500\n")
     (repo / "big.py").write_text("".join(f"VALUE_{i} = {i}  # filler line to make the file large\n" for i in range(120)))
@@ -264,6 +270,7 @@ def test_style_note_appended_once_when_transcript_grows(ak, repo, fake):
     assert tjson(repo, tid)["compression"]["style"] == f"round {k + 1}"
 
 
+@pytest.mark.skipif(os.name != "posix", reason="dispatch mode requires Linux")
 def test_style_note_in_prefix_for_big_repo_or_when_forced(ak, repo, fake):
     project(repo, ak, fake, cfg="\n[compress]\nstyle_min_files = 5\n")
     for i in range(5):
@@ -278,6 +285,7 @@ def test_style_note_in_prefix_for_big_repo_or_when_forced(ak, repo, fake):
     assert tjson(repo, tid)["compression"]["style"] == "start"
 
 
+@pytest.mark.skipif(os.name != "posix", reason="dispatch mode requires Linux")
 def test_style_terse_forces_note_and_normal_disables_it(ak, repo, fake):
     project(repo, ak, fake, cfg="\n[compress]\nstyle = \"terse\"\n")
     fake.add("[FORCE]", FIX)
@@ -293,6 +301,7 @@ def test_style_terse_forces_note_and_normal_disables_it(ak, repo, fake):
     assert tjson(repo, tid)["compression"]["style"] == "off"
 
 
+@pytest.mark.skipif(os.name != "posix", reason="dispatch mode requires Linux")
 def test_worker_compression_can_be_switched_off(ak, repo, fake):
     project(repo, ak, fake, cfg="\n[compress]\nenabled = false\n")
     fake.add("[NOCC]", [{"call": "read", "args": {"spec": "calc.py"}}, {"call": "read", "args": {"spec": "calc.py"}}] + FIX)

@@ -1,6 +1,6 @@
 # 进度
 
-更新：2026-11-23 夜（M2 补完 + C-08 上下文压缩 + C-09 主管操作手册 + C-10：第 3 家 NVIDIA NIM、真实压缩 A/B、小任务开销修正 + C-11：第 4、5 家 Agnes AI、AMD Token Factory 中国站）；2026-11-24：C-12 AI 反馈进化回路、C-14 PRD v0.3
+更新：2026-11-23 夜（M2 补完 + C-08 上下文压缩 + C-09 主管操作手册 + C-10：第 3 家 NVIDIA NIM、真实压缩 A/B、小任务开销修正 + C-11：第 4、5 家 Agnes AI、AMD Token Factory 中国站）；2026-11-24：C-12 AI 反馈进化回路、C-14 PRD v0.3；2026-11-25：C-15 至 C-20 目标需求批准，P0 可信基座与 Goal/MCP v1 已落地；2026-11-26：XERJ 截断后真实回归、pi v1.6.1 专项核验、Windows UTF-8 测试可移植性修复、C-21 多工具接力与 HandoffPacket、OpenCode v1.19.6 与 Qoder CLI 1.1.98 适配器，详见 `docs/prd-v1.0.md`
 
 | 阶段 | 状态 |
 |---|---|
@@ -11,6 +11,7 @@
 | M3 防作弊与安全 | 部分提前完成（M-15 基础规则 + 14 例作弊库 100% 检出、M-17 Key 引用与扫描测试）；沙箱仍在 V1.1 |
 | M4 Rust/Go 正式版 | 未开始 |
 | M5 评测与发布 | 未开始 |
+| C-15 至 C-21 生产化目标 | **P0 与 P1 控制面完成；P2 代码智能部分完成**：路径/记忆安全、fail-to-pass、EvidenceReceipt、模型接力、bubblewrap 适配、MCP stdio、Goal v1、task 控制面、Builtin/XERJ/LSP、HandoffPacket v1、Codex/OpenCode/Qoder/Cursor 适配器已实现；Antigravity、真实 Cursor/Qoder 账号任务、其余 LSP 服务器、真实基准与远端发布待做 |
 
 ## M2 完成情况
 
@@ -189,7 +190,35 @@
 | M-12–M-16、M-20 | 不在 M1 范围 | M2 / M3 / M5 |
 
 ## 下一步
-1. 真实 A/B 加样本：NVIDIA NIM（免费试用约 40 RPM、每天 1 万次）每格跑 3–5 次取中位数，再看老化导致的重读是否值得调 `keep_turns` / `age_min_chars`；Gemini 日配额重置后续跑 5 个 paused 任务（临时目录 /tmp/agentkit-eval-*，沙箱重置即丢失）；OpenRouter 额度重置后补一组。
-2. ~~`hardcoded_return_suspect` 基例误报~~（C-11 已修）。新：观察老化后模型「凭记忆」写 edit 的 old 文本（Agnes 1/12 次）；若再现，考虑对最近被 edit 的文件不老化其 read 结果。AMD 积分日配额与网关 502 下的长任务续跑再多跑几组。
-3. C-08 调整：diff 过滤考虑「代码行里的 error 字样」不算诊断行（需先变更登记，因与「严重行永不删」冲突）。
-4. M4：Rust/Go 单二进制（安装、卸载随之简化）。
+1. **Linux VPS 门禁**：本轮 Linux Python 3.10/3.12 + bubblewrap 全量已通过；当前未提交变更尚未推送，按用户约束不自动 commit/push，授权后需运行 Linux GitHub Actions。Windows direct-mode 仅作开发兼容回归，不是生产门槛。
+2. **P1 收尾**：Goal 状态事件流、核心/可选工具包；MCP 2026 继续保持明确不支持，除非完整实现 `server/discover`、缓存与 `subscriptions/listen` 后再开放。
+3. **P2 智能与生态**：补齐真实 LSP 服务器矩阵、外部 WorkerBackend、模型能力与健康档案、缓存感知成本；Builtin/XERJ/LSP 适配与 Pyright 真实引用已落地，待补公开 benchmark。
+4. **P3 外部验证与发布**：SWE-bench Verified / Terminal-Bench / 内部长任务、外部作弊留出集、公开成本-质量报告、固定版本与回滚。
+5. 原生二进制在 P3 证明价值后重新评估。
+
+## 2026-11-25 生产化验证
+
+- Windows 直接模式与跨平台模块：`pytest -q` = **344 passed, 62 skipped**（Python 3.13.7）；已修复 UTF-8 文档在 GBK locale 下的测试读取，并新增 Windows CI job。最终 wheel 构建成功（184,591 字节，SHA-256 `60812aea…`），在全新虚拟环境安装后 `doctor` 健康通过、MCP 列出 31 个工具且后端 schema 正确、HandoffPacket 与 CodexBackend 导入校验通过。
+- 53 个跳过项均为 Linux 派活专属（worktree 工人、续跑、模型接力、压缩端到端、作弊库）。
+- Linux CI 等价测试：普通容器 Python 3.10 / 3.12 均为 **386 passed, 2 skipped**；最新 Python 3.12 + bubblewrap + Codex 全量为 **404 passed, 2 skipped**。首轮暴露并修复：StopWorker 后 `outcome` 未绑定、acceptance 夹具基线错误、junction 测试跨平台、容器缺 `pgrep`；沙箱专项又修复源码/仓库被 `/tmp` 遮蔽、父进程绑定、状态路径只读、PID namespace、连接重置和命令替换绕过。
+- 已修复并回归：目录联接/符号链接越界、记忆 ID 穿越、Unicode 验收漏检、权限包装绕过、检查点/状态并发、CRLF 编辑、Windows run 进程树、输出预算硬上限、长行续读。
+- bubblewrap 新增 `[sandbox] network=false` 硬隔离，任务报告与 EvidenceReceipt 记录 `sandbox_network`；一次性特权 Linux 容器实测共享/隔离网络、完整派活与禁网暂停。修复 editable 源码被 `/tmp` 遮蔽、短命父进程绑定、任务锁/证据路径只读、PID namespace 覆盖宿主 PID、ConnectionResetError 未归类等真实问题。工人不可写记忆/state，自动记忆改由主管侧幂等落盘；收据与复盘由验收器强制重写，命令位置替换默认拒绝。后续又新增域名白名单：独立网络命名空间、回环中继、宿主代理与 TLS SNI 校验。
+- 中断的子智能体调研已缩窄重派并收到 Codex headless、竞品核心资产、一线实践、评测基准、XERJ 缺口最终报告；结论已并入竞品/PRD/来源文档。Antigravity 补核长时间未返回，已停止并改用官方 FAQ/headless 文档：consumer 不支持第三方包装，不接其登录态。
+- 停用的“路径与记忆安全”“核心协议”代码子智能体没有最终报告，但主线按原始清单审计实际产物并回归 73 项安全/协议测试；未发现缺项后继续使用，不把停止状态当完成证据。
+- 新增：`TaskSpec / GoalSpec / EvidenceReceipt / Retrospective / Event / HandoffPacket` 协议、`task handoff`、fail-to-pass、bubblewrap 适配、MCP stdio、Goal v1、task diff/steer/answer/accept/reject、Builtin/XERJ、Codex/OpenCode/Qoder/Cursor 适配器。支持 `--backend builtin|codex|opencode|qoder|cursor` 与跨后端接力，保留 worktree/diff/记忆/累计预算；API Key 模型继续走 builtin OpenAI 兼容层。OpenCode 使用稳定 v1.19.6 JSONL；Qoder 使用官方 CLI 账号登录或 PAT、记录请求 Credits，不读取凭证，并将 PAT 注册进日志脱敏。Cursor 使用官方 headless/stream-json、API Key、隔离配置与 session resume，拒绝 token/USD 预算。Antigravity consumer 不接登录态；Cursor/Qoder 真实账号任务尚未执行。
+- XERJ 使用 SHA-256 核验的 rc.105 二进制与临时真实节点验证 search/def/memory；Query-1 未使用，默认词法 embedding 未冒充神经语义。
+- `eval.codeintel_bench` 同条件 6 查询：内置后端 recall@5 从 1/6 提升到 5/6、MRR 0.275、3,204 字符、0.885 s；XERJ 5/6、MRR 0.264、17,208 字符、0.583 s。XERJ 原始返回 51,521 字符，适配层按 `--full` 截断后下降 66.6%，但仍约为内置的 5.4 倍；结论是延迟更低、召回同级、token 不占优，不宣称全面更优。真实 memory store/recall 已通过。
+- pi v1.6.1 已核验 canonical 仓库、MIT 许可、默认四工具、树状会话、压缩阈值与真实 JSONL 事件；Composio 30 任务和预注册双 harness 研究支持“小前缀 + 少轮次 + 结果截断”的机制，但都有版本、reasoning、provider 或任务规模局限。AgentKit 当前固定前缀约 1.1k token，不盲目删除验收与权限工具；pi 外部工人因权限绕过与网络边界未完成而暂缓。
+- **尚未达到生产标准**：凭证隔离、Antigravity 官方可用方案、Cursor/Qoder 真实账号任务、Cursor SDK 实际用量/成本、其余真实 LSP 服务器、真实基准、远端发布与签名仍未完成；Codex/OpenCode/Qoder/Cursor、Linux 域名网络白名单、本地发布回滚和 LSP 窄客户端已接入。生产目标平台为 Linux VPS；Windows 仅支持 direct mode，作为开发机兼容性验证，不承担派活沙箱或生产验收。远端 Linux GitHub Actions 仅验证到旧提交 `e2600d4`，当前未提交变更尚未运行远端 CI。
+- wheel/sdist 干净安装冒烟：最终版本 `0.2.0` 的 wheel 与 sdist 均在全新虚拟环境安装成功；wheel 的 `doctor`、真实 Python/TypeScript LSP、MCP 初始化与 32 工具清单、关键模块隔离导入通过，sdist 关键模块导入通过。非 root Linux 3.12 容器再次从最终 wheel 安装，`doctor healthy`、MCP 32 工具与 release verify 通过。最终大小与 SHA-256 以 `dist/release-manifest.json` 与 `SHA256SUMS` 为准；`trusted:false` 仍表示只证明完整性，不证明来源。
+- 凭证隔离仍有已知高风险：Qoder 默认改用 `XDG_CONFIG_HOME/agentkit/qoder` 专用登录目录，不再默认绑定 `~/.qoder`；OpenCode 默认把数据/缓存/状态目录隔离到任务目录并清除继承的 `OPENCODE_DB`，不再绑定真实凭证库。复用其他登录态必须显式设置 `QODER_CONFIG_DIR`/`config_dir` 或 OpenCode `allow_account_login=true`。当前依靠 CLI 工具规则拒绝读写认证路径，不是强隔离；未完成独立凭证 broker/代理前，不应在不可信仓库中使用真实登录态。
+- LSP 代码智能：新增 `agentkit/lsp.py` 自研 stdio 窄客户端（initialize/didOpen/definition/references/shutdown、Content-Length 帧、UTF-16 坐标、超时与进程清理）和 `agentkit code refs`；未配置 LSP 时回退到明确标注的词法引用。帧解析拒绝重复头、Transfer-Encoding 与超限头块；位置归一化拒绝远程 file URI；LSP 子进程默认不继承凭证类环境变量，Windows 用 Job Object 清理整个进程树。协议/生命周期/路径越界/代码智能/MCP/手册相关回归 **113 passed**（含真实服务器）；Serena 主体 NOASSERTION，只读参考 SolidLSP，未复制代码，NOTICE 不变。2026-11-26 使用官方 `pyright@1.1.414` 与临时仓库真实验证：`add` 定义处（第 1 行第 5 列）默认返回第 4 行调用，`--include-declaration` 同时返回定义和调用，CLI 与 MCP 结果均标记 `backend:lsp, semantic:true`；可通过 `AGENTKIT_LSP_TEST_COMMAND`（JSON argv 数组）启用 `tests/test_lsp_real.py`。最终 wheel 另以 `typescript-language-server@6.1.0` + `typescript@5.9.3` 验证 TypeScript 定义/调用；其余语言服务器矩阵尚未执行。
+- MCP 资源与通知：新增动态 task/Goal 资源、`resources/list` 快照绑定游标分页、2025 `resources/subscribe/unsubscribe` 与后台 `resources/updated/list_changed` 通知；2026 明确返回 `-32022`，不伪装支持。契约与真实 stdio 通知测试 **13 passed**；审查后补齐异常 params、损坏状态文件、游标过期、监视异常与通知合并限流。
+- 本地发布回滚：新增 `agentkit release plan|build|verify|rollback`，构建 wheel/sdist、`SHA256SUMS` 与 `release-manifest.json`，校验哈希/大小/METADATA/全部源码模块/过滤器/许可文件/sdist 安全路径；路径同时按 POSIX 与 Windows 规则检查，拒绝穿越、重复 ZIP 项、加密项、符号链接与特殊文件。回滚默认 dry-run，拒绝重定向 pip 环境，Windows 控制台采用退出后 helper 安装。发布自动化 **26 passed**；真实构建与 verify 通过（`trusted:false` 表示只证明完整性，不证明来源），临时 Windows 环境 helper 回滚结果 `installed:true, exit_code:0`。回滚安装私有暂存副本并使用 `python -I -m pip --isolated`，Windows helper 用 OpenProcess/WaitForSingleObject 等待退出；覆盖失败恢复旧 artifact。CLI 输出统一 UTF-8，修复 GBK 环境非 ASCII 崩溃。
+- 2026-11-26 网络白名单：`agentkit/netproxy.py` 实现宿主 Unix socket 代理与沙箱内回环中继；中继只接收最小环境，不继承模型 Key/PAT。`network=false` 保持完全断网，`network=["api.example.com"]` 使用独立网络命名空间，HTTP 校验 URL/Host 且每连接只处理一个请求，HTTPS CONNECT 仅允许 443 并校验 TLS ClientHello SNI；域名解析拒绝非全局地址，限制模式在 bubblewrap 不可用时拒绝启动。Linux 代理/沙箱集成 **22 passed**，覆盖放行域名、拒绝域名、POST 请求体原样转发、CONNECT 同包 ClientHello、SNI 不匹配拒绝、管道后续请求不转发、DNS 重绑定拒绝、中继环境不继承密钥、白名单任务成功、非白名单模型端点阻断、限制网络不可降级、doctor 配置校验与收据记录；Windows 可运行单元测试通过。
+- 2026-11-26 外部后端门禁：Windows 全量 **380 passed, 84 skipped**；Linux Python 3.12 + bubblewrap 全量 **462 passed, 2 skipped**；Qoder/OpenCode/Codex 单测与 MCP 契约 **32 passed**；外部后端/沙箱端到端 **30 passed**，覆盖无 AgentKit 模型创建、doctor 外部后端模式、PAT 日志脱敏、预算停止后续跑、builtin→Qoder/OpenCode、Qoder→OpenCode、OpenCode→Codex 和沙箱内执行。Qoder CLI 1.1.98 已核验官方帮助、公开 stream-json 契约与适配器真实参数解析（仅被登录拦截）；当前开发机 CLI 只读检查返回 `Not logged in`，需用户运行 `qodercli login`，Desktop 登录态未自动复用；真实账号任务尚未执行。OpenCode 已核验稳定版源码、CLI 帮助与真实 `debug config` 解析（权限策略原样生效），端到端使用假可执行文件。
+- 2026-11-26 Cursor 接入前最终本地门禁：Windows 全量 **430 passed, 84 skipped**（启用真实 Pyright）；Linux Python 3.10 与 3.12 + bubblewrap 均为 **510 passed, 4 skipped**；发布自动化 **26 passed**。wheel/sdist 全新安装、`doctor`、MCP 32 工具、真实 Python/TypeScript LSP、关键模块导入、`twine check` 均通过；依赖审计在升级临时环境 pip 后未发现已知漏洞（未发布的 AgentKit 自身不在 PyPI 漏洞库范围）。当前工作树 `git_dirty:true`，远端 CI、签名与发布仍未执行。
+- 2026-11-27 Cursor 工人：新增官方 `agent --print --output-format stream-json` 适配、API Key 专用环境映射、独立配置目录、session resume、轮次/时间预算和 Shell/WebFetch/MCP/密钥 deny 策略；不读取登录态、不用 `--force`。另增加显式可选 `transport="sdk"`（`.[cursor]`，官方专有 `cursor-sdk` 1.5.2，不 vendored），使用本地工具白名单、隔离用户配置、session resume、TokenUsage 与按运行 UsageCost，并要求显式模型；SDK 未报告用量时拒绝 token 预算，USD 硬预算仍不支持。Qoder 专用目录改动后 Windows 最终全量 **449 passed, 92 skipped**，Linux Python 3.10 与 3.12 最终全量均为 **537 passed, 4 skipped**；OpenCode V2 接入后 Windows 最终全量 **452 passed, 93 skipped**，Linux Python 3.10 与 3.12 最终全量均为 **541 passed, 4 skipped**。中继端口文件启动竞态已修复，Windows 代理回归 **12 passed, 2 skipped** 且竞态用例连续 **20 passed**。SDK/CLI/代理/发布/MCP/手册 Windows 专项 **148 passed, 10 skipped**，Linux SDK 任务与代理专项 **37 passed**，可选 extra 安装导入通过；官方 SDK 1.5.2 在 Linux 以假 Key 创建 agent 时工具白名单被接受并到达 `Invalid User API Key`，未执行真实模型调用。可选 extra 依赖审计在升级临时 pip 后无已知漏洞（AgentKit 自身未发布故不在 PyPI 漏洞库范围）。最终 wheel/sdist 已重建并通过 verify、`twine check`、基础干净安装、doctor、双 LSP、MCP 32 工具/Cursor schema 与 `.[cursor]` 安装导入；最终哈希见 `dist/release-manifest.json`。真实 Cursor API Key 任务尚未执行。
+- 2026-11-27 OpenCode V2：新增显式 `version="v2"`，使用官方 `--standalone run --format json`、V2 `permissions/policies`、session resume 与独立数据/缓存/状态目录；默认清除 `OPENCODE_DB`，真实账号登录需显式 `allow_account_login=true`。官方 V2 2.4.2 免登录列出 `opencode/beam-free` 等免费模型；真实最小任务返回 `submitted`，解析 **5,688 输入 / 38 输出 token** 与 session，证明事件契约可用。免费额度错误 `provider.free-limit`/429 映射为 `AK-MODEL-429` 暂停，不绕过限额。Windows OpenCode/MCP/手册专项 **105 passed, 9 skipped**，Linux V2 任务/沙箱/代理专项 **35 passed**；V2 策略经官方二进制验证且不妨碍免费模型列表。
+- 2026-11-27 离线评测：Windows direct 模式 **24/24 通过**（3 large + 21 tiny）；worker 24 项与作弊库 14 项均因 `AK-TASK-STATE`（dispatch 仅 Linux）未执行，不能计为失败或通过。Linux 3.12 + bubblewrap 完整离线评测：direct **24/24**、worker **24/24**、作弊库 **14/14 detected**；worker 共 203,508 token、报告成本 0.0221 USD（假模型计价，仅回归口径）。该结果只作固定版本回归证据，不替代真实模型/外部基准。另用真实 `opencode/beam-free` 执行 `ev-add`：官方免费额度返回 429，AgentKit 映射为 `AK-MODEL-429` 暂停，代码未改动且独立测试仍失败；未切换账号/模型绕过限额，真实外部基准仍受额度阻塞。
+- 2026-11-27 接入边界：生产平台为 Linux VPS；只接可脚本化的官方 CLI/API/RPC/MCP 编程工具，不接 GUI 自动化、电脑操作工具，也不为需要模拟 Windows 沙箱的工具做兼容层。Windows 仅保留 direct-mode 开发兼容，不再是生产验收门槛。

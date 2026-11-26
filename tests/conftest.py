@@ -28,7 +28,8 @@ class AK:
         e = dict(self.env)
         if env:
             e.update(env)
-        p = subprocess.run(argv, cwd=str(cwd or self.cwd), input=stdin, capture_output=True, text=True, env=e, timeout=300)
+        p = subprocess.run(argv, cwd=str(cwd or self.cwd), input=stdin, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", env=e, timeout=300)
         out = p.stdout.strip()
         assert out.count("\n") == 0, f"stdout must be one JSON line: {p.stdout[:500]} / {p.stderr[-500:]}"
         res = json.loads(out)
