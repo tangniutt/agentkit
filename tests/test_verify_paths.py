@@ -1,11 +1,12 @@
 # Copyright 2026 tangniutt and contributors
 # SPDX-License-Identifier: Apache-2.0
 """Regression tests for verify's NUL-delimited Git paths and copy boundary."""
+import json
+import locale
 import os
 import shutil
 import subprocess
 import sys
-import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -79,20 +80,15 @@ def _directory_link(target, link, kind):
                    check=True, capture_output=True, text=True, encoding="utf-8", errors="replace")
 
 
-def test_verify_tempdir_prefers_repo_parent(repo, monkeypatch):
-    _project(repo)
-    ctx = Ctx(root=repo, cwd=repo)
-    real_mkdtemp = tempfile.mkdtemp
-    directories = []
-
-    def tracked_mkdtemp(*, prefix, dir=None):
-        directories.append(Path(dir).resolve() if dir else None)
-        return real_mkdtemp(prefix=prefix, dir=dir)
-
-    monkeypatch.setattr(verify.tempfile, "mkdtemp", tracked_mkdtemp)
-    result = verify.cmd_verify(ctx, SimpleNamespace(check=[PYTEST], base="HEAD", timeout=30))
+def test_verify_report_is_utf8_under_non_utf8_locale(repo, monkeypatch):
+    _project(repo, {"src/修改.py": "old\n"})
+    (repo / "src" / "修改.py").write_text("new\n", encoding="utf-8")
+    monkeypatch.setattr(locale, "getencoding", lambda: "cp1252")
+    result = verify.cmd_verify(Ctx(root=repo, cwd=repo), SimpleNamespace(check=[PYTEST], base="HEAD", timeout=30))
     assert result.data["verdict"] == "pass"
-    assert directories and directories[0] == repo.parent.resolve()
+    reports = sorted((repo / ".agentkit" / "verify").glob("verify-*.json"))
+    report = json.loads(reports[-1].read_text(encoding="utf-8"))
+    assert report["changed"] == ["M src/修改.py"]
 
 
 def test_unicode_failure_test_was_missed_but_now_fails(ak, repo):

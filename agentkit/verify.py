@@ -296,10 +296,7 @@ def cmd_verify(ctx: Ctx, a) -> Result:
             raise AKError(f"check refused by permission rule '{v.rule}'", v.why or "", "use a check command that is allowed")
     timeout = a.timeout or float(ctx.config.get("run", {}).get("timeout", 120))
     t0 = time.monotonic()
-    try:
-        tmp = Path(tempfile.mkdtemp(prefix="agentkit-verify-", dir=str(ctx.root.parent)))
-    except OSError:
-        tmp = Path(tempfile.mkdtemp(prefix="agentkit-verify-"))
+    tmp = Path(tempfile.mkdtemp(prefix="agentkit-verify-"))
     where = tmp
     mode = "?"
     try:
@@ -344,7 +341,7 @@ def cmd_verify(ctx: Ctx, a) -> Result:
     vdir = ctx.state("verify")
     rid = time.strftime("%Y%m%d-%H%M%S") + f"-{os.getpid()}"
     full_p = vdir / f"verify-{rid}.json"
-    full_p.write_text(json.dumps(report, ensure_ascii=False, indent=1))
+    full_p.write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
     if verdict == "pass" and not flags:
         _remember_checks(ctx, a.check)  # never learn from a run that looks like cheating
 
