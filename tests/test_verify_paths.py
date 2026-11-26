@@ -109,6 +109,7 @@ def test_unicode_failure_test_was_missed_but_now_fails(ak, repo):
     assert all(p.startswith('"') for p in legacy)
 
     result = ak("verify", "--check", PYTEST)
+    assert result["ok"], result
     assert result["data"]["verdict"] == "fail", result
     assert result["data"]["checks"][0]["exit"] != 0
     assert result["data"]["changed"] == [f"A {rel}"]
@@ -127,6 +128,7 @@ def test_unicode_modified_and_deleted_paths_are_detected_and_copied(ak, repo):
 
     assert verify._git_changes(repo, "HEAD") == {"src/修改.py": "M", "src/删除.py": "D"}
     result = ak("verify", "--check", f"{sys.executable} check_unicode.py")
+    assert result["ok"], result
     assert result["data"]["verdict"] == "pass", result
     assert result["data"]["changed"] == ["M src/修改.py", "D src/删除.py"]
 
