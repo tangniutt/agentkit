@@ -5,8 +5,10 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -75,6 +77,22 @@ def _directory_link(target, link, kind):
     # Windows junctions do not need Developer Mode or administrator privileges.
     subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)],
                    check=True, capture_output=True, text=True, encoding="utf-8", errors="replace")
+
+
+def test_verify_tempdir_prefers_repo_parent(repo, monkeypatch):
+    _project(repo)
+    ctx = Ctx(root=repo, cwd=repo)
+    real_mkdtemp = tempfile.mkdtemp
+    directories = []
+
+    def tracked_mkdtemp(*, prefix, dir=None):
+        directories.append(Path(dir).resolve() if dir else None)
+        return real_mkdtemp(prefix=prefix, dir=dir)
+
+    monkeypatch.setattr(verify.tempfile, "mkdtemp", tracked_mkdtemp)
+    result = verify.cmd_verify(ctx, SimpleNamespace(check=[PYTEST], base="HEAD", timeout=30))
+    assert result.data["verdict"] == "pass"
+    assert directories and directories[0] == repo.parent.resolve()
 
 
 def test_unicode_failure_test_was_missed_but_now_fails(ak, repo):

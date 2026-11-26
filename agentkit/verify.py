@@ -296,7 +296,10 @@ def cmd_verify(ctx: Ctx, a) -> Result:
             raise AKError(f"check refused by permission rule '{v.rule}'", v.why or "", "use a check command that is allowed")
     timeout = a.timeout or float(ctx.config.get("run", {}).get("timeout", 120))
     t0 = time.monotonic()
-    tmp = Path(tempfile.mkdtemp(prefix="agentkit-verify-"))
+    try:
+        tmp = Path(tempfile.mkdtemp(prefix="agentkit-verify-", dir=str(ctx.root.parent)))
+    except OSError:
+        tmp = Path(tempfile.mkdtemp(prefix="agentkit-verify-"))
     where = tmp
     mode = "?"
     try:

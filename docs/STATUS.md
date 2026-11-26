@@ -201,7 +201,7 @@
 - Windows 直接模式与跨平台模块：`pytest -q` = **344 passed, 62 skipped**（Python 3.13.7）；已修复 UTF-8 文档在 GBK locale 下的测试读取，并新增 Windows CI job。最终 wheel 构建成功（184,591 字节，SHA-256 `60812aea…`），在全新虚拟环境安装后 `doctor` 健康通过、MCP 列出 31 个工具且后端 schema 正确、HandoffPacket 与 CodexBackend 导入校验通过。
 - 53 个跳过项均为 Linux 派活专属（worktree 工人、续跑、模型接力、压缩端到端、作弊库）。
 - Linux CI 等价测试：普通容器 Python 3.10 / 3.12 均为 **386 passed, 2 skipped**；最新 Python 3.12 + bubblewrap + Codex 全量为 **404 passed, 2 skipped**。首轮暴露并修复：StopWorker 后 `outcome` 未绑定、acceptance 夹具基线错误、junction 测试跨平台、容器缺 `pgrep`；沙箱专项又修复源码/仓库被 `/tmp` 遮蔽、父进程绑定、状态路径只读、PID namespace、连接重置和命令替换绕过。
-- 已修复并回归：目录联接/符号链接越界、记忆 ID 穿越、Unicode 验收漏检、权限包装绕过、检查点/状态并发、CRLF 编辑、Windows run 进程树、输出预算硬上限、长行续读。
+- 已修复并回归：目录联接/符号链接越界、记忆 ID 穿越、Unicode 验收漏检、权限包装绕过、检查点/状态并发、CRLF 编辑、Windows run 进程树、输出预算硬上限、长行续读；GitHub Actions 暴露的 Windows 仓库盘符与 TEMP 盘符不一致导致 `git worktree add` 跨盘失败，已改为优先在仓库父目录创建验收临时目录并新增回归测试。
 - bubblewrap 新增 `[sandbox] network=false` 硬隔离，任务报告与 EvidenceReceipt 记录 `sandbox_network`；一次性特权 Linux 容器实测共享/隔离网络、完整派活与禁网暂停。修复 editable 源码被 `/tmp` 遮蔽、短命父进程绑定、任务锁/证据路径只读、PID namespace 覆盖宿主 PID、ConnectionResetError 未归类等真实问题。工人不可写记忆/state，自动记忆改由主管侧幂等落盘；收据与复盘由验收器强制重写，命令位置替换默认拒绝。后续又新增域名白名单：独立网络命名空间、回环中继、宿主代理与 TLS SNI 校验。
 - 中断的子智能体调研已缩窄重派并收到 Codex headless、竞品核心资产、一线实践、评测基准、XERJ 缺口最终报告；结论已并入竞品/PRD/来源文档。Antigravity 补核长时间未返回，已停止并改用官方 FAQ/headless 文档：consumer 不支持第三方包装，不接其登录态。
 - 停用的“路径与记忆安全”“核心协议”代码子智能体没有最终报告，但主线按原始清单审计实际产物并回归 73 项安全/协议测试；未发现缺项后继续使用，不把停止状态当完成证据。
