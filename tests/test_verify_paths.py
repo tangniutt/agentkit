@@ -83,7 +83,10 @@ def _directory_link(target, link, kind):
 def test_verify_report_is_utf8_under_non_utf8_locale(repo, monkeypatch):
     _project(repo, {"src/修改.py": "old\n"})
     (repo / "src" / "修改.py").write_text("new\n", encoding="utf-8")
-    monkeypatch.setattr(locale, "getencoding", lambda: "cp1252")
+    if hasattr(locale, "getencoding"):
+        monkeypatch.setattr(locale, "getencoding", lambda: "cp1252")
+    else:
+        monkeypatch.setattr(locale, "getpreferredencoding", lambda do_fallback=False: "cp1252")
     result = verify.cmd_verify(Ctx(root=repo, cwd=repo), SimpleNamespace(check=[PYTEST], base="HEAD", timeout=30))
     assert result.data["verdict"] == "pass"
     reports = sorted((repo / ".agentkit" / "verify").glob("verify-*.json"))
