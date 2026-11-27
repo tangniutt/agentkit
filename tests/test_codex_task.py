@@ -77,6 +77,16 @@ def test_codex_task_end_to_end_without_agentkit_model(ak, repo):
     assert report["cost"]["usd_known"] is True
 
 
+def test_verifier_does_not_inherit_worker_api_key(ak, repo):
+    _repo(repo, ak, SCRIPT)
+    check = (f'"{sys.executable}" -c "import os; from calc import add; '
+             "assert add(2, 3) == 5; assert 'CODEX_TEST_KEY' not in os.environ\"")
+    created = ak("task", "create", "fix add [CODEX-NOKEY]", "--check", check, "--backend", "codex")
+    assert created["ok"], created
+    status = wait(ak, created["data"]["id"])
+    assert status["status"] == "done" and status["verdict"] == "pass", status
+
+
 def test_codex_budget_resume_preserves_usage_and_diff(ak, repo):
     _repo(repo, ak, SCRIPT)
     created = ak("task", "create", "fix add [CODEX-BUDGET]", "--check", CHECK,

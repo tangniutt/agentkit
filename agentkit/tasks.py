@@ -764,6 +764,23 @@ def _ensure_task_credential(root: Path, cfg: dict, task: dict, *, allow_bind: bo
     return _task_credential_error(task, cfg, backend, task.get("model", ""), root)
 
 
+def _strip_worker_credentials(cfg: dict, backend: str, model: str, root: Path) -> None:
+    from .backends import codex_config, cursor_config, opencode_config, qoder_config
+    from .models import all_models
+
+    names = {m.key_env for m in all_models(cfg).values() if m.key_env}
+    for table in (codex_config(cfg), opencode_config(cfg), qoder_config(cfg), cursor_config(cfg)):
+        key_env = str(table.get("key_env") or "")
+        if key_env:
+            names.add(key_env)
+    names.update(("QODER_PERSONAL_ACCESS_TOKEN", "CURSOR_API_KEY"))
+    descriptor = _credential_descriptor(cfg, backend, model, root)
+    if descriptor and descriptor["ref_kind"] == "env":
+        names.add(descriptor["ref"])
+    for name in names:
+        os.environ.pop(name, None)
+
+
 def _record_task_credential_use(root: Path, task: dict) -> None:
     from . import credentials as C
 
@@ -1224,6 +1241,7 @@ def run_task(root: Path, tid: str) -> None:
         fields["stopped_at"] = time.time()
         fields["stop_requested_at"] = state["stop_at"]
     update(root, tid, **fields)
+    _strip_worker_credentials(cfg, backend, t.get("model", ""), root)
     final = "done" if status == "submitted" else status
     try:
         if final != "cancelled":
