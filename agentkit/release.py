@@ -38,6 +38,10 @@ _REQUIRED_FILTERS = (
     "go-test.json", "jest.json", "mypy.json", "npm-install.json", "pip.json", "pytest.json", "ruff.json",
     "tsc.json", "unittest.json",
 )
+_REQUIRED_SKILL_FILES = (
+    "SKILL.md", "references/routing-rubric.md", "references/model-evaluation.md",
+    "templates/task-brief.md", "templates/task-record.md", "scripts/score_records.py",
+)
 
 
 def _toml():
@@ -254,6 +258,7 @@ def _check_wheel(path: Path, version: str) -> None:
                 raise ValueError("wheel metadata name/version mismatch")
             required = {f"agentkit/{name}" for name in _REQUIRED_MODULES}
             required |= {f"agentkit/filters/{name}" for name in _REQUIRED_FILTERS}
+            required |= {f"agentkit/skills/cost-efficient-ai-development/{name}" for name in _REQUIRED_SKILL_FILES}
             required |= {f"{metadata[0].rsplit('/', 1)[0]}/licenses/LICENSE",
                          f"{metadata[0].rsplit('/', 1)[0]}/licenses/NOTICE"}
             if not required <= names:
@@ -275,6 +280,7 @@ def _check_sdist(path: Path, version: str) -> None:
             required = {f"{prefix}/pyproject.toml", f"{prefix}/README.md", f"{prefix}/LICENSE", f"{prefix}/NOTICE"}
             required |= {f"{prefix}/agentkit/{name}" for name in _REQUIRED_MODULES}
             required |= {f"{prefix}/agentkit/filters/{name}" for name in _REQUIRED_FILTERS}
+            required |= {f"{prefix}/agentkit/skills/cost-efficient-ai-development/{name}" for name in _REQUIRED_SKILL_FILES}
             if not required <= names:
                 raise ValueError("sdist is missing project metadata, source, filters or licenses")
     except (OSError, ValueError, tarfile.TarError) as e:

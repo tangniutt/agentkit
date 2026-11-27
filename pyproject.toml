@@ -29,7 +29,7 @@ Homepage = "https://github.com/tangniutt/agentkit"
 include = ["agentkit*"]
 
 [tool.setuptools.package-data]
-agentkit = ["filters/*.json"]
+agentkit = ["filters/*.json", "skills/cost-efficient-ai-development/SKILL.md", "skills/cost-efficient-ai-development/references/*.md", "skills/cost-efficient-ai-development/templates/*.md", "skills/cost-efficient-ai-development/scripts/*.py"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

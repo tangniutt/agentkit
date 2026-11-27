@@ -43,6 +43,8 @@ def _fake_build(root: Path, staging: Path, _env: dict):
             z.writestr(f"agentkit/{name}", b"# test\n")
         for name in release._REQUIRED_FILTERS:
             z.writestr(f"agentkit/filters/{name}", b"{}\n")
+        for name in release._REQUIRED_SKILL_FILES:
+            z.writestr(f"agentkit/skills/cost-efficient-ai-development/{name}", b"# skill\n")
         dist_info = f"agentkit-{VERSION}.dist-info"
         z.writestr(f"{dist_info}/licenses/LICENSE", b"license\n")
         z.writestr(f"{dist_info}/licenses/NOTICE", b"notice\n")
@@ -51,6 +53,8 @@ def _fake_build(root: Path, staging: Path, _env: dict):
         files = {"pyproject.toml": b"[project]\n", "README.md": b"readme\n", "LICENSE": b"license\n", "NOTICE": b"notice\n"}
         files.update({f"agentkit/{name}": b"# test\n" for name in release._REQUIRED_MODULES})
         files.update({f"agentkit/filters/{name}": b"{}\n" for name in release._REQUIRED_FILTERS})
+        files.update({f"agentkit/skills/cost-efficient-ai-development/{name}": b"# skill\n"
+                      for name in release._REQUIRED_SKILL_FILES})
         for name, data in files.items():
             info = tarfile.TarInfo(f"agentkit-{VERSION}/{name}")
             info.size = len(data)
@@ -112,6 +116,9 @@ def test_release_required_files_match_source():
     package = Path(release.__file__).parent
     assert set(release._REQUIRED_MODULES) == {path.name for path in package.glob("*.py")}
     assert set(release._REQUIRED_FILTERS) == {path.name for path in (package / "filters").glob("*.json")}
+    skill = package / "skills" / "cost-efficient-ai-development"
+    assert set(release._REQUIRED_SKILL_FILES) == {
+        path.relative_to(skill).as_posix() for path in skill.rglob("*") if path.is_file()}
 
 
 @pytest.mark.parametrize("name", ["../escape.whl", "..\\escape.whl", "C:/escape.whl", "\\\\server\\share\\escape.whl"])

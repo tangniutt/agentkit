@@ -108,6 +108,10 @@ AI 读 [`llms.txt`](llms.txt) 即可上手；管理 AgentKit 的主管 AI 用 `a
 - 日志：`.agentkit/logs/` 默认保留 7 天，`[logs] retain_days` 可调（0 = 永久）。
 - 评测：`python -m eval.run [--cheats] [--size tiny|large]`（离线假模型，21 道小题 + 3 道多文件题 + 14 例作弊库）；`python -m eval.run --real --base-url URL --model-id ID --key-env VAR` 接真实模型；`python -m eval.run --backend codex|opencode|qoder|cursor --model-id ID --worker-config '<后端 TOML>' --no-direct` 用同一 TaskSpec/预算/独立验收评测外部工人；外部评测强制要求 bubblewrap，超时会取消任务，JSON 报告记录提交、运行时、沙箱、任务集合与结果哈希，任一任务失败即返回非零；`python -m eval.llms_check [--scenario bare]` 模拟「只读 llms.txt 的陌生 AI」在全新环境安装并跑 doctor + verify（M-19）。
 
+### 成本优化 Skill
+
+仓库内置通用 `cost-efficient-ai-development` Skill：按任务复杂度、错误影响范围、模型能力、实测成功率和每成功任务成本路由，不绑定模型品牌。目录位于 `agentkit/skills/cost-efficient-ai-development/`，随 wheel/sdist 分发；可复制到支持 Agent Skills 的工具用户级或项目级 `skills/` 目录。Qoder 中用 `/skills list` 确认发现、`/cost-efficient-ai-development` 调用；Codex 兼容性按实际版本验证。
+
 ### 报告问题
 AI 代用户报 Bug / 提需求：先搜已有 Issue，**先问人类用户**（Issue 公开），用 `agentkit feedback` 生成草稿，不含密钥或私有代码，一个问题一个 Issue。
 

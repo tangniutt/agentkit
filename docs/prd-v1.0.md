@@ -575,6 +575,10 @@ CodeIntelBackend
 - 默认最多 2 次，可配置；
 - 不允许账号轮换或代理池。
 
+### 可移植成本策略 Skill
+
+`agentkit/skills/cost-efficient-ai-development/` 提供跨厂商 TaskRisk、ModelProfile、失败升级与每成功任务成本工作流，作为可移植策略层；原生 Router 后续消费同一评测证据，不另建品牌固定规则。
+
 ### 自动接力
 
 可选配置：
