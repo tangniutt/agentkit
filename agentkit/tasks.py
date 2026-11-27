@@ -273,7 +273,7 @@ def schedule(root: Path) -> None:
                                       include_secret=os.name != "posix")
             env["PYTHONUNBUFFERED"] = "1"
             env.update(guard_env(root))
-            command = [sys.executable, "-m", "agentkit", "--root", str(root), "_task-run", t["id"]]
+            command = [sys.executable, "-I", "-B", "-u", "-m", "agentkit", "--root", str(root), "_task-run", t["id"]]
             base_command = command
             from . import sandbox as S
 
@@ -350,12 +350,11 @@ def schedule(root: Path) -> None:
                                                      *([net_dir] if net_dir else [])])
                     sandboxed = True
                     if domains is not None:
-                        proxy_args = [sys.executable, "-m", "agentkit.netproxy", "host", "--socket", str(socket_path),
+                        proxy_args = [sys.executable, "-I", "-B", "-u", "-m", "agentkit.netproxy", "host", "--socket", str(socket_path),
                                       "--pid-file", str(pid_file), "--ready-file", str(ready_file)]
                         for domain in domains:
                             proxy_args += ["--allow", domain]
-                        proxy_env = {"PATH": env.get("PATH", ""), "PYTHONDONTWRITEBYTECODE": "1",
-                                     "PYTHONUNBUFFERED": "1", "PYTHONPATH": str(pkg_root)}
+                        proxy_env = {"PATH": env.get("PATH", "")}
                         if env.get("AGENTKIT_NETPROXY_DEBUG"):
                             proxy_env["AGENTKIT_NETPROXY_DEBUG"] = "1"
                         proxy_proc = subprocess.Popen(proxy_args, stdin=subprocess.DEVNULL, stdout=logf, stderr=logf,

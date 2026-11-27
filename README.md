@@ -5,7 +5,7 @@
 >
 > **核心设计理念：AgentKit 是一个让 AI 自己提建议、持续改进、持续吸收先进工具设计理念的 AI 编程工具。** AI 用户带证据提 bug 与设计建议（`agentkit feedback --improve`）→ [评分](docs/triage.md) → 接受的成为基线变更 → 合并前用评测量化。
 
-**状态：生产化进行中——M2 Python 原型 + P0 可信基座 + Goal/MCP 2025 + 任务控制面 + Builtin/XERJ/LSP 代码智能已落地；Linux VPS 最终全量门禁已通过，Cursor/Qoder 真实账号任务、强凭证隔离、其余 LSP 服务器与正式发布待完成。Windows 仅保留开发机 direct-mode 兼容，不作为生产部署平台或验收门槛。**
+**状态：生产化进行中——M2 Python 原型 + P0 可信基座 + Goal/MCP 2025 + 任务控制面 + Builtin/XERJ/LSP 代码智能已落地；Linux VPS 最终全量门禁已通过，宿主侧凭证授权/FD 隔离与导入劫持防护已落地。Cursor/Qoder 真实账号任务、保存登录态与运行中撤销演练、其余 LSP 服务器和正式发布待完成；官方 CLI 自身仍须持有 provider 凭证，不声称提供完整反代 broker。Windows 仅保留开发机 direct-mode 兼容，不作为生产部署平台或验收门槛。**
 
 ## 它解决什么
 - 现有编程工具为人设计，AI 用起来读得多、改容易失败、不知道改得对不对。
@@ -72,7 +72,7 @@ AI 读 [`llms.txt`](llms.txt) 即可上手；管理 AgentKit 的主管 AI 用 `a
 | `agentkit mcp` | 启动 MCP stdio 服务端，向 Muse 等 Agent 暴露核心工具、动态任务/Goal 资源、资源分页；支持 2025-06-18/2025-11-25 的资源订阅与状态变更通知，2026-07-28 明确不支持 |
 | `agentkit code search/defs/refs/index` | 可替换代码智能：内置词法/符号检索、LSP 语义引用、可选 XERJ 索引/代码检索/定义/记忆；XERJ 不可用时自动回退 |
 
-安全默认：`run`/`verify` 拒绝 `git push`、`git commit`、`sudo`、`rm -rf /`/`~`、`curl | sh`、读取 `~/.ssh` 和 `.env`；可在 `.agentkit/config.toml` 的 `[run] allow/deny` 调整。Linux bubblewrap 支持 `[sandbox] network=false` 硬隔离，也支持 `network = ["api.openai.com"]` 域名白名单：沙箱内只能访问回环中继，宿主代理按域名与 TLS SNI 放行，拒绝重复 Host、管道后续请求和非全局解析地址，任务报告会记录 shared/isolated/allowlist/host。所有输出与日志自动脱敏（`sk-...`、`ghp_...`、`AKIA...` 等）。
+安全默认：`run`/`verify` 拒绝 `git push`、`git commit`、`sudo`、`rm -rf /`/`~`、`curl | sh`、读取 `~/.ssh` 和 `.env`；可在 `.agentkit/config.toml` 的 `[run] allow/deny` 调整。Linux bubblewrap 支持 `[sandbox] network=false` 硬隔离，也支持 `network = ["api.openai.com"]` 域名白名单：沙箱内只能访问回环中继，宿主代理按域名与 TLS SNI 放行，拒绝重复 Host、管道后续请求和非全局解析地址，任务报告会记录 shared/isolated/allowlist/host。所有输出与日志自动脱敏（`sk-...`、`ghp_...`、`AKIA...` 等）。在不可信仓库中优先使用 `agentkit` 控制台脚本；若必须用 Python 模块启动，使用 `python -I -m agentkit`，避免仓库同名包劫持。
 
 运行状态写在仓库内 `.agentkit/`（快照、日志、记忆、任务、worktree；其中 `.gitignore` 只放行 `config.toml` 与记忆文件），除了调用你配置的模型接口外不上传任何数据。
 
@@ -80,7 +80,7 @@ AI 读 [`llms.txt`](llms.txt) 即可上手；管理 AgentKit 的主管 AI 用 `a
 
 - 接入边界：只接可脚本化的官方 CLI/API/RPC/MCP 编程工具；不接 GUI 自动化、电脑操作工具，也不为需要模拟 Windows 沙箱的工具做兼容层。生产运行平台为 Linux VPS。
 - API Key 模型：`agentkit model add ... --key-env VAR`，使用 builtin OpenAI 兼容工人。
-- 保存登录态授权：Qoder 保存账号登录、OpenCode `allow_account_login=true`，以及仓库外的 Qoder `config_dir`，都要求先在用户级 `~/.config/agentkit/config.toml`（或 `$XDG_CONFIG_HOME/agentkit/config.toml`）设置 `[security] allow_saved_credentials=true`；项目配置不能自行开启。API Key/PAT 路径不需要此开关。该授权不是强凭证隔离，不可信仓库仍不得使用真实登录态。
+- 保存登录态授权：Qoder 保存账号登录、OpenCode `allow_account_login=true`，以及仓库外的 Qoder `config_dir`，都要求先在用户级 `~/.config/agentkit/config.toml`（或 `$XDG_CONFIG_HOME/agentkit/config.toml`）设置 `[security] allow_saved_credentials=true`；项目配置不能自行开启。API Key/PAT 路径不需要此开关。宿主侧 Grant/Binding/Revocation 审计与 FD 隔离不替代 CLI 自身的安全；开启保存登录态后不可信仓库仍不得使用真实登录态。
 - Codex CLI：配置 `[workers.codex]` 的 `command`、`model`、可选 `key_env`、`sandbox` 和 `price_in/price_out`，然后 `task create ... --backend codex`。bubblewrap 默认掩蔽宿主 HOME/XDG 与常见云凭证文件/agent socket，仅重新挂载显式授权的后端状态目录；Codex 保存登录不会隐式可用，请使用专用 API Key 环境变量。
 - OpenCode V1：配置 `[workers.opencode]` 的 `command` 与 `model=provider/model`，使用官方 `opencode run --format json`；默认禁用 shell、网络工具、子 Agent 和项目配置，验收由 AgentKit 执行。
 - OpenCode V2：设置 `version = "v2"`，可指定 `model = "opencode/beam-free"` 等官方免费模型，无需登录；AgentKit 使用 `--standalone run --format json`、V2 `permissions/policies` 和独立数据目录。免费额度用尽返回 429 并暂停续跑，不绕过限额；需要保存账号登录时必须显式 `allow_account_login = true`，并获得上述用户级授权。真实 V2 2.4.2 最小任务已验证 token/session 解析。

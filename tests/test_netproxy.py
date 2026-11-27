@@ -139,9 +139,17 @@ def test_start_relay_waits_for_a_complete_port_file(tmp_path, monkeypatch):
 
     monkeypatch.setattr(Path, "read_text", read_text)
     proc = SimpleNamespace(poll=lambda: None, kill=lambda: None, wait=lambda timeout: None)
-    monkeypatch.setattr(netproxy.subprocess, "Popen", lambda *_args, **_kwargs: proc)
+    captured = {}
+
+    def popen(args, **kwargs):
+        captured.update(args=args, env=kwargs["env"])
+        return proc
+
+    monkeypatch.setattr(netproxy.subprocess, "Popen", popen)
     started, url = start_relay(tmp_path / "missing.sock", port_file, tmp_path / "relay.log")
     assert started is proc and url == "http://127.0.0.1:12345"
+    assert captured["args"][1:6] == ["-I", "-B", "-u", "-m", "agentkit.netproxy"]
+    assert "PYTHONPATH" not in captured["env"]
 
 
 @pytest.mark.skipif(os.name != "posix", reason="Unix sockets and relay processes require POSIX")

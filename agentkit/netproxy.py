@@ -509,12 +509,11 @@ def run_relay(args: argparse.Namespace) -> int:
 
 def start_relay(socket_path: Path, port_file: Path, log_path: Path) -> tuple[subprocess.Popen, str]:
     port_file.unlink(missing_ok=True)
-    relay_env = {"PATH": os.environ.get("PATH", ""), "PYTHONDONTWRITEBYTECODE": "1", "PYTHONUNBUFFERED": "1",
-                 "PYTHONPATH": str(Path(__file__).resolve().parent.parent)}
+    relay_env = {"PATH": os.environ.get("PATH", "")}
     if os.environ.get("AGENTKIT_NETPROXY_DEBUG"):
         relay_env["AGENTKIT_NETPROXY_DEBUG"] = "1"
     with open(log_path, "ab") as log:
-        proc = subprocess.Popen([sys.executable, "-m", "agentkit.netproxy", "relay", "--socket", str(socket_path),
+        proc = subprocess.Popen([sys.executable, "-I", "-B", "-u", "-m", "agentkit.netproxy", "relay", "--socket", str(socket_path),
                                  "--port-file", str(port_file)], stdout=log, stderr=log, env=relay_env,
                                 start_new_session=True)
     deadline = time.monotonic() + 5

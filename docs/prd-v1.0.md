@@ -89,7 +89,7 @@ AgentKit 不能依靠“功能更多”建立差异。当前更有价值的方�
 
 当前明确缺口：
 
-- bubblewrap 已适配并支持 `network=false` 硬隔离与 `network=["api.example.com"]` 域名白名单；白名单模式使用独立网络命名空间、回环中继和宿主代理，按域名与 TLS SNI 放行，拒绝重复 Host、管道后续请求和非全局解析地址，任务报告/收据记录 shared/isolated/allowlist/host；默认仍共享网络以兼容现有模型调用；Qoder/OpenCode 复用登录所需认证目录仍由 CLI 工具规则保护，尚未实现独立凭证 broker，不可信仓库不得使用真实登录态。保存登录态与仓库外 Qoder `config_dir` 还必须获得用户级 `[security] allow_saved_credentials=true` 授权，项目配置不能自行开启；PAT/API Key 路径不受此开关影响；Windows 沙箱未完成，但 Windows 不是当前生产部署平台，仅保留 direct-mode 开发兼容；worktree 本身仍不是安全边界；
+- bubblewrap 已适配并支持 `network=false` 硬隔离与 `network=["api.example.com"]` 域名白名单；白名单模式使用独立网络命名空间、回环中继和宿主代理，按域名与 TLS SNI 放行，拒绝重复 Host、管道后续请求和非全局解析地址，任务报告/收据记录 shared/isolated/allowlist/host；默认仍共享网络以兼容现有模型调用；Qoder/OpenCode 复用登录所需认证目录仍由 CLI 工具规则保护；宿主侧授权、FD 隔离与 CLI-only 注入已实现，但这不是让 CLI 无法读取自身 provider 凭证的完整 broker，不可信仓库不得使用真实登录态。保存登录态与仓库外 Qoder `config_dir` 还必须获得用户级 `[security] allow_saved_credentials=true` 授权，项目配置不能自行开启；PAT/API Key 路径不受此开关影响；Windows 沙箱未完成，但 Windows 不是当前生产部署平台，仅保留 direct-mode 开发兼容；worktree 本身仍不是安全边界；
 - Goal 级验收与 retrospective 已有 v1，但缺真实长任务回归与外部作弊留出集；
 - MCP stdio 已实现 tools/resources/outputSchema、动态任务/Goal 资源与分页；完整支持 2025-06-18/2025-11-25 的资源订阅和状态变更通知；2026-07-28 的 `server/discover`、缓存与 `subscriptions/listen` 尚未实现，因此明确拒绝该版本；
 - `HandoffPacket` 与 Codex/OpenCode/Qoder/Cursor 适配器已实现，支持 builtin↔Codex↔OpenCode↔Qoder↔Cursor 接力；OpenCode V1 与 V2 均已适配，V2 官方免费模型可免登录使用，真实 2.4.2 最小任务验证通过，免费额度 429 会暂停且不绕过；LSP 引用窄客户端与词法回退已实现，Pyright 1.1.414 与 typescript-language-server 6.1.0 真实引用验证通过，其余语言服务器矩阵待测；Cursor 支持官方 headless CLI 与可选 Python SDK，CLI 仅轮次/时间预算，SDK 可在运行时报告 token 与按运行成本，但真实 API Key 任务未验证且 USD 硬预算不支持；Antigravity consumer 不包装，自动接力仍默认关闭；
@@ -784,7 +784,26 @@ draft → planned → running → verifying → completed
 - worker 结束后、独立验收启动前清除所有已配置模型/后端凭证环境变量，验收与干净构建子进程不得继承 provider Key/PAT。
 - Linux scheduler 通过继承 FD 传递选中凭证，worker 主管进程环境不含 Key/PAT；后端只向官方 CLI 子进程注入值。CLI 自身仍必需持有 provider 凭证，不将此误称为完全不可读。
 - `agentkit credential show TASK_ID|cg_…|cb_…` 只读展示授权元数据；`agentkit credential revoke cg_…|cb_…` 撤销 Grant/Binding，不展示或写入密钥值。
+- 所有由宿主启动的 `python -m agentkit`、网络代理和 pip 维护命令使用 `-I` 隔离模式，忽略当前仓库与 `PYTHONPATH`；防止不可信仓库用同名 `agentkit`/`pip` 包在凭证读取或沙箱准备前劫持宿主代码。
 - 外部 benchmark 只能使用公开或用户明确授权的仓库。
+
+### 凭证威胁模型与启用边界
+
+| 资产/威胁 | 当前控制 | 明确残余风险 |
+|---|---|---|
+| 仓库在宿主启动时劫持 `agentkit` 包 | 内部解释器统一 `-I`；回归测试构造同名恶意包并证明普通 `-m` 会被劫持、隔离模式不会 | 用户自行用非隔离 `python -m agentkit` 启动仍不安全，应使用 `agentkit` 控制台脚本或 `python -I -m agentkit` |
+| worker 工具或仓库读取 supervisor 环境中的 provider Key | Linux 仅由 scheduler 读取选中 Key，经继承 FD 交给受信 `_task-run`；worker 主管环境不含 Key，外部后端只向官方 CLI 子进程注入 | 官方 CLI 自身必须持有 provider 凭证；本架构不提供、也不声称提供“CLI 不可读自身密钥”的 broker |
+| 撤销、过期或配置漂移后继续注入 | schedule、worker 启动和实际运行前复核 Grant/Binding；失败写 denied 审计，终态关闭 Binding | 撤销无法收回已进入 CLI 内存或已发出的在途请求；需要立即停止时先 cancel task，再 revoke |
+| 独立验收继承 worker 凭证 | 验收前移除全部已配置模型/后端 Key/PAT，验收子进程使用保守环境白名单 | 验收命令本身由仓库定义，仍须沙箱与 fail-to-pass 证据共同约束 |
+| 保存登录态或宿主认证目录泄露 | 仅用户级 `allow_saved_credentials=true` 可开启；sandbox 遮蔽宿主 home/XDG，只绑定选中后端必需路径 | 官方 CLI 的登录态文件仍属于该 CLI 信任域；不可信仓库不得使用真实保存登录态 |
+| 恶意官方 CLI、宿主 root 或供应链攻击 | 只调用用户配置的官方 CLI；依赖审计、版本记录与沙箱限制 blast radius | 不替代官方 CLI 签名验证、宿主加固或上游安全审计 |
+
+分阶段启用：
+
+1. **默认/当前**：API Key 环境变量 + Linux bubblewrap + FD 传递 + 独立验收去钥；保存登录态关闭。
+2. **受控 pilot**：用户显式开启保存登录态，仅对选定后端与公开或明确授权仓库开放；记录 Grant/Binding/Revocation/Audit，演练运行中撤销与取消。
+3. **生产候选**：完成真实主管 Agent、长 Goal 中断恢复、外部工人与公开 benchmark 验证后，才允许有限真实流量。
+4. **发布门禁**：固定版本、远端签名/来源证明、干净安装与回滚演练全部通过后发布；任何一步缺证据都保持“生产候选”。
 
 ## 7.10 MCP 接口
 

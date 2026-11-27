@@ -4,8 +4,10 @@
 import json
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 from conftest import git
 
@@ -123,3 +125,17 @@ def test_log_retention_configurable_and_zero_keeps_forever(ak, repo):
     assert prune_logs(repo, {"logs": {"retain_days": 0}}, force=True)["removed"] == 0 and f.exists()
     assert prune_logs(repo, {}, force=True)["removed"] == 0 and f.exists()
     assert prune_logs(repo, {"logs": {"retain_days": 2}}, force=True)["removed"] == 1 and not f.exists()
+
+
+def test_pip_probe_uses_isolated_python(monkeypatch):
+    from agentkit import lifecycle
+
+    captured = []
+
+    def run(args, **kwargs):
+        captured.append(args)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(lifecycle.subprocess, "run", run)
+    assert lifecycle._pip_installed() is True
+    assert captured == [[sys.executable, "-I", "-m", "pip", "show", "agentkit"]]

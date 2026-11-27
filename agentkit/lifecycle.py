@@ -214,7 +214,7 @@ def _remove_repo_state(root: Path, plan: dict, delete_branches: bool) -> dict:
 
 
 def _pip_installed() -> bool:
-    r = subprocess.run([sys.executable, "-m", "pip", "show", "agentkit"], capture_output=True, text=True, timeout=60)
+    r = subprocess.run([sys.executable, "-I", "-m", "pip", "show", "agentkit"], capture_output=True, text=True, timeout=60)
     return r.returncode == 0
 
 
@@ -227,7 +227,7 @@ def cmd_uninstall(ctx: Ctx, a) -> Result:
     plans = [_repo_plan(Path(r)) for r in repos]
     user_paths = [str(p) for p in (config_dir(), data_dir()) if p.exists()]
     keep_pkg = a.keep_package or a.this_repo
-    package = None if keep_pkg else f"{sys.executable} -m pip uninstall -y agentkit"
+    package = None if keep_pkg else f"{sys.executable} -I -m pip uninstall -y agentkit"
     branches = sum(len(p["branches"]) for p in plans)
     summary = {
         "repos": [{k: v for k, v in p.items() if v and k != "kept_tracked"} | ({"kept_tracked": len(p["kept_tracked"])} if p["kept_tracked"] else {})
@@ -255,7 +255,7 @@ def cmd_uninstall(ctx: Ctx, a) -> Result:
     pkg = "kept"
     if package:
         if _pip_installed():
-            r = subprocess.run([sys.executable, "-m", "pip", "uninstall", "-y", "agentkit"], capture_output=True, text=True, timeout=300)
+            r = subprocess.run([sys.executable, "-I", "-m", "pip", "uninstall", "-y", "agentkit"], capture_output=True, text=True, timeout=300)
             pkg = "removed" if r.returncode == 0 else f"pip uninstall failed: {r.stderr.strip()[-160:]}"
         else:
             pkg = "not installed via pip (remove the binary / checkout yourself)"

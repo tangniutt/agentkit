@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """User-controlled opt-in for external CLI saved credentials."""
 import json
+import os
+import subprocess
 import sys
 from types import SimpleNamespace
 
@@ -266,3 +268,43 @@ def test_task_credential_rebind_closes_previous_binding(tmp_path, monkeypatch):
     assert task["credential_binding_id"] != first
     assert credentials.load_binding(tmp_path, first)["status"] == "closed"
     assert credentials.is_binding_active(tmp_path, task["credential_binding_id"])
+
+
+def test_isolated_python_ignores_repository_package_shadowing(tmp_path):
+    package = tmp_path / "agentkit"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    marker = tmp_path / "shadowed"
+    (package / "__main__.py").write_text(
+        f"from pathlib import Path\nPath({str(marker)!r}).write_text('ran')\n", encoding="utf-8")
+    env = dict(os.environ)
+    env.pop("PYTHONPATH", None)
+    shadowed = subprocess.run([sys.executable, "-m", "agentkit"], cwd=tmp_path, env=env,
+                              capture_output=True, text=True, timeout=10)
+    assert shadowed.returncode == 0 and marker.read_text(encoding="utf-8") == "ran"
+    marker.unlink()
+    isolated = subprocess.run([sys.executable, "-I", "-m", "agentkit", "--help"], cwd=tmp_path, env=env,
+                              capture_output=True, text=True, timeout=10)
+    assert isolated.returncode == 0, isolated.stderr
+    assert '"usage"' in isolated.stdout and not marker.exists()
+
+
+def test_schedule_launches_worker_with_isolated_python(tmp_path, monkeypatch):
+    (tmp_path / ".agentkit").mkdir()
+    (tmp_path / ".agentkit/config.toml").write_text(
+        '[sandbox]\nmode = "off"\n[tasks]\nconcurrency = 1\n', encoding="utf-8")
+    task = {"id": "t123abc", "backend": "builtin", "model": "", "status": "queued",
+            "worktree": ".agentkit/worktrees/t123abc", "base": "HEAD", "branch": "agentkit/t123abc",
+            "budget": {"tokens": 0, "usd": 0, "minutes": 5}, "hash": "h"}
+    tasks.save(tmp_path, task)
+    captured = {}
+
+    def popen(args, **kwargs):
+        captured.update(args=args, kwargs=kwargs)
+        return SimpleNamespace(pid=123)
+
+    monkeypatch.setattr(tasks.subprocess, "Popen", popen)
+    tasks.schedule(tmp_path)
+    assert captured["args"][1:5] == ["-I", "-B", "-u", "-m"]
+    assert captured["args"][5] == "agentkit"
+    assert captured["kwargs"]["cwd"] == str(tmp_path)
