@@ -193,7 +193,7 @@
 1. **Linux VPS 门禁**：Linux Python 3.10/3.12 + bubblewrap 全量已在 GitHub Actions 通过；Windows direct-mode 仅作非阻塞开发兼容回归，不是生产门槛。
 2. **P1 收尾**：Goal 状态事件流、核心/可选工具包；MCP 2026 继续保持明确不支持，除非完整实现 `server/discover`、缓存与 `subscriptions/listen` 后再开放。
 3. **P2 智能与生态**：补齐真实 LSP 服务器矩阵、外部 WorkerBackend、模型能力与健康档案、缓存感知成本；Builtin/XERJ/LSP 适配与 Pyright 真实引用已落地，待补公开 benchmark。
-4. **P3 外部验证与发布**：SWE-bench Verified / Terminal-Bench / 内部长任务、外部作弊留出集、公开成本-质量报告、固定版本与回滚。
+4. **P3 外部验证与发布**：固定版本 `v0.2.0`、签名/provenance 与回滚已发布；SWE-bench Verified / Terminal-Bench、内部真实长任务、外部作弊留出集与公开成本-质量报告按用户决定在 Muse 接入后继续。
 5. 原生二进制在 P3 证明价值后重新评估。
 
 ## 生产完成定义审计（2026-11-28）
@@ -208,10 +208,10 @@
 | 内置与外部工人产生统一证据 | TaskSpec、预算、独立验收与 EvidenceReceipt 已统一 | 已覆盖 |
 | 模型断流可安全接力 | HandoffPacket 与多后端适配器已落地；自动接力默认关闭，真实故障切换未验证 | 部分 |
 | 外部评测公开且可复现 | 统一 harness 与 JSONL 证据已落地：离线 48/48 任务通过、14/14 作弊检出；真实账号评测按用户决定延后到 Muse 接入后 | 部分 |
-| 固定版本可安装、校验和回滚 | wheel/sdist、SHA256、manifest、回滚与 CI 安装门禁已通过；未创建发布 tag，未做远端签名发布 | 部分 |
+| 固定版本可安装、校验和回滚 | [`v0.2.0`](https://github.com/tangniutt/agentkit/releases/tag/v0.2.0) 已发布；wheel/sdist、SHA256、分离式签名、公钥、provenance、CI 安装与临时环境回滚均通过，远端下载复验通过 | 已完成 |
 | 未达到指标如实标注 | 状态文档明确记录假模型、跳过项、额度与生产缺口 | 已覆盖 |
 
-结论：当前是**生产候选**，不是可宣布上线的完成态；下一步优先级为远端签名与固定版本发布。真实 Codex/Antigravity/Muse 账号测试按用户决定延后到发布后由 Muse 接入执行，问题进入反馈回路；不伪造真实账号通过结论。凭证侧不是承诺实现会让官方 CLI 无法读取自身密钥的反向代理 broker。
+结论：`v0.2.0` 已发布为**生产候选**，可通过 Release 资产安装；真实 Codex/Antigravity/Muse 账号测试按用户决定延后到发布后由 Muse 接入执行，问题进入反馈回路，不伪造真实账号通过结论。凭证侧不是承诺实现会让官方 CLI 无法读取自身密钥的反向代理 broker。
 
 ### 2026-11-28 本地生产门禁
 
@@ -219,6 +219,14 @@
 - 公开离线证据：`eval/results/offline-gate.jsonl`，单条 JSONL，`results_sha256=3f98f287f87fe63e4afdc37cfde03727e5208afce342debabd911c5f89e80d1f`；direct 24/24、worker 24/24、作弊 14/14。
 - 该记录 `git_commit=59f46c7e7d42941681d9ebb9a7e6ccf0de5fb30d`；`git_dirty=true` 是 Windows bind mount 下 Linux Git 将 CRLF 工作树视为修改的环境噪声，宿主 `git status` 当时干净。未用更改换行配置的方式伪造结果。
 - 按用户决定，当前不执行真实 API Key/Codex/Antigravity 等账号测试，也不要求设置凭证变量；真实使用由用户后续在 Muse 上验证并提 Issue。
+
+### 2026-11-28 固定版本发布
+
+- Release：https://github.com/tangniutt/agentkit/releases/tag/v0.2.0 ；不可变 annotated tag 指向 `f0c91722af80321ac9bcfca46ab7aa726801f486`。
+- CI run `46081736660`：Linux Python 3.10/3.12、Windows direct-mode、release 全部成功。
+- wheel：248,983 bytes，SHA-256 `3256171cd16f2ce581d570dda7924b36b41568a4704c8e9f34d2d750d8d4e9cb`；sdist：330,899 bytes，SHA-256 `a925ee2631a20df1c845eb874b0fdf44afe6114437859491fba452220da4ba64`。
+- `SHA256SUMS` 与 `provenance.json` 均使用 RSA-3072/SHA-256 分离式签名；公钥 SHA-256 `c1f232c43e214d772aff43bdd7b00634c13436b116ce3c69804746f2fee50d04`。私钥未进入仓库、日志或文档，签名后已删除临时副本。
+- 临时 Windows venv 回滚演练成功，`agentkit doctor healthy`；从 GitHub Release 重新下载后，manifest、wheel/sdist 哈希、校验和签名与 provenance 签名全部复验通过。
 
 ## 2026-11-25 生产化验证
 
