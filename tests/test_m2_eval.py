@@ -68,8 +68,7 @@ def test_cheat_library_detection_is_100_percent(tmp_path, capsys):
 
 @pytest.mark.skipif(os.name != "posix", reason="external dispatch requires Linux")
 def test_eval_external_worker_uses_same_acceptance_contract(tmp_path):
-    script = tmp_path / "fake_opencode.py"
-    script.write_text('''import json, sys
+    script = '''import json, sys
 from pathlib import Path
 sys.stdin.read()
 p = Path("calc.py")
@@ -81,9 +80,9 @@ finish["part"] = {"id":"p3","type":"step-finish","reason":"stop","cost":0.25}
 finish["part"]["tokens"] = {"input":100,"output":20,"reasoning":0}
 finish["part"]["tokens"]["cache"] = {"read":0,"write":0}
 print(json.dumps(finish))
-''', encoding="utf-8")
+'''
     config = ("[workers.opencode]\n"
-              f"command = [{json.dumps(sys.executable)}, {json.dumps(str(script))}]\n"
+              f"command = [{json.dumps(sys.executable)}, \"-c\", {json.dumps(script)}]\n"
               "model = \"fake/model\"\nallow_unsandboxed = true\nprice_in = 1\nprice_out = 1\n")
     out = tmp_path / "external.json"
     code = R.main(["--backend", "opencode", "--model-id", "fake/model", "--worker-config", config,
