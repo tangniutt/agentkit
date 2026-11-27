@@ -97,10 +97,52 @@ print(json.dumps(finish))
     assert len(res["rows"]) == 1
     row = res["rows"][0]
     assert row["backend"] == "opencode" and row["pass"] and row["verdict"] == "pass"
+    assert row["sandbox"] == "bwrap" and row["timed_out"] is False
     assert row["worker_tokens"] == 120 and row["usd"] == pytest.approx(0.25)
     assert row["host_tokens"] > 0
     rendered = R.table(res["rows"], "external")
     assert "| worker (opencode, tiny) |" in rendered
+
+
+def test_external_eval_rejects_unsandboxed_config(tmp_path):
+    row = R.run_worker(TASKS[0], tmp_path, {"config": '[sandbox]\nmode = "off"\n'}, ENV,
+                       backend="opencode")
+    assert row["pass"] is False and "mode=required" in row["error"]["what"]
+
+
+def test_external_eval_timeout_cancels_task(tmp_path, monkeypatch):
+    root = tmp_path / "repo"
+    task_dir = root / ".agentkit" / "tasks" / "t123abc"
+    task_dir.mkdir(parents=True)
+    (task_dir / "task.json").write_text(json.dumps({
+        "id": "t123abc", "worker_status": "submitted", "sandbox": "bwrap", "tokens": 0, "usd": 0.0, "rounds": 0,
+    }), encoding="utf-8")
+    calls = []
+
+    class FakeHost:
+        tokens = 0
+
+        def __init__(self, root, env):
+            pass
+
+        def __call__(self, *args):
+            calls.append(args)
+            if args[:2] == ("task", "create"):
+                return {"ok": True, "data": {"id": "t123abc"}}
+            if args[:2] == ("task", "wait"):
+                return {"data": {"done": False}}
+            if args[:2] == ("task", "report"):
+                return {"data": {"verdict": "fail", "status": "cancelled"}}
+            return {"ok": True}
+
+    monkeypatch.setattr(R, "make_repo", lambda *_args: root)
+    monkeypatch.setattr(R, "Host", FakeHost)
+    clock = iter([0, 200, 200])
+    monkeypatch.setattr(R.time, "monotonic", lambda: next(clock))
+    row = R.run_worker(TASKS[0], tmp_path, {"config": '[sandbox]\nmode = "required"\n'}, ENV,
+                       timeout=100, backend="opencode")
+    assert ("task", "cancel", "t123abc") in calls
+    assert row["timed_out"] is True and row["pass"] is False and row["why"] == "evaluation timeout"
 
 
 def test_runner_returns_failure_when_any_task_fails(tmp_path, monkeypatch):

@@ -33,7 +33,7 @@ def _repo(repo, ak, script: str, *, allow_unsandboxed=True, prices=True, cost_kn
         "[workers.qoder]\n"
         f"command = [{json.dumps(sys.executable)}, {json.dumps(str(fake))}]\n"
         "model = \"fake-model\"\n"
-        f"config_dir = {json.dumps(str(repo / 'qoder-config'))}\n"
+        "config_dir = \"qoder-config\"\n"
         f"allow_unsandboxed = {str(allow_unsandboxed).lower()}\n"
         f"cost_known = {str(cost_known).lower()}\n"
         f"price_in = {1 if prices else 0}\n"
@@ -158,7 +158,7 @@ def test_builtin_task_hands_off_to_qoder_in_same_worktree(ak, repo, fake):
                    "\n[workers.qoder]\n" +
                    f"command = [{json.dumps(sys.executable)}, {json.dumps(str(script))}]\n" +
                    "model = \"fake-model\"\n" +
-                   f"config_dir = {json.dumps(str(repo / 'qoder-config'))}\n" +
+                   "config_dir = \"qoder-config\"\n" +
                    "allow_unsandboxed = true\nprice_in = 1\nprice_out = 1\n", encoding="utf-8")
     handed = ak("task", "handoff", tid, "--backend", "qoder")
     assert handed["ok"] and handed["data"]["to_backend"] == "qoder", handed

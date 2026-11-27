@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from conftest import git
 from agentkit import tasks
 from agentkit.backends import opencode_state_paths
 from agentkit.config import load_config, saved_credentials_allowed
@@ -104,8 +105,16 @@ def test_sandbox_environment_preserves_user_config_without_host_home(tmp_path, m
     home = tmp_path / "host-home"
     xdg = {name: home / name.lower() for name in
            ("XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR")}
+    task_dir = tmp_path / "task"
+    task_dir.mkdir()
+    victim = tmp_path / "victim"
+    victim.write_text("unchanged", encoding="utf-8")
+    (task_dir / "user-config.json").symlink_to(victim)
     env = {}
-    tasks.sandbox_environment(env, tmp_path / "task", "builtin", [], home, xdg)
+    tasks.sandbox_environment(env, task_dir, "builtin", [], home, xdg)
+    assert victim.read_text(encoding="utf-8") == "unchanged"
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "empty-config"))
+    monkeypatch.setenv("AGENTKIT_USER_CONFIG_SNAPSHOT", env["AGENTKIT_USER_CONFIG_SNAPSHOT"])
     cfg = load_config(root)
     assert saved_credentials_allowed(cfg) is True
     assert cfg["models"]["fake"]["key_env"] == "FAKE_KEY"
@@ -169,3 +178,41 @@ def test_opencode_saved_login_requires_opt_in(tmp_path, monkeypatch):
     _root, cfg = _config(tmp_path, monkeypatch, allow=True)
     tasks._check_credential_policy(cfg, "opencode", {"allow_account_login": True}, root)
     assert len(opencode_state_paths({**cfg, "workers": {"opencode": {"allow_account_login": True}}})) == 3
+
+
+def test_worker_environment_allowlist_keeps_only_selected_key(tmp_path, monkeypatch):
+    monkeypatch.setenv("PATH", "/safe/bin")
+    monkeypatch.setenv("FAKE_KEY", "selected-model-key")
+    monkeypatch.setenv("GITHUB_TOKEN", "github-secret")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "aws-secret")
+    monkeypatch.setenv("OPENAI_API_KEY", "other-provider-secret")
+    cfg = {"models": {"fake": {"base_url": "http://127.0.0.1:1/v1", "key_env": "FAKE_KEY"}}}
+    env = tasks.selected_worker_env(cfg, "builtin", "fake")
+    assert env["PATH"] == "/safe/bin" and env["FAKE_KEY"] == "selected-model-key"
+    assert not {"GITHUB_TOKEN", "AWS_SECRET_ACCESS_KEY", "OPENAI_API_KEY"} & env.keys()
+
+    monkeypatch.setenv("QODER_PERSONAL_ACCESS_TOKEN", "qoder-pat")
+    monkeypatch.setenv("QODER_MISSING_KEY", "")
+    env = tasks.selected_worker_env({"workers": {"qoder": {"key_env": "QODER_MISSING_KEY"}}}, "qoder", "")
+    assert env["QODER_PERSONAL_ACCESS_TOKEN"] == "qoder-pat"
+    assert "QODER_MISSING_KEY" not in env and "GITHUB_TOKEN" not in env
+
+
+def test_backend_config_dir_rejects_repository_and_reserved_roots(tmp_path, monkeypatch):
+    root, cfg = _config(tmp_path, monkeypatch, allow=True)
+    for backend in ("qoder", "cursor"):
+        for raw in (".", ".git/state", ".agentkit/state", tmp_path.anchor):
+            with pytest.raises(AKError) as error:
+                tasks._check_credential_policy(cfg, backend, {"config_dir": str(raw)}, root)
+            assert error.value.code == "AK-CONFIG"
+
+
+def test_backend_config_dir_rejects_tracked_source_directory(tmp_path, monkeypatch):
+    root, cfg = _config(tmp_path, monkeypatch, allow=True)
+    (root / "src").mkdir()
+    (root / "src" / "calc.py").write_text("x = 1\n", encoding="utf-8")
+    git(root, "init", "-q")
+    git(root, "add", "src")
+    with pytest.raises(AKError) as error:
+        tasks._check_credential_policy(cfg, "qoder", {"config_dir": "src"}, root)
+    assert error.value.code == "AK-CONFIG" and "tracked" in error.value.what

@@ -239,7 +239,7 @@ def schedule(root: Path) -> None:
                 continue
             d = tpath(root, t["id"])
             logf = open(d / "worker.log", "ab")
-            env = dict(os.environ)
+            env = selected_worker_env(cfg, t.get("backend", "builtin"), t.get("model", ""))
             env["PYTHONUNBUFFERED"] = "1"
             env.update(guard_env(root))
             command = [sys.executable, "-m", "agentkit", "--root", str(root), "_task-run", t["id"]]
@@ -254,6 +254,14 @@ def schedule(root: Path) -> None:
             pid_file = ready_file = None
             if smode != "off":
                 try:
+                    backend = t.get("backend", "builtin")
+                    if backend in ("codex", "opencode", "qoder", "cursor"):
+                        from .backends import codex_config, cursor_config, opencode_config, qoder_config
+
+                        backend_cfg = (codex_config(cfg) if backend == "codex" else
+                                       opencode_config(cfg) if backend == "opencode" else
+                                       qoder_config(cfg) if backend == "qoder" else cursor_config(cfg))
+                        _check_credential_policy(cfg, backend, backend_cfg, root, "schedule", t["id"])
                     domains = S.network_domains(cfg)
                     import agentkit
 
@@ -339,6 +347,12 @@ def schedule(root: Path) -> None:
                                  ended=time.time(), error_code="AK-TASK-STATE", component="task")
                         save(root, t)
                         continue
+                except AKError as e:
+                    _stop_proxy(proxy_proc)
+                    logf.close()
+                    t.update(status="failed", reason=e.what, ended=time.time(), error_code=e.code, component="task")
+                    save(root, t)
+                    continue
                 except ValueError as e:
                     _stop_proxy(proxy_proc)
                     logf.close()
@@ -420,15 +434,28 @@ def guard_env(root: Path) -> dict:
             "GIT_TERMINAL_PROMPT": "0"}
 
 
+_WORKER_ENV = {
+    "PATH", "HOME", "USERPROFILE", "SHELL", "LANG", "LANGUAGE", "TZ", "TMPDIR", "TEMP", "TMP",
+    "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE",
+    "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy",
+    "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "NODE_PATH",
+    "TERM", "COLORTERM", "NO_COLOR", "FORCE_COLOR", "CI", "GITHUB_ACTIONS", "RUNNER_OS",
+    "AGENTKIT_MODEL", "AGENTKIT_SANDBOX", "AGENTKIT_NETWORK_MODE", "AGENTKIT_NET_PROXY_SOCKET",
+    "AGENTKIT_USER_CONFIG_SNAPSHOT", "AGENTKIT_NETPROXY_DEBUG", "AGENTKIT_NO_TREESITTER",
+    "AGENTKIT_SEARCH_ENGINE", "AGENTKIT_LSP_TEST_COMMAND",
+}
+
+
 def scrubbed_env(cfg: dict) -> dict:
-    """os.environ minus every configured model key variable (M-17)."""
+    """Keep only worker runtime variables; callers add the selected backend key explicitly."""
     from .models import all_models
 
-    env = dict(os.environ)
+    env = {k: v for k, v in os.environ.items()
+           if k in _WORKER_ENV or k.startswith(("PYTHON", "LC_", "XDG_"))}
     for m in all_models(cfg).values():
         if m.key_env:
-            if env.get(m.key_env):
-                register_secret(env[m.key_env])
+            if os.environ.get(m.key_env):
+                register_secret(os.environ[m.key_env])
             env.pop(m.key_env, None)
     return env
 
@@ -440,10 +467,8 @@ def sandbox_environment(env: dict, task_dir: Path, backend: str, backend_paths: 
 
     task_dir.mkdir(parents=True, exist_ok=True)
     user = load_user_config()
-    snapshot = task_dir / "user-config.json"
-    snapshot.write_text(json.dumps({k: user[k] for k in ("model", "models", "security") if k in user}),
-                        encoding="utf-8")
-    env["AGENTKIT_USER_CONFIG_SNAPSHOT"] = str(snapshot)
+    env["AGENTKIT_USER_CONFIG_SNAPSHOT"] = json.dumps(
+        {k: user[k] for k in ("model", "models", "security") if k in user}, separators=(",", ":"))
     sandbox_home = task_dir / "home"
     sandbox_xdg = {name: task_dir / name.lower() for name in host_xdg}
     for path in [sandbox_home, *sandbox_xdg.values()]:
@@ -461,6 +486,33 @@ def sandbox_environment(env: dict, task_dir: Path, backend: str, backend_paths: 
     elif backend == "opencode" and backend_paths:
         env.update({name: str(host_xdg[name]) for name in
                     ("XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME")})
+
+
+def selected_worker_env(cfg: dict, backend: str, model: str) -> dict:
+    env = scrubbed_env(cfg)
+    source = ""
+    if backend == "builtin":
+        from .models import all_models, pick
+
+        if all_models(cfg):
+            source = pick(cfg, model).key_env
+    else:
+        from .backends import codex_config, cursor_config, opencode_config, qoder_config
+
+        wcfg = (codex_config(cfg) if backend == "codex" else
+                opencode_config(cfg) if backend == "opencode" else
+                qoder_config(cfg) if backend == "qoder" else cursor_config(cfg))
+        if backend == "qoder":
+            dedicated = str(wcfg.get("key_env") or "")
+            source = dedicated if dedicated and os.environ.get(dedicated) else "QODER_PERSONAL_ACCESS_TOKEN"
+        elif backend == "cursor":
+            source = str(wcfg.get("key_env") or "CURSOR_API_KEY")
+        else:
+            source = str(wcfg.get("key_env") or "")
+    if source and os.environ.get(source):
+        env[source] = os.environ[source]
+        register_secret(os.environ[source])
+    return env
 
 
 # ---------------------------------------------------------------- create
@@ -482,6 +534,29 @@ def task_type(goal: str) -> str:
     return "other"
 
 
+def _check_backend_config_dir(path: Path, root: Path, backend: str, allowed: bool) -> None:
+    path, root = path.resolve(), root.resolve()
+    if path == Path(path.anchor) or path in root.parents:
+        raise AKError(f"{backend} config_dir must not be the filesystem root or a repository ancestor",
+                      "choose a dedicated backend state directory", code="AK-CONFIG")
+    try:
+        relative = path.relative_to(root)
+    except ValueError as e:
+        if not allowed:
+            raise AKError(f"{backend} config_dir outside the repository requires user-level approval",
+                          "use a repository-local directory or enable security.allow_saved_credentials in the user config",
+                          code="AK-CONFIG") from e
+        return
+    if relative == Path(".") or any(part in (".git", ".agentkit") for part in relative.parts):
+        raise AKError(f"{backend} config_dir must be an independent repository subdirectory",
+                      "do not bind the repository root, .git or .agentkit as writable backend state", code="AK-CONFIG")
+    tracked = subprocess.run(["git", "-C", str(root), "ls-files", "--", relative.as_posix()],
+                             capture_output=True, text=True).stdout.strip()
+    if tracked:
+        raise AKError(f"{backend} config_dir overlaps tracked repository files",
+                      "choose an untracked directory dedicated to backend state", code="AK-CONFIG")
+
+
 def _check_credential_policy(cfg: dict, backend: str, wcfg: dict, root: Path, command: str = "create", tid: str = "") -> None:
     allowed = saved_credentials_allowed(cfg)
     if backend == "qoder":
@@ -498,28 +573,29 @@ def _check_credential_policy(cfg: dict, backend: str, wcfg: dict, root: Path, co
                           "set QODER_PERSONAL_ACCESS_TOKEN or enable security.allow_saved_credentials in the user config",
                           f"agentkit task {command} {tid} --backend qoder".replace("  ", " "), code="AK-CONFIG")
         raw_dir = wcfg.get("config_dir")
-        if raw_dir and not allowed:
+        if raw_dir:
             path = Path(str(raw_dir)).expanduser()
             path = path.resolve() if path.is_absolute() else (root / path).resolve()
+            _check_backend_config_dir(path, root, "Qoder", allowed)
+        elif allowed or os.environ.get("QODER_CONFIG_DIR"):
+            from .backends import qoder_config_dir
+
+            path = qoder_config_dir({"workers": {"qoder": wcfg}}, root)
             try:
                 path.relative_to(root.resolve())
-            except ValueError as e:
-                raise AKError("Qoder config_dir outside the repository requires user-level approval",
-                              "use a repository-local directory or enable security.allow_saved_credentials in the user config",
-                              code="AK-CONFIG") from e
+            except ValueError:
+                if allowed:
+                    _check_backend_config_dir(path, root, "Qoder", True)
+            else:
+                _check_backend_config_dir(path, root, "Qoder", True)
     elif backend == "opencode" and wcfg.get("allow_account_login", False) and not allowed:
         raise AKError("OpenCode saved login requires user-level approval",
                       "enable security.allow_saved_credentials in the user config or use provider API keys",
                       code="AK-CONFIG")
-    elif backend == "cursor" and wcfg.get("config_dir") and not allowed:
+    elif backend == "cursor" and wcfg.get("config_dir"):
         path = Path(str(wcfg["config_dir"])).expanduser()
         path = path.resolve() if path.is_absolute() else (root / path).resolve()
-        try:
-            path.relative_to(root.resolve())
-        except ValueError as e:
-            raise AKError("Cursor config_dir outside the repository requires user-level approval",
-                          "use a repository-local directory or enable security.allow_saved_credentials in the user config",
-                          code="AK-CONFIG") from e
+        _check_backend_config_dir(path, root, "Cursor", allowed)
 
 
 def create(ctx: Ctx, a) -> dict:
@@ -745,10 +821,12 @@ def run_task(root: Path, tid: str) -> None:
         wcfg = (codex_config(cfg) if backend == "codex" else
                 opencode_config(cfg) if backend == "opencode" else
                 qoder_config(cfg) if backend == "qoder" else cursor_config(cfg))
-        if backend == "qoder" and original_env.get("QODER_PERSONAL_ACCESS_TOKEN"):
-            register_secret(original_env["QODER_PERSONAL_ACCESS_TOKEN"])
-        if backend == "cursor" and original_env.get("CURSOR_API_KEY"):
-            register_secret(original_env["CURSOR_API_KEY"])
+        key_env = str(wcfg.get("key_env") or "")
+        if backend == "qoder":
+            source_key = key_env if key_env and original_env.get(key_env) else "QODER_PERSONAL_ACCESS_TOKEN"
+            if original_env.get(source_key):
+                clean[source_key] = original_env[source_key]
+                register_secret(original_env[source_key])
         if backend == "cursor":
             source_key = str(wcfg.get("key_env") or "CURSOR_API_KEY")
             if original_env.get(source_key):
@@ -756,8 +834,7 @@ def run_task(root: Path, tid: str) -> None:
                 register_secret(original_env[source_key])
             if source_key != "CURSOR_API_KEY":
                 clean.pop(source_key, None)
-        key_env = str(wcfg.get("key_env") or "")
-        if backend != "cursor" and key_env and original_env.get(key_env):
+        if backend not in ("cursor", "qoder") and key_env and original_env.get(key_env):
             clean[key_env] = original_env[key_env]
             register_secret(original_env[key_env])
     else:
@@ -838,7 +915,8 @@ def run_task(root: Path, tid: str) -> None:
 
         cls = (CodexBackend if backend == "codex" else OpenCodeBackend if backend == "opencode"
                else QoderBackend if backend == "qoder" else CursorBackend)
-        worker = cls(cfg, t, wt, d, on_progress=progress, check_stop=lambda: state["stop"],
+        backend_options = {"root": root} if backend in ("qoder", "cursor") else {}
+        worker = cls(cfg, t, wt, d, **backend_options, on_progress=progress, check_stop=lambda: state["stop"],
                      events=events, max_rounds=int(wcfg.get("max_rounds", 40)))
     else:
         worker = Worker(spec, wt, root, t, on_progress=progress, transcript=d / "transcript.jsonl", cfg=wcfg,

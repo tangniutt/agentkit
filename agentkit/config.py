@@ -131,8 +131,8 @@ def load_config(root: Path) -> dict:
     snapshot = os.environ.get("AGENTKIT_USER_CONFIG_SNAPSHOT")
     if snapshot:
         try:
-            user = json.loads(Path(snapshot).read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+            user = json.loads(snapshot)
+        except ValueError:
             user = {}
     else:
         user = load_user_config()

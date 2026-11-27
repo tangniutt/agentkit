@@ -788,6 +788,7 @@ class QoderBackend:
     name = "qoder"
 
     def __init__(self, cfg: dict, task: dict, worktree: Path, task_dir: Path, *,
+                 root: Optional[Path] = None,
                  on_progress: Callable[[dict], None] = lambda d: None,
                  check_stop: Callable[[], Optional[str]] = lambda: None,
                  events=None, max_rounds: int = 40):
@@ -795,6 +796,7 @@ class QoderBackend:
         self.task = task
         self.worktree = worktree
         self.task_dir = task_dir
+        self.root = root or worktree
         self.on_progress = on_progress
         self.check_stop = check_stop
         self.events = events
@@ -961,7 +963,7 @@ class QoderBackend:
         retries = int(self.cfg.get("max_retries", 0))
         if retries < 0 or retries > 10:
             raise ValueError("workers.qoder.max_retries must be between 0 and 10")
-        config_dir = qoder_config_dir({"workers": {"qoder": self.cfg}}, self.worktree)
+        config_dir = qoder_config_dir({"workers": {"qoder": self.cfg}}, self.root)
         config_dir.mkdir(parents=True, exist_ok=True)
         mcp_config = self.task_dir / "qoder-mcp.json"
         mcp_config.write_text('{"mcpServers":{}}', encoding="utf-8")
@@ -1052,6 +1054,7 @@ class CursorBackend:
     name = "cursor"
 
     def __init__(self, cfg: dict, task: dict, worktree: Path, task_dir: Path, *,
+                 root: Optional[Path] = None,
                  on_progress: Callable[[dict], None] = lambda d: None,
                  check_stop: Callable[[], Optional[str]] = lambda: None,
                  events=None, max_rounds: int = 40):
@@ -1062,6 +1065,7 @@ class CursorBackend:
         self.task = task
         self.worktree = worktree
         self.task_dir = task_dir
+        self.root = root or worktree
         self.on_progress = on_progress
         self.check_stop = check_stop
         self.events = events
@@ -1183,7 +1187,7 @@ class CursorBackend:
             from cursor_sdk import Agent, AgentOptions, LocalAgentOptions, SandboxOptions
         except ImportError:
             return Outcome("failed", "cursor-sdk is not installed", code="AK-CONFIG")
-        config_dir = cursor_config_dir({"workers": {"cursor": self.cfg}}, self.worktree)
+        config_dir = cursor_config_dir({"workers": {"cursor": self.cfg}}, self.root)
         (config_dir / ".cursor").mkdir(parents=True, exist_ok=True)
         (config_dir / ".cursor" / "cli-config.json").write_text(
             json.dumps(cursor_settings(), separators=(",", ":")), encoding="utf-8")
@@ -1299,7 +1303,7 @@ class CursorBackend:
 
     def _run_cli(self, brief: str, resume: Optional[str] = None) -> Outcome:
         command = _command(self.cfg, "cursor", "agent")
-        config_dir = cursor_config_dir({"workers": {"cursor": self.cfg}}, self.worktree)
+        config_dir = cursor_config_dir({"workers": {"cursor": self.cfg}}, self.root)
         (config_dir / ".cursor").mkdir(parents=True, exist_ok=True)
         (config_dir / ".cursor" / "cli-config.json").write_text(
             json.dumps(cursor_settings(), separators=(",", ":")), encoding="utf-8")

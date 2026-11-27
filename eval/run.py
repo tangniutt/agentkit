@@ -31,6 +31,11 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
+
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 
@@ -133,10 +138,28 @@ def add_model(h: Host, model: dict):
 
 def run_worker(task: dict, work: Path, model: dict, env: dict, budget_tokens: int = 0, budget_minutes: float = 10,
                files: dict = None, allow=None, timeout: float = 900, backend: str = "builtin", budget_usd: float = 0) -> dict:
+    config = model.get("config")
+    if backend != "builtin":
+        try:
+            parsed = tomllib.loads(config or "")
+            sandbox_cfg = parsed.get("sandbox")
+            if sandbox_cfg is not None and not isinstance(sandbox_cfg, dict):
+                raise ValueError("sandbox must be a TOML table")
+            mode = (sandbox_cfg or {}).get("mode")
+        except (tomllib.TOMLDecodeError, ValueError) as e:
+            return {"id": task["id"], "mode": "worker", "backend": backend, "size": task.get("size", "tiny"),
+                    "pass": False, "verdict": None, "error": {"what": str(e)}, "host_tokens": 0,
+                    "worker_tokens": 0, "usd": 0.0, "s": 0}
+        if mode not in (None, "required"):
+            return {"id": task["id"], "mode": "worker", "backend": backend, "size": task.get("size", "tiny"),
+                    "pass": False, "verdict": None, "error": {"what": "external evaluation requires [sandbox] mode=required"},
+                    "host_tokens": 0, "worker_tokens": 0, "usd": 0.0, "s": 0}
+        if mode is None:
+            config = (config or "").rstrip() + '\n\n[sandbox]\nmode = "required"\n'
     root = make_repo(work / f"worker-{task['id']}", files or task["files"])
-    if model.get("config"):
+    if config:
         (root / ".agentkit").mkdir(exist_ok=True)
-        (root / ".agentkit" / "config.toml").write_text(model["config"])
+        (root / ".agentkit" / "config.toml").write_text(config)
     setup = Host(root, env)
     if backend == "builtin":
         add_model(setup, model)
@@ -159,18 +182,27 @@ def run_worker(task: dict, work: Path, model: dict, env: dict, budget_tokens: in
         return {"id": task["id"], "mode": "worker", "backend": backend, "size": task.get("size", "tiny"), "pass": False, "verdict": None, "error": r.get("error"),
                 "host_tokens": h.tokens, "worker_tokens": 0, "usd": 0.0, "s": 0}
     tid = r["data"]["id"]
+    timed_out = False
     while True:
         w = h("task", "wait", tid, "--timeout", "120")
-        if (w.get("data") or {}).get("done") or time.monotonic() - t0 > timeout:
+        if (w.get("data") or {}).get("done"):
+            break
+        if time.monotonic() - t0 > timeout:
+            timed_out = True
+            h("task", "cancel", tid)
+            w = h("task", "wait", tid, "--timeout", "30")
             break
     wd = w.get("data") or {}
-    # a finished single task comes back from `wait` with the report inline (C-06): no extra call
     rep = wd if wd.get("done") and "checks" in wd else h("task", "report", tid).get("data") or {}
     full = json.loads((root / ".agentkit" / "tasks" / tid / "report.json").read_text()) \
         if (root / ".agentkit" / "tasks" / tid / "report.json").exists() else rep
     task_json = json.loads((root / ".agentkit" / "tasks" / tid / "task.json").read_text())
-    return {"id": task["id"], "mode": "worker", "backend": backend, "size": task.get("size", "tiny"), "pass": rep.get("verdict") == "pass", "verdict": rep.get("verdict"),
-            "status": rep.get("status"), "why": task_json.get("reason") if task_json.get("worker_status") != "submitted" else None,
+    sandbox = task_json.get("sandbox") or "off"
+    sandbox_ok = backend == "builtin" or sandbox == "bwrap"
+    why = "evaluation timeout" if timed_out else task_json.get("reason") if task_json.get("worker_status") != "submitted" else None
+    return {"id": task["id"], "mode": "worker", "backend": backend, "size": task.get("size", "tiny"),
+            "pass": rep.get("verdict") == "pass" and sandbox_ok and not timed_out, "verdict": rep.get("verdict"),
+            "status": rep.get("status"), "why": why, "sandbox": sandbox, "timed_out": timed_out,
             "flags": [f["flag"] for f in full.get("suspicious", [])],
             "host_tokens": h.tokens, "worker_tokens": task_json.get("tokens", 0), "usd": task_json.get("usd", 0.0),
             "rounds": task_json.get("rounds", 0), "s": round(time.monotonic() - t0, 1), "root": str(root)}

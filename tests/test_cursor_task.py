@@ -52,7 +52,7 @@ def _repo(repo, ak, script=SCRIPT, *, allow_unsandboxed=True, sandbox_off=False)
         f"command = [{json.dumps(sys.executable)}, {json.dumps(str(fake))}]\n"
         "model = \"fake-model\"\n"
         "key_env = \"CURSOR_API_KEY\"\n"
-        f"config_dir = {json.dumps(str(repo / 'cursor-config'))}\n"
+        "config_dir = \"cursor-config\"\n"
         f"allow_unsandboxed = {str(allow_unsandboxed).lower()}\n"
         + ("[sandbox]\nmode = \"off\"\n" if sandbox_off else ""), encoding="utf-8")
     return cfg
