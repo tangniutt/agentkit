@@ -28,6 +28,52 @@ def test_sandbox_command_binds_only_worker_paths(tmp_path, monkeypatch):
     assert "--ro-bind" in cmd and "/" in cmd
 
 
+def test_sandbox_masks_home_and_recreates_bound_parents(tmp_path, monkeypatch):
+    monkeypatch.setattr(sandbox, "available", lambda: True)
+    home = tmp_path / "home"
+    wt = home / "repo" / ".agentkit" / "worktrees" / "t123abc"
+    task = home / "repo" / ".agentkit" / "tasks" / "t123abc"
+    logs = home / "repo" / ".agentkit" / "logs"
+    for path in (wt, task, logs):
+        path.mkdir(parents=True)
+    cmd = sandbox.wrap(["true"], wt, task, logs, masked_paths=[home])
+    assert cmd[cmd.index(str(home.resolve())) - 1] == "--tmpfs"
+    assert cmd.index(str(wt.resolve())) > cmd.index(str(home.resolve()))
+    assert "--dir" in cmd
+    assert str((home / "repo").resolve()) in cmd
+    nested = sandbox.wrap(["true"], wt, task, logs, masked_paths=[home, home / ".config"])
+    assert nested.count(str(home.resolve())) == 1
+    repo = home / "repo"
+    xdg = repo / ".config"
+    xdg.mkdir(parents=True)
+    remasked = sandbox.wrap(["true"], wt, task, logs, ro_paths=[repo], masked_paths=[home, xdg])
+    assert remasked.count(str(xdg.resolve())) == 1
+    assert remasked.index(str(xdg.resolve())) > len(remasked) - 1 - remasked[::-1].index(str(repo.resolve()))
+
+
+@pytest.mark.skipif(not sandbox.available(), reason="bubblewrap is unavailable")
+def test_sandbox_hides_host_home_credentials(tmp_path):
+    home = tmp_path / "home"
+    wt = tmp_path / "wt"
+    task = tmp_path / "task"
+    logs = tmp_path / "logs"
+    for path in (home, wt, task, logs):
+        path.mkdir()
+    secret = home / ".ssh" / "id_ed25519"
+    secret.parent.mkdir()
+    secret.write_text("must-not-be-visible", encoding="utf-8")
+    marker = wt / "visible.txt"
+    marker.write_text("worktree-visible", encoding="utf-8")
+    code = ("from pathlib import Path; "
+            f"assert not Path({str(secret)!r}).exists(); "
+            f"assert Path({str(marker)!r}).read_text() == 'worktree-visible'; "
+            "print('masked')")
+    result = subprocess.run(sandbox.wrap([sys.executable, "-c", code], wt, task, logs,
+                                         masked_paths=[home]),
+                            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15)
+    assert result.returncode == 0 and "masked" in result.stdout, result.stderr
+
+
 def test_sandbox_network_policy_and_command(tmp_path, monkeypatch):
     assert sandbox.network_enabled({}) is True
     assert sandbox.network_enabled({"sandbox": {"network": False}}) is False

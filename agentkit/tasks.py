@@ -258,7 +258,16 @@ def schedule(root: Path) -> None:
                     import agentkit
 
                     pkg_root = Path(agentkit.__file__).resolve().parent.parent
-                    ro_paths = [p for p in (pkg_root, root) if Path("/tmp") in p.resolve().parents]
+                    host_home = Path.home()
+                    host_xdg = {
+                        "XDG_CONFIG_HOME": Path(os.environ.get("XDG_CONFIG_HOME") or host_home / ".config").resolve(),
+                        "XDG_DATA_HOME": Path(os.environ.get("XDG_DATA_HOME") or host_home / ".local" / "share").resolve(),
+                        "XDG_CACHE_HOME": Path(os.environ.get("XDG_CACHE_HOME") or host_home / ".cache").resolve(),
+                        "XDG_STATE_HOME": Path(os.environ.get("XDG_STATE_HOME") or host_home / ".local" / "state").resolve(),
+                        "XDG_RUNTIME_DIR": Path(os.environ.get("XDG_RUNTIME_DIR") or host_home / ".runtime").resolve(),
+                    }
+                    masked_paths = [host_home, *host_xdg.values()]
+                    ro_paths = list(dict.fromkeys((pkg_root, root)))
                     lock_path = d.parent / ".lock"
                     open(lock_path, "a+b").close()
                     git_common = subprocess.run(["git", "-C", str(root), "rev-parse", "--git-common-dir"],
@@ -273,15 +282,22 @@ def schedule(root: Path) -> None:
 
                         backend_paths = opencode_state_paths(cfg)
                     elif t.get("backend") == "qoder":
-                        from .backends import qoder_state_paths
+                        from .backends import qoder_config_dir, qoder_state_paths
 
-                        backend_paths = qoder_state_paths(cfg, root)
+                        qdir = qoder_config_dir(cfg, root)
+                        try:
+                            qdir.relative_to(root.resolve())
+                            qdir_local = True
+                        except ValueError:
+                            qdir_local = False
+                        backend_paths = qoder_state_paths(cfg, root) if saved_credentials_allowed(cfg) or qdir_local else []
                     elif t.get("backend") == "cursor":
-                        from .backends import cursor_state_paths
+                        from .backends import cursor_config, cursor_state_paths
 
-                        backend_paths = cursor_state_paths(cfg, root)
+                        backend_paths = cursor_state_paths(cfg, root) if cursor_config(cfg).get("config_dir") else []
                     for path in state_dirs + [git_dir / "worktrees"] + backend_paths:
                         path.mkdir(parents=True, exist_ok=True)
+                    sandbox_environment(env, d, t.get("backend", "builtin"), backend_paths, host_home, host_xdg)
                     net_dir = None
                     if domains is not None:
                         net_dir = Path(tempfile.mkdtemp(prefix=f"aknet-{t['id']}-", dir=tempfile.gettempdir()))
@@ -290,7 +306,7 @@ def schedule(root: Path) -> None:
                         ready_file = net_dir / "ready"
                         env["AGENTKIT_NET_PROXY_SOCKET"] = str(socket_path)
                     command = S.wrap(command, root / t["worktree"], d, root / ".agentkit" / "logs",
-                                     network=network, ro_paths=ro_paths,
+                                     network=network, ro_paths=ro_paths, masked_paths=masked_paths,
                                      writable_paths=[lock_path, git_dir / "worktrees", *state_dirs, *backend_paths,
                                                      *([net_dir] if net_dir else [])])
                     sandboxed = True
@@ -417,6 +433,36 @@ def scrubbed_env(cfg: dict) -> dict:
     return env
 
 
+def sandbox_environment(env: dict, task_dir: Path, backend: str, backend_paths: list[Path],
+                        host_home: Path, host_xdg: dict[str, Path]) -> None:
+    """Keep host state invisible unless a backend path was explicitly authorized."""
+    from .config import load_user_config
+
+    task_dir.mkdir(parents=True, exist_ok=True)
+    user = load_user_config()
+    snapshot = task_dir / "user-config.json"
+    snapshot.write_text(json.dumps({k: user[k] for k in ("model", "models", "security") if k in user}),
+                        encoding="utf-8")
+    env["AGENTKIT_USER_CONFIG_SNAPSHOT"] = str(snapshot)
+    sandbox_home = task_dir / "home"
+    sandbox_xdg = {name: task_dir / name.lower() for name in host_xdg}
+    for path in [sandbox_home, *sandbox_xdg.values()]:
+        path.mkdir(parents=True, exist_ok=True)
+    env.update({"HOME": str(sandbox_home), "USERPROFILE": str(sandbox_home),
+                **{name: str(path) for name, path in sandbox_xdg.items()}})
+    for name in ("QODER_CONFIG_DIR", "CODEX_HOME", "OPENCODE_DB", "SSH_AUTH_SOCK", "SSH_ASKPASS",
+                 "GPG_AGENT_INFO", "DBUS_SESSION_BUS_ADDRESS", "GIT_ASKPASS", "GIT_CREDENTIAL_HELPER",
+                 "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "AWS_SHARED_CREDENTIALS_FILE", "AWS_CONFIG_FILE",
+                 "GOOGLE_APPLICATION_CREDENTIALS", "AZURE_CONFIG_DIR", "KUBECONFIG", "DOCKER_CONFIG",
+                 "NPM_CONFIG_USERCONFIG", "PIP_CONFIG_FILE", "CLOUDSDK_CONFIG"):
+        env.pop(name, None)
+    if backend == "qoder" and backend_paths:
+        env["QODER_CONFIG_DIR"] = str(backend_paths[0])
+    elif backend == "opencode" and backend_paths:
+        env.update({name: str(host_xdg[name]) for name in
+                    ("XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME")})
+
+
 # ---------------------------------------------------------------- create
 
 
@@ -465,6 +511,15 @@ def _check_credential_policy(cfg: dict, backend: str, wcfg: dict, root: Path, co
         raise AKError("OpenCode saved login requires user-level approval",
                       "enable security.allow_saved_credentials in the user config or use provider API keys",
                       code="AK-CONFIG")
+    elif backend == "cursor" and wcfg.get("config_dir") and not allowed:
+        path = Path(str(wcfg["config_dir"])).expanduser()
+        path = path.resolve() if path.is_absolute() else (root / path).resolve()
+        try:
+            path.relative_to(root.resolve())
+        except ValueError as e:
+            raise AKError("Cursor config_dir outside the repository requires user-level approval",
+                          "use a repository-local directory or enable security.allow_saved_credentials in the user config",
+                          code="AK-CONFIG") from e
 
 
 def create(ctx: Ctx, a) -> dict:

@@ -70,6 +70,76 @@ def test_qoder_external_config_dir_requires_opt_in(tmp_path, monkeypatch):
     tasks._check_credential_policy({**cfg, "_user_security": {}}, "qoder", {"config_dir": "local-config"}, root)
 
 
+def test_sandbox_environment_hides_host_state(tmp_path):
+    home = tmp_path / "host-home"
+    xdg = {name: home / name.lower() for name in
+           ("XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR")}
+    task_dir = tmp_path / "task"
+    env = {"HOME": str(home), "QODER_CONFIG_DIR": str(home / "qoder"), "CODEX_HOME": str(home / "codex"),
+           "OPENCODE_DB": str(home / "opencode.db"), "SSH_AUTH_SOCK": str(home / "agent.sock"),
+           "GPG_AGENT_INFO": str(home / "gpg"), "DBUS_SESSION_BUS_ADDRESS": str(home / "dbus"),
+           "AWS_SHARED_CREDENTIALS_FILE": str(home / "aws"), "GOOGLE_APPLICATION_CREDENTIALS": str(home / "gcp"),
+           "GIT_CONFIG_GLOBAL": str(home / "gitconfig"), "GIT_CREDENTIAL_HELPER": str(home / "helper")}
+    tasks.sandbox_environment(env, task_dir, "codex", [], home, xdg)
+    assert env["HOME"] == str(task_dir / "home")
+    for name in xdg:
+        assert env[name] == str(task_dir / name.lower())
+    for name in ("QODER_CONFIG_DIR", "CODEX_HOME", "OPENCODE_DB", "SSH_AUTH_SOCK", "SSH_ASKPASS",
+                 "GPG_AGENT_INFO", "DBUS_SESSION_BUS_ADDRESS", "GIT_ASKPASS", "GIT_CREDENTIAL_HELPER",
+                 "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "AWS_SHARED_CREDENTIALS_FILE", "AWS_CONFIG_FILE",
+                 "GOOGLE_APPLICATION_CREDENTIALS", "AZURE_CONFIG_DIR", "KUBECONFIG", "DOCKER_CONFIG",
+                 "NPM_CONFIG_USERCONFIG", "PIP_CONFIG_FILE", "CLOUDSDK_CONFIG"):
+        assert name not in env
+
+
+def test_sandbox_environment_preserves_user_config_without_host_home(tmp_path, monkeypatch):
+    user = tmp_path / "user-config"
+    (user / "agentkit").mkdir(parents=True)
+    (user / "agentkit" / "config.toml").write_text(
+        '[security]\nallow_saved_credentials = true\n[models.fake]\nbase_url = "http://127.0.0.1:1/v1"\n'
+        'model = "fake"\nkey_env = "FAKE_KEY"\n', encoding="utf-8")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(user))
+    root = tmp_path / "repo"
+    (root / ".agentkit").mkdir(parents=True)
+    home = tmp_path / "host-home"
+    xdg = {name: home / name.lower() for name in
+           ("XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR")}
+    env = {}
+    tasks.sandbox_environment(env, tmp_path / "task", "builtin", [], home, xdg)
+    cfg = load_config(root)
+    assert saved_credentials_allowed(cfg) is True
+    assert cfg["models"]["fake"]["key_env"] == "FAKE_KEY"
+
+
+def test_sandbox_environment_restores_only_authorized_backend_paths(tmp_path):
+    home = tmp_path / "host-home"
+    xdg = {name: home / name.lower() for name in
+           ("XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR")}
+    task_dir = tmp_path / "task"
+    qoder_path = xdg["XDG_CONFIG_HOME"] / "agentkit" / "qoder"
+    env = {"QODER_CONFIG_DIR": str(home / "other")}
+    tasks.sandbox_environment(env, task_dir, "qoder", [qoder_path], home, xdg)
+    assert env["QODER_CONFIG_DIR"] == str(qoder_path)
+    opencode_paths = [xdg["XDG_DATA_HOME"] / "opencode", xdg["XDG_CACHE_HOME"] / "opencode",
+                      xdg["XDG_STATE_HOME"] / "opencode"]
+    tasks.sandbox_environment(env, task_dir, "opencode", opencode_paths, home, xdg)
+    assert env["XDG_DATA_HOME"] == str(xdg["XDG_DATA_HOME"])
+    assert env["XDG_CACHE_HOME"] == str(xdg["XDG_CACHE_HOME"])
+    assert env["XDG_STATE_HOME"] == str(xdg["XDG_STATE_HOME"])
+    assert "QODER_CONFIG_DIR" not in env
+
+
+def test_cursor_external_config_dir_requires_opt_in(tmp_path, monkeypatch):
+    root, cfg = _config(tmp_path, monkeypatch)
+    external = tmp_path / "cursor-outside"
+    with pytest.raises(AKError) as error:
+        tasks._check_credential_policy(cfg, "cursor", {"config_dir": str(external)}, root)
+    assert error.value.code == "AK-CONFIG"
+    tasks._check_credential_policy(cfg, "cursor", {"config_dir": "cursor-config"}, root)
+    _root, cfg = _config(tmp_path, monkeypatch, allow=True)
+    tasks._check_credential_policy(cfg, "cursor", {"config_dir": str(external)}, root)
+
+
 def test_doctor_reports_saved_credential_policy(tmp_path, monkeypatch):
     monkeypatch.delenv("QODER_PERSONAL_ACCESS_TOKEN", raising=False)
     root, cfg = _config(tmp_path, monkeypatch)

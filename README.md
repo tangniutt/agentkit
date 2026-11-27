@@ -80,7 +80,7 @@ AI 读 [`llms.txt`](llms.txt) 即可上手；管理 AgentKit 的主管 AI 用 `a
 - 接入边界：只接可脚本化的官方 CLI/API/RPC/MCP 编程工具；不接 GUI 自动化、电脑操作工具，也不为需要模拟 Windows 沙箱的工具做兼容层。生产运行平台为 Linux VPS。
 - API Key 模型：`agentkit model add ... --key-env VAR`，使用 builtin OpenAI 兼容工人。
 - 保存登录态授权：Qoder 保存账号登录、OpenCode `allow_account_login=true`，以及仓库外的 Qoder `config_dir`，都要求先在用户级 `~/.config/agentkit/config.toml`（或 `$XDG_CONFIG_HOME/agentkit/config.toml`）设置 `[security] allow_saved_credentials=true`；项目配置不能自行开启。API Key/PAT 路径不需要此开关。该授权不是强凭证隔离，不可信仓库仍不得使用真实登录态。
-- Codex CLI：配置 `[workers.codex]` 的 `command`、`model`、可选 `key_env`、`sandbox` 和 `price_in/price_out`，然后 `task create ... --backend codex`。
+- Codex CLI：配置 `[workers.codex]` 的 `command`、`model`、可选 `key_env`、`sandbox` 和 `price_in/price_out`，然后 `task create ... --backend codex`。bubblewrap 默认掩蔽宿主 HOME/XDG 与常见云凭证文件/agent socket，仅重新挂载显式授权的后端状态目录；Codex 保存登录不会隐式可用，请使用专用 API Key 环境变量。
 - OpenCode V1：配置 `[workers.opencode]` 的 `command` 与 `model=provider/model`，使用官方 `opencode run --format json`；默认禁用 shell、网络工具、子 Agent 和项目配置，验收由 AgentKit 执行。
 - OpenCode V2：设置 `version = "v2"`，可指定 `model = "opencode/beam-free"` 等官方免费模型，无需登录；AgentKit 使用 `--standalone run --format json`、V2 `permissions/policies` 和独立数据目录。免费额度用尽返回 429 并暂停续跑，不绕过限额；需要保存账号登录时必须显式 `allow_account_login = true`，并获得上述用户级授权。真实 V2 2.4.2 最小任务已验证 token/session 解析。
 - Qoder CLI 账号：安装官方 Qoder CLI。AgentKit 默认使用专用 `XDG_CONFIG_HOME/agentkit/qoder` 目录，不复用 `~/.qoder`；保存账号登录需要上述用户级授权，先设置 `QODER_CONFIG_DIR=<该目录>` 再运行 `qodercli login`，或显式配置 `[workers.qoder].config_dir` 后使用 `--backend qoder`。也可用 `QODER_PERSONAL_ACCESS_TOKEN`，无需授权开关。适配器只调用 CLI，不读取登录文件；默认关闭遥测、项目配置、MCP、shell、网络工具和子 Agent，并记录请求 Credits。Credits 不等同于 USD；`--budget-usd` 需配置价格或确认零成本。

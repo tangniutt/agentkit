@@ -70,7 +70,8 @@ def restricted_network(cfg: dict) -> bool:
 
 
 def command_prefix(worktree: Path, task_dir: Path, log_dir: Path, *, network: bool = True,
-                   ro_paths: Optional[list[Path]] = None, writable_paths: Optional[list[Path]] = None) -> list[str]:
+                   ro_paths: Optional[list[Path]] = None, writable_paths: Optional[list[Path]] = None,
+                   masked_paths: Optional[list[Path]] = None) -> list[str]:
     if not available():
         raise SandboxUnavailable("bubblewrap is unavailable or cannot create a sandbox in this environment")
     worktree = str(worktree.resolve())
@@ -83,6 +84,42 @@ def command_prefix(worktree: Path, task_dir: Path, log_dir: Path, *, network: bo
     for path in ro_paths or []:
         resolved = str(path.resolve())
         args += ["--ro-bind", resolved, resolved]
+    requested_masks = []
+    for path in sorted(masked_paths or [], key=lambda p: len(p.resolve().parts)):
+        resolved = path.resolve()
+        if resolved != Path("/") and resolved.exists() and resolved not in requested_masks:
+            requested_masks.append(resolved)
+    masks = []
+    for resolved in requested_masks:
+        if not any(mask in resolved.parents for mask in masks):
+            masks.append(resolved)
+            args += ["--tmpfs", str(resolved)]
+    bind_paths = [Path(p).resolve() for p in (ro_paths or []) + (writable_paths or []) +
+                  [Path(worktree), Path(task_dir), Path(log_dir)]]
+    parents = set()
+    for path in bind_paths:
+        for mask in masks:
+            try:
+                path.relative_to(mask)
+            except ValueError:
+                continue
+            for parent in path.parents:
+                if parent == mask:
+                    break
+                if mask in parent.parents:
+                    parents.add(parent)
+    for parent in sorted(parents, key=lambda p: len(p.parts)):
+        args += ["--dir", str(parent)]
+    rebound_roots = []
+    for path in ro_paths or []:
+        resolved_path = path.resolve()
+        if any(mask in resolved_path.parents for mask in masks):
+            resolved = str(resolved_path)
+            args += ["--ro-bind", resolved, resolved]
+            rebound_roots.append(resolved_path)
+    for mask in requested_masks:
+        if any(root in mask.parents for root in rebound_roots):
+            args += ["--tmpfs", str(mask)]
     for path in writable_paths or []:
         resolved = str(path.resolve())
         args += ["--bind", resolved, resolved]
@@ -94,6 +131,7 @@ def command_prefix(worktree: Path, task_dir: Path, log_dir: Path, *, network: bo
 
 
 def wrap(command: list[str], worktree: Path, task_dir: Path, log_dir: Path, *, network: bool = True,
-         ro_paths: Optional[list[Path]] = None, writable_paths: Optional[list[Path]] = None) -> list[str]:
+         ro_paths: Optional[list[Path]] = None, writable_paths: Optional[list[Path]] = None,
+         masked_paths: Optional[list[Path]] = None) -> list[str]:
     return command_prefix(worktree, task_dir, log_dir, network=network, ro_paths=ro_paths,
-                          writable_paths=writable_paths) + list(command)
+                          writable_paths=writable_paths, masked_paths=masked_paths) + list(command)

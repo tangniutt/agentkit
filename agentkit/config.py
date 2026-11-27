@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -121,9 +122,22 @@ def user_config_path() -> Path:
     return Path(base) / "agentkit" / "config.toml"
 
 
+def load_user_config() -> dict:
+    return _read(user_config_path())
+
+
 def load_config(root: Path) -> dict:
     cfg = _read(root / ".agentkit" / "config.toml")
-    user = _read(user_config_path())
+    snapshot = os.environ.get("AGENTKIT_USER_CONFIG_SNAPSHOT")
+    if snapshot:
+        try:
+            user = json.loads(Path(snapshot).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            user = {}
+    else:
+        user = load_user_config()
+    if not isinstance(user, dict):
+        user = {}
     for k in ("model", "models"):
         if k in user and k not in cfg:
             cfg[k] = user[k]
