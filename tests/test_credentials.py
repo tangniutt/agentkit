@@ -6,7 +6,7 @@ import os
 
 import pytest
 
-from agentkit import credentials
+from agentkit import cli, credentials, tasks
 
 
 def _grant(root, **kwargs):
@@ -37,6 +37,22 @@ def test_expiry_and_backend_mismatch_are_rejected(tmp_path):
     with pytest.raises(ValueError, match="backend"):
         credentials.create_binding(root=tmp_path, grant_id=grant["grant_id"], task_id="t123abc",
                                    run_id="r1", backend="qoder")
+
+
+def test_cli_can_show_and_revoke_task_binding(tmp_path, monkeypatch):
+    monkeypatch.setenv("FAKE_KEY", "selected-model-key")
+    cfg = {"models": {"fake": {"base_url": "http://127.0.0.1:1/v1", "key_env": "FAKE_KEY"}}}
+    task = {"id": "t123abc", "backend": "builtin", "model": "fake", "status": "queued"}
+    task.update(tasks._bind_task_credential(task, cfg, "builtin", "fake", tmp_path))
+    tasks.save(tmp_path, task)
+    env, code, _ = cli.run_cli(["--root", str(tmp_path), "credential", "show", "t123abc"])
+    assert code == 0 and env["data"]["binding_active"] is True
+    assert "selected-model-key" not in json.dumps(env)
+    binding_id = task["credential_binding_id"]
+    env, code, _ = cli.run_cli(["--root", str(tmp_path), "credential", "revoke", binding_id])
+    assert code == 0 and env["data"]["target_id"] == binding_id
+    env, code, _ = cli.run_cli(["--root", str(tmp_path), "credential", "show", binding_id])
+    assert code == 0 and env["data"]["active"] is False
 
 
 def test_metadata_files_are_private_on_posix(tmp_path):

@@ -65,6 +65,7 @@ AI 读 [`llms.txt`](llms.txt) 即可上手；管理 AgentKit 的主管 AI 用 `a
 | `agentkit task handoff ID [--model NAME] [--backend builtin\|codex\|opencode\|qoder\|cursor]` | 显式换工人接力，保留 worktree、diff、记忆和累计预算，记录接力历史 |
 | `agentkit goal create/run/status/wait/report/steer/answer/cancel/resume` | 有界结果闭环：执行、独立验收、失败反馈、提问回答、续跑或换模型，只有验收通过才完成 |
 | `agentkit uninstall [--yes] [--this-repo] [--delete-branches]` | 卸载：不带 `--yes` 只列出将删除的内容；删除包、`~/.config/agentkit`、`~/.local/share/agentkit`、各仓库 `.agentkit/` 与 worktree；**不动你的代码和 git 历史**（任务分支默认保留，git 已跟踪的共享记忆保留） |
+| `agentkit credential show TASK_ID` / `credential revoke GRANT_ID\|BINDING_ID` | 查看或撤销凭证授权元数据；只显示环境变量名/认证目录引用，绝不显示密钥值 |
 | `agentkit logs <id> [--errors]` / `agentkit debug-bundle <id>` | 定位失败：结构化事件（哪一步、哪个组件、错误码）；脱敏归档用于报 Bug（错误码见 [docs/errors.md](docs/errors.md)） |
 | `agentkit feedback --bug <id> \| --idea "..."` | 生成脱敏的 Issue 草稿和预填链接，**从不自动提交** |
 | `agentkit manual [命令] [--all] [--format md]` | 主管 AI 操作手册（C-09）：总览约 1.9k token，全量约 4.8k token；由 CLI 定义自动生成，见 [docs/agent-manual.md](docs/agent-manual.md) |

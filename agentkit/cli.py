@@ -302,6 +302,10 @@ def build_parser() -> argparse.ArgumentParser:
     cmrc.add_argument("query")
     cmrc.add_argument("-k", type=int, default=5)
 
+    cr = sub.add_parser("credential", help="inspect or revoke credential authorization metadata; never displays secret values")
+    cr.add_argument("action", choices=["show", "revoke"])
+    cr.add_argument("target")
+
     lg = sub.add_parser("logs", help="structured event log of a run / task: logs ID [--errors] [--tail N]")
     lg.add_argument("id")
     lg.add_argument("--errors", action="store_true", help="only events with an error code")
@@ -357,7 +361,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _handlers():
-    from . import checkpoint, doctor, edit, memory, read, repomap, run, search, verify
+    from . import checkpoint, credentials, doctor, edit, memory, read, repomap, run, search, verify
 
     return {
         "read": read.cmd_read, "search": search.cmd_search, "ls": search.cmd_ls, "glob": search.cmd_glob,
@@ -367,7 +371,7 @@ def _handlers():
         "verify": verify.cmd_verify, "memory": memory.cmd_memory, "doctor": doctor.cmd_doctor,
         "task": _task, "goal": _goal, "code": _code, "model": _model, "_task-run": _task_run,
         "logs": _diag("cmd_logs"), "uninstall": _uninstall, "debug-bundle": _diag("cmd_debug_bundle"), "feedback": _diag("cmd_feedback"),
-        "manual": _manual, "mcp": _mcp, "release": _release,
+        "manual": _manual, "mcp": _mcp, "release": _release, "credential": credentials.cmd_credential,
     }
 
 

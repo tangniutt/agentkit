@@ -47,7 +47,7 @@ def test_example_parses_to_its_own_command(path):
     assert words[0] == "agentkit"
     rest, *_ = split_globals(words[1:])
     a = build_parser().parse_args(rest)
-    got = [a.cmd] + [getattr(a, d) for d in ("cp_cmd", "mem_cmd", "model_cmd", "task_cmd", "goal_cmd", "code_cmd", "memory_cmd", "release_cmd") if getattr(a, d, None)]
+    got = [a.cmd] + [getattr(a, d) for d in ("cp_cmd", "mem_cmd", "model_cmd", "task_cmd", "goal_cmd", "code_cmd", "memory_cmd", "release_cmd", "credential_cmd") if getattr(a, d, None)]
     primary = {"repo-map": "repo_map", "map": "repo_map"}
     got[0] = primary.get(got[0], got[0])
     assert " ".join(got) == path, (ex, got)

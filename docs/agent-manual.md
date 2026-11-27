@@ -6,7 +6,7 @@ AgentKit: token-frugal coding tools for AI agents + optional cheap worker with i
 
 Global options: --budget N (output tokens, default 2000), --human (text), --root DIR; anywhere on the line.
 
-JSON form: `agentkit manual` (overview, ~1792 tokens), `agentkit manual <command>` (one command), `agentkit manual --all` (everything, ~4978 tokens).
+JSON form: `agentkit manual` (overview, ~1805 tokens), `agentkit manual <command>` (one command), `agentkit manual --all` (everything, ~4970 tokens).
 
 ## Quick start (supervisor)
 
@@ -188,7 +188,7 @@ atomic multi-file ops from JSON {"ops":[...]} (stdin or --file)
 - **Output `data`:** `checkpoint,files[{path,action,sha}],undo`
 - **Errors:** `AK-TOOL-EDIT-OP` (bad edit/patch operation (exists, not found, bad JSON, unknown op)), `AK-TOOL-EDIT-NOMATCH` (old text not found (0 matches)), `AK-TOOL-EDIT-MULTI` (old text matches more than once), `AK-TOOL-EDIT-SYNTAX` (the edit would introduce a syntax error), `AK-TOOL-WRITE` (writing files failed; everything was restored)
 - **Side effects:** repo
-- **Example:** `agentkit patch --file ops.json --dry-run`
+- **Example:** `agentkit patch --file o.json`
 
 ### `agentkit create`
 
@@ -436,10 +436,10 @@ add OpenAI-compatible model; store key env name
 | `--tier` | str | `low` | low\|mid\|high |
 | `--default` | bool |  |  |
 
-- **Output `data`:** `added,config,key_env_set,preset?,warning?`
+- **Output `data`:** `added,config,key_env_set,warning?`
 - **Errors:** `AK-USAGE` (bad command line arguments)
 - **Side effects:** state
-- **Example:** `agentkit model add nim --preset nvidia --model nvidia/nemotron-3.5-lightning-30b-a3b`
+- **Example:** `agentkit model add x --preset nvidia`
 
 ### `agentkit model list`
 
@@ -498,7 +498,7 @@ dispatch worker with fail-to-pass
 - **Output `data`:** `id,status,deduped?,warnings?`
 - **Errors:** `AK-MODEL-NONE` (no worker model configured (direct mode)), `AK-VERIFY-NOCHECK` (verify/task has no check command), `AK-TASK-STATE` (operation not allowed in the task's current state)
 - **Side effects:** tokens, net, exec, state
-- **Example:** `agentkit task create 'fix the failing test in calc.py' --check 'pytest -q' --budget-tokens 200000`
+- **Example:** `agentkit task create x --check true`
 
 ### `agentkit task status`
 
@@ -552,7 +552,7 @@ block until done/timeout; one finished task returns its report inline
 - **Output `data`:** `done + report keys | done,tasks[status]`
 - **Errors:** `AK-TASK-UNKNOWN` (unknown or invalid task id)
 - **Side effects:** ro
-- **Example:** `agentkit task wait t1a2b3c --timeout 600`
+- **Example:** `agentkit task wait t1a2b3c`
 
 ### `agentkit task resume`
 
@@ -570,7 +570,7 @@ resume task; switch model/backend in place
 - **Output `data`:** `id,status,resumes,handoff?,models? (next: task wait)`
 - **Errors:** `AK-TASK-STATE` (operation not allowed in the task's current state), `AK-BUDGET` (task stopped: token / USD / time budget exceeded)
 - **Side effects:** tokens, net, exec, state
-- **Example:** `agentkit task resume t1a2b3c --budget-tokens 400000`
+- **Example:** `agentkit task resume t1a2b3c`
 
 ### `agentkit task handoff`
 
@@ -672,7 +672,7 @@ remove finished tasks' worktrees (and branches unless --keep-branch)
 - **Output `data`:** `cleaned,branches_kept`
 - **Errors:** `AK-TASK-UNKNOWN` (unknown or invalid task id), `AK-TASK-STATE` (operation not allowed in the task's current state), `AK-GIT` (a git command failed)
 - **Side effects:** destructive
-- **Example:** `agentkit task clean --all --keep-branch`
+- **Example:** `agentkit task clean --all`
 
 ### `agentkit goal create`
 
@@ -699,7 +699,7 @@ create bounded Goal over one task
 - **Output `data`:** `id,task_id,status,iterations`
 - **Errors:** `AK-USAGE` (bad command line arguments), `AK-MODEL-NONE` (no worker model configured (direct mode)), `AK-TASK-STATE` (operation not allowed in the task's current state)
 - **Side effects:** tokens, net, exec, state
-- **Example:** `agentkit goal create 'coverage >80%' --check pytest`
+- **Example:** `agentkit goal create x --check true`
 
 ### `agentkit goal status`
 
@@ -915,6 +915,20 @@ recall XERJ memory
 - **Side effects:** ro, net
 - **Example:** `agentkit code memory recall project 'test command'`
 
+### `agentkit credential`
+
+show/revoke grant/binding metadata; no secrets
+
+| arg | type | default | notes |
+|---|---|---|---|
+| `action` | str |  |  |
+| `target` | str |  |  |
+
+- **Output `data`:** `grant,binding,active? | revocation_id`
+- **Errors:** `AK-CONFIG` (unreadable .agentkit/config.toml or bad config value)
+- **Side effects:** state
+- **Example:** `agentkit credential show t1a2b3c`
+
 ### `agentkit logs`
 
 run/task events; --raw shows output
@@ -965,10 +979,10 @@ draft only; --improve adds evidence; dedup first
 | `--title` | str |  |  |
 | `--input` | str |  | JSON with the same keys (verify, from[]) |
 
-- **Output `data`:** `posted(false),title,url,search_first,keywords,missing?,body,rules`
+- **Output `data`:** `posted(false),title,url,search_first,missing?,body`
 - **Errors:** `AK-LOGS-UNKNOWN` (no events for that run / task id), `AK-USAGE` (bad command line arguments)
 - **Side effects:** ro
-- **Example:** `agentkit feedback --improve 'edit: show nearest match' --from t1a2b3c`
+- **Example:** `agentkit feedback --idea x`
 
 ### `agentkit release`
 

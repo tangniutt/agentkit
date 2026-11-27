@@ -11,7 +11,7 @@ import time
 from contextlib import nullcontext
 from pathlib import Path
 
-from .core import atomic_write, file_lock
+from .core import AKError, Result, atomic_write, file_lock
 from .protocol import (CredentialAudit, CredentialBinding, CredentialGrant, CredentialRevocation,
                        canonical_json, sha256)
 
@@ -190,3 +190,33 @@ def audit(root: Path, action: str, decision: str, actor: str, *, credential_id: 
         with os.fdopen(fd, "a", encoding="utf-8") as handle:
             handle.write(canonical_json(data) + "\n")
     return data
+
+
+def cmd_credential(ctx, a) -> Result:
+    from . import tasks
+
+    target = a.target
+    try:
+        if a.action == "show":
+            if target.startswith("cg_"):
+                grant = load_grant(ctx.root, target)
+                return Result({"grant": grant, "active": is_grant_active(ctx.root, target)})
+            if target.startswith("cb_"):
+                binding = load_binding(ctx.root, target)
+                return Result({"binding": binding, "active": is_binding_active(ctx.root, target)})
+            task = tasks.load(ctx.root, target)
+            grant_id = str(task.get("credential_grant_id") or "")
+            binding_id = str(task.get("credential_binding_id") or "")
+            if not grant_id and not binding_id:
+                return Result({"task_id": task["id"], "credential": None})
+            grant = load_grant(ctx.root, grant_id) if grant_id else None
+            binding = load_binding(ctx.root, binding_id) if binding_id else None
+            return Result({"task_id": task["id"], "grant": grant, "binding": binding,
+                           "grant_active": is_grant_active(ctx.root, grant_id) if grant_id else None,
+                           "binding_active": is_binding_active(ctx.root, binding_id) if binding_id else None})
+        kind = "grant" if target.startswith("cg_") else "binding"
+        return Result(revoke(ctx.root, target_kind=kind, target_id=target, reason_code="user_revoked",
+                             reason="", actor="user"))
+    except (OSError, ValueError) as e:
+        raise AKError("credential operation failed", str(e), "agentkit credential show TASK_ID",
+                      code="AK-CONFIG") from e
