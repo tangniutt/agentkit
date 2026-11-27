@@ -28,6 +28,22 @@ def test_llms_install_section_is_mechanically_followable():
     assert all(L.GIT_URL in a for a in alts)
 
 
+def test_main_reads_llms_txt_as_utf8(tmp_path, monkeypatch, capsys):
+    llms = tmp_path / "llms.txt"
+    llms.write_text("## Install\n- 中文说明\n", encoding="utf-8")
+    real_mkdtemp = L.tempfile.mkdtemp
+    monkeypatch.setattr(L.tempfile, "mkdtemp", lambda **kwargs: real_mkdtemp(prefix="ak-test-", dir=tmp_path))
+    assert L.main(["--llms", str(llms)]) == 1
+    result = json.loads(capsys.readouterr().out)
+    assert result["why"] == "Install section has no install command"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX bash required")
+def test_run_replaces_non_utf8_command_output(tmp_path):
+    result = L.run("printf '\\214'", tmp_path, dict(os.environ))
+    assert result["exit"] == 0 and isinstance(result["stdout"], str)
+
+
 def _online() -> bool:
     try:
         socket.create_connection(("pypi.org", 443), timeout=3).close()

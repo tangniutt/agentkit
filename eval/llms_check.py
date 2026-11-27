@@ -89,7 +89,8 @@ def verify_example(llms: str) -> str:
 
 def run(cmd: str, cwd: Path, env: dict, timeout: float = 600) -> dict:
     t0 = time.monotonic()
-    p = subprocess.run(["bash", "-c", cmd], cwd=str(cwd), env=env, capture_output=True, text=True, timeout=timeout)
+    p = subprocess.run(["bash", "-c", cmd], cwd=str(cwd), env=env, capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", timeout=timeout)
     return {"cmd": cmd, "exit": p.returncode, "s": round(time.monotonic() - t0, 1),
             "stdout": p.stdout, "stderr": p.stderr[-2000:]}
 
@@ -104,7 +105,7 @@ def main(argv=None) -> int:
                     help="venv: fresh virtualenv on PATH; bare: system python3 without pip on PATH (PEP 668 distros), "
                          "only git/uv/pipx if the machine has them")
     a = ap.parse_args(argv)
-    llms = Path(a.llms).read_text()
+    llms = Path(a.llms).read_text(encoding="utf-8")
     steps, ok, why = [], True, ""
     tmp = Path(tempfile.mkdtemp(prefix="ak-llms-"))
     try:
@@ -134,7 +135,7 @@ def main(argv=None) -> int:
         if a.src:  # copy the tracked files so pip's build dir never lands in the checkout
             src = tmp / "src"
             files = subprocess.run(["git", "-C", a.src, "ls-files", "-co", "--exclude-standard"], capture_output=True,
-                                   text=True, check=True).stdout.splitlines()
+                                   text=True, encoding="utf-8", check=True).stdout.splitlines()
             for f in files:
                 if (Path(a.src) / f).is_file():
                     (src / f).parent.mkdir(parents=True, exist_ok=True)
@@ -178,7 +179,7 @@ def main(argv=None) -> int:
         if ok:  # one verify, as the Direct mode section shows it
             repo = work / "proj"
             repo.mkdir()
-            (repo / "calc.py").write_text("def add(a, b):\n    return a + b\n")
+            (repo / "calc.py").write_text("def add(a, b):\n    return a + b\n", encoding="utf-8")
             ex = verify_example(llms)
             check = 'python3 -c "import calc; assert calc.add(2, 3) == 5"'
             cmd = re.sub(r'--check\s+"[^"]*"', "--check " + shlex.quote(check), ex.split(" [")[0])
