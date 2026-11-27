@@ -4,6 +4,10 @@
 import pytest
 
 from agentkit.protocol import (
+    CredentialAudit,
+    CredentialBinding,
+    CredentialGrant,
+    CredentialRevocation,
     Event,
     EvidenceReceipt,
     GoalSpec,
@@ -84,6 +88,28 @@ def test_tool_result_requires_next_when_truncated():
         ToolResult(ok=True, data="x", truncated=True).validate()
     result = ToolResult.from_dict({"ok": False, "error": {"code": "AK-PATH"}, "truncated": False})
     assert result.error["code"] == "AK-PATH"
+
+
+def test_credential_metadata_roundtrip_never_contains_secret_values():
+    grant = CredentialGrant(grant_id="cg_1", credential_id="cred_1", provider="openai", backend="builtin",
+                            auth_kind="api_key", ref_kind="env", ref="OPENAI_API_KEY", owner="user",
+                            scopes=["model:call"], issued_at=1.0, policy_sha256="a" * 64)
+    binding = CredentialBinding(binding_id="cb_1", grant_id="cg_1", task_id="t123abc", run_id="r1",
+                                backend="builtin", session_id="builtin:t123abc", created_at=1.0)
+    revocation = CredentialRevocation(revocation_id="cr_1", target_kind="grant", target_id="cg_1",
+                                      reason_code="user_revoked", reason="rotate key", actor="user", revoked_at=2.0)
+    audit = CredentialAudit(audit_id="ca_1", ts=2.0, action="revoked", decision="allow", actor="user",
+                            credential_id="cred_1", grant_id="cg_1", reason_code="user_revoked")
+    for value in (grant, binding, revocation, audit):
+        data = value.to_dict()
+        assert type(value).from_dict(data).to_dict() == data
+        assert not ({"secret", "token", "api_key", "value"} & set(data))
+    with pytest.raises(ProtocolError, match="unknown fields"):
+        CredentialGrant.from_dict({**grant.to_dict(), "secret": "sk-test"})
+    with pytest.raises(ProtocolError, match="auth_kind"):
+        CredentialGrant.from_dict({**grant.to_dict(), "auth_kind": "cookie"})
+    with pytest.raises(ProtocolError, match="status"):
+        CredentialBinding.from_dict({**binding.to_dict(), "status": "sleeping"})
 
 
 def test_sandbox_capabilities_and_status_are_conservative():

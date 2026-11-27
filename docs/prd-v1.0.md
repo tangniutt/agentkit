@@ -773,6 +773,7 @@ draft → planned → running → verifying → completed
 - 密钥注入到模型客户端，不进入工人工具环境；
 - 日志、report、receipt、debug-bundle 全部脱敏；
 - 模型调用前明确代码出境策略；
+- `CredentialGrant`/`CredentialBinding`/`CredentialRevocation`/`CredentialAudit` 只存授权元数据与环境变量/认证目录引用，不存密钥值；持久化到 `.agentkit/state/credentials/`，文件权限 0600。
 - 外部 benchmark 只能使用公开或用户明确授权的仓库。
 
 ## 7.10 MCP 接口

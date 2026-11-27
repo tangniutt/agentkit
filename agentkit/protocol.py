@@ -230,6 +230,175 @@ class SandboxStatus:
 
 
 @dataclass
+class CredentialGrant:
+    grant_id: str
+    credential_id: str
+    provider: str
+    backend: str
+    auth_kind: str
+    ref_kind: str
+    ref: str
+    owner: str
+    scopes: list[str] = field(default_factory=list)
+    issued_at: float = 0.0
+    expires_at: float | None = None
+    policy_sha256: str = ""
+    schema_version: str = SCHEMA_VERSION
+
+    def validate(self) -> "CredentialGrant":
+        if self.schema_version != SCHEMA_VERSION:
+            raise ProtocolError(f"unsupported schema_version: {self.schema_version}")
+        for name in ("grant_id", "credential_id", "provider", "backend", "owner"):
+            if not isinstance(getattr(self, name), str) or not getattr(self, name):
+                raise ProtocolError(f"{name} is required")
+        if self.auth_kind not in ("api_key", "pat", "oauth", "saved_login"):
+            raise ProtocolError("unsupported auth_kind")
+        if self.ref_kind not in ("env", "config_dir"):
+            raise ProtocolError("unsupported ref_kind")
+        if not isinstance(self.ref, str) or not self.ref:
+            raise ProtocolError("ref is required")
+        self.scopes = _strings(self.scopes, "scopes")
+        for name in ("issued_at", "expires_at"):
+            value = getattr(self, name)
+            if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0):
+                raise ProtocolError(f"{name} must be a non-negative timestamp or null")
+        if not isinstance(self.policy_sha256, str):
+            raise ProtocolError("policy_sha256 must be string")
+        return self
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "CredentialGrant":
+        allowed = {"grant_id", "credential_id", "provider", "backend", "auth_kind", "ref_kind", "ref",
+                   "owner", "scopes", "issued_at", "expires_at", "policy_sha256", "schema_version"}
+        _keys(data, allowed, {"grant_id", "credential_id", "provider", "backend", "auth_kind",
+                              "ref_kind", "ref", "owner"})
+        return cls(**{k: data[k] for k in allowed if k in data}).validate()
+
+
+@dataclass
+class CredentialBinding:
+    binding_id: str
+    grant_id: str
+    task_id: str
+    run_id: str
+    backend: str
+    session_id: str = ""
+    created_at: float = 0.0
+    expires_at: float | None = None
+    status: str = "active"
+    schema_version: str = SCHEMA_VERSION
+
+    def validate(self) -> "CredentialBinding":
+        if self.schema_version != SCHEMA_VERSION:
+            raise ProtocolError(f"unsupported schema_version: {self.schema_version}")
+        for name in ("binding_id", "grant_id", "task_id", "run_id", "backend"):
+            if not isinstance(getattr(self, name), str) or not getattr(self, name):
+                raise ProtocolError(f"{name} is required")
+        if not isinstance(self.session_id, str):
+            raise ProtocolError("session_id must be string")
+        if self.status not in ("active", "revoked", "expired", "closed"):
+            raise ProtocolError("unsupported binding status")
+        for name in ("created_at", "expires_at"):
+            value = getattr(self, name)
+            if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0):
+                raise ProtocolError(f"{name} must be a non-negative timestamp or null")
+        return self
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "CredentialBinding":
+        allowed = {"binding_id", "grant_id", "task_id", "run_id", "backend", "session_id", "created_at",
+                   "expires_at", "status", "schema_version"}
+        _keys(data, allowed, {"binding_id", "grant_id", "task_id", "run_id", "backend"})
+        return cls(**{k: data[k] for k in allowed if k in data}).validate()
+
+
+@dataclass
+class CredentialRevocation:
+    revocation_id: str
+    target_kind: str
+    target_id: str
+    reason_code: str
+    reason: str
+    actor: str
+    revoked_at: float
+    schema_version: str = SCHEMA_VERSION
+
+    def validate(self) -> "CredentialRevocation":
+        if self.schema_version != SCHEMA_VERSION:
+            raise ProtocolError(f"unsupported schema_version: {self.schema_version}")
+        for name in ("revocation_id", "target_id", "reason_code", "actor"):
+            if not isinstance(getattr(self, name), str) or not getattr(self, name):
+                raise ProtocolError(f"{name} is required")
+        if self.target_kind not in ("grant", "binding"):
+            raise ProtocolError("unsupported revocation target")
+        if not isinstance(self.reason, str):
+            raise ProtocolError("reason must be string")
+        if isinstance(self.revoked_at, bool) or not isinstance(self.revoked_at, (int, float)) or self.revoked_at < 0:
+            raise ProtocolError("revoked_at must be a non-negative timestamp")
+        return self
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "CredentialRevocation":
+        allowed = {"revocation_id", "target_kind", "target_id", "reason_code", "reason", "actor",
+                   "revoked_at", "schema_version"}
+        _keys(data, allowed, {"revocation_id", "target_kind", "target_id", "reason_code", "actor", "revoked_at"})
+        return cls(**{k: data[k] for k in allowed if k in data}).validate()
+
+
+@dataclass
+class CredentialAudit:
+    audit_id: str
+    ts: float
+    action: str
+    decision: str
+    actor: str
+    credential_id: str = ""
+    grant_id: str = ""
+    binding_id: str = ""
+    task_id: str = ""
+    run_id: str = ""
+    session_id: str = ""
+    reason_code: str = ""
+    schema_version: str = SCHEMA_VERSION
+
+    def validate(self) -> "CredentialAudit":
+        if self.schema_version != SCHEMA_VERSION:
+            raise ProtocolError(f"unsupported schema_version: {self.schema_version}")
+        for name in ("audit_id", "actor"):
+            if not isinstance(getattr(self, name), str) or not getattr(self, name):
+                raise ProtocolError(f"{name} is required")
+        if self.action not in ("granted", "bound", "used", "revoked", "denied"):
+            raise ProtocolError("unsupported audit action")
+        if self.decision not in ("allow", "deny"):
+            raise ProtocolError("unsupported audit decision")
+        if isinstance(self.ts, bool) or not isinstance(self.ts, (int, float)) or self.ts < 0:
+            raise ProtocolError("ts must be a non-negative timestamp")
+        for name in ("credential_id", "grant_id", "binding_id", "task_id", "run_id", "session_id", "reason_code"):
+            if not isinstance(getattr(self, name), str):
+                raise ProtocolError(f"{name} must be string")
+        return self
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "CredentialAudit":
+        allowed = {"audit_id", "ts", "action", "decision", "actor", "credential_id", "grant_id", "binding_id",
+                   "task_id", "run_id", "session_id", "reason_code", "schema_version"}
+        _keys(data, allowed, {"audit_id", "ts", "action", "decision", "actor"})
+        return cls(**{k: data[k] for k in allowed if k in data}).validate()
+
+
+@dataclass
 class TaskSpec:
     goal: str
     acceptance: dict
