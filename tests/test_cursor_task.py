@@ -4,6 +4,9 @@
 import json
 import os
 import sys
+import sysconfig
+import uuid
+from pathlib import Path
 
 import pytest
 
@@ -147,16 +150,21 @@ class Agent:
     cfg = repo / ".agentkit" / "config.toml"
     cfg.write_text(cfg.read_text(encoding="utf-8").replace('model = "fake-model"',
                                                          'model = "fake-model"\ntransport = "sdk"'), encoding="utf-8")
-    ak.env["PYTHONPATH"] = str(repo / "fake_sdk")
-    created = ak("task", "create", "fix add [CURSOR-SDK]", "--check", CHECK,
-                 "--backend", "cursor", "--budget-tokens", "150")
-    assert created["ok"], created
-    tid = created["data"]["id"]
-    status = wait(ak, tid)
-    assert status["status"] == "done" and status["verdict"] == "pass", status
-    task = tjson(repo, tid)
-    assert task["backend_session"] == "agent_sdk" and task["backend_transport"] == "sdk"
-    assert task["tokens"] == 120 and task["usd"] == pytest.approx(0.25)
+    ak.env.pop("PYTHONPATH", None)
+    pth = Path(sysconfig.get_path("purelib")) / f"agentkit_fake_cursor_sdk_{uuid.uuid4().hex}.pth"
+    pth.write_text(str(repo / "fake_sdk") + "\n", encoding="utf-8")
+    try:
+        created = ak("task", "create", "fix add [CURSOR-SDK]", "--check", CHECK,
+                     "--backend", "cursor", "--budget-tokens", "150")
+        assert created["ok"], created
+        tid = created["data"]["id"]
+        status = wait(ak, tid)
+        assert status["status"] == "done" and status["verdict"] == "pass", status
+        task = tjson(repo, tid)
+        assert task["backend_session"] == "agent_sdk" and task["backend_transport"] == "sdk"
+        assert task["tokens"] == 120 and task["usd"] == pytest.approx(0.25)
+    finally:
+        pth.unlink(missing_ok=True)
 
 
 @pytest.mark.skipif(not sandbox.available(), reason="bubblewrap is unavailable")
