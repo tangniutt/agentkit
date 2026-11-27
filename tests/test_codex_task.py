@@ -40,9 +40,13 @@ def _repo(repo, ak, script: str, *, allow_unsandboxed=True, prices=True, sandbox
     return cfg
 
 
-SCRIPT = '''import json, sys
+SCRIPT = '''import json, os, sys
 from pathlib import Path
 sys.stdin.read()
+if "CODEX_TEST_KEY" in os.environ:
+    assert os.environ["CODEX_TEST_KEY"] == "codex-test-key"
+parent_env = Path(f"/proc/{os.getppid()}/environ").read_bytes()
+assert not any(entry.startswith(b"CODEX_TEST_KEY=") for entry in parent_env.split(b"\\0"))
 p = Path("calc.py")
 p.write_text(p.read_text().replace("a - b", "a + b"))
 print(json.dumps({"type":"thread.started","thread_id":"thread-1"}))

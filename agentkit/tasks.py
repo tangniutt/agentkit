@@ -269,7 +269,8 @@ def schedule(root: Path) -> None:
                 continue
             d = tpath(root, t["id"])
             logf = open(d / "worker.log", "ab")
-            env = selected_worker_env(cfg, t.get("backend", "builtin"), t.get("model", ""))
+            env = selected_worker_env(cfg, t.get("backend", "builtin"), t.get("model", ""),
+                                      include_secret=os.name != "posix")
             env["PYTHONUNBUFFERED"] = "1"
             env.update(guard_env(root))
             command = [sys.executable, "-m", "agentkit", "--root", str(root), "_task-run", t["id"]]
@@ -402,10 +403,22 @@ def schedule(root: Path) -> None:
             _set_sandbox_state(root, t["id"], "prepared" if sandboxed else "pending",
                                "bubblewrap" if sandboxed else "none", lock=False)
             _record_task_credential_use(root, t)
+            credential_fd = None
+            descriptor = _credential_descriptor(cfg, t.get("backend", "builtin"), t.get("model", ""), root)
+            if os.name == "posix" and descriptor and descriptor["ref_kind"] == "env":
+                value = os.environ.get(descriptor["ref"])
+                if value:
+                    register_secret(value)
+                    credential_fd, write_fd = os.pipe()
+                    with os.fdopen(write_fd, "wb") as handle:
+                        handle.write(value.encode("utf-8"))
+                    env["AGENTKIT_CREDENTIAL_FD"] = str(credential_fd)
+                    env["AGENTKIT_CREDENTIAL_ENV"] = descriptor["ref"]
             try:
                 proc = subprocess.Popen(
                     command, cwd=str(root), stdin=subprocess.DEVNULL, stdout=logf, stderr=logf,
                     start_new_session=True, env=env, close_fds=True,
+                    pass_fds=(credential_fd,) if credential_fd is not None else (),
                 )
                 if pid_file is not None:
                     pid_file.write_text(str(proc.pid) + "\n", encoding="ascii")
@@ -413,6 +426,8 @@ def schedule(root: Path) -> None:
                 _stop_proxy(proxy_proc)
                 raise
             finally:
+                if credential_fd is not None:
+                    os.close(credential_fd)
                 logf.close()
             t["status"] = "starting"
             t["pid"] = proc.pid
@@ -481,7 +496,8 @@ _WORKER_ENV = {
     "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "NODE_PATH",
     "TERM", "COLORTERM", "NO_COLOR", "FORCE_COLOR", "CI", "GITHUB_ACTIONS", "RUNNER_OS",
     "AGENTKIT_MODEL", "AGENTKIT_SANDBOX", "AGENTKIT_NETWORK_MODE", "AGENTKIT_NET_PROXY_SOCKET",
-    "AGENTKIT_USER_CONFIG_SNAPSHOT", "AGENTKIT_NETPROXY_DEBUG", "AGENTKIT_NO_TREESITTER",
+    "AGENTKIT_USER_CONFIG_SNAPSHOT", "AGENTKIT_CREDENTIAL_FD", "AGENTKIT_CREDENTIAL_ENV",
+    "AGENTKIT_NETPROXY_DEBUG", "AGENTKIT_NO_TREESITTER",
     "AGENTKIT_SEARCH_ENGINE", "AGENTKIT_LSP_TEST_COMMAND",
 }
 
@@ -528,7 +544,7 @@ def sandbox_environment(env: dict, task_dir: Path, backend: str, backend_paths: 
                     ("XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME")})
 
 
-def selected_worker_env(cfg: dict, backend: str, model: str) -> dict:
+def selected_worker_env(cfg: dict, backend: str, model: str, *, include_secret: bool = True) -> dict:
     env = scrubbed_env(cfg)
     source = ""
     if backend == "builtin":
@@ -549,7 +565,7 @@ def selected_worker_env(cfg: dict, backend: str, model: str) -> dict:
             source = str(wcfg.get("key_env") or "CURSOR_API_KEY")
         else:
             source = str(wcfg.get("key_env") or "")
-    if source and os.environ.get(source):
+    if include_secret and source and os.environ.get(source):
         env[source] = os.environ[source]
         register_secret(os.environ[source])
     return env
@@ -716,7 +732,7 @@ def _bind_task_credential(task: dict, cfg: dict, backend: str, model: str, root:
         except (OSError, ValueError):
             pass
     if not descriptor:
-        return {}
+        return {"credential_grant_id": "", "credential_binding_id": ""}
     grant = C.issue_grant(root, owner="user", **{k: descriptor[k] for k in
                                                   ("provider", "backend", "auth_kind", "ref_kind", "ref",
                                                    "scopes", "policy_sha256")})
@@ -730,22 +746,21 @@ def _task_credential_error(task: dict, cfg: dict, backend: str, model: str, root
 
     descriptor = _credential_descriptor(cfg, backend, model, root)
     binding_id = str(task.get("credential_binding_id") or "")
-    if not descriptor:
-        return None
     if not binding_id:
-        reason = "credential binding missing"
-    else:
-        try:
-            binding = C.load_binding(root, binding_id)
-            grant = C.load_grant(root, binding["grant_id"])
-            if not C.is_binding_active(root, binding_id):
-                reason = "credential grant or binding is revoked or expired"
-            elif binding["backend"] != backend or grant["credential_id"] != descriptor["credential_id"]:
-                reason = "credential configuration changed; resume or handoff the task again"
-            else:
-                return None
-        except (OSError, ValueError):
-            reason = "credential binding is unreadable"
+        return "credential binding missing" if descriptor else None
+    try:
+        binding = C.load_binding(root, binding_id)
+        grant = C.load_grant(root, binding["grant_id"])
+        if not C.is_binding_active(root, binding_id):
+            reason = "credential grant or binding is revoked or expired"
+        elif binding["backend"] != backend:
+            reason = "credential backend changed; resume or handoff the task again"
+        elif descriptor and grant["credential_id"] != descriptor["credential_id"]:
+            reason = "credential configuration changed; resume or handoff the task again"
+        else:
+            return None
+    except (OSError, ValueError):
+        reason = "credential binding is unreadable"
     try:
         C.audit(root, "denied", "deny", "user", grant_id=str(task.get("credential_grant_id") or ""),
                 binding_id=binding_id, task_id=task["id"], run_id=task["id"],
@@ -1054,7 +1069,36 @@ def run_task(root: Path, tid: str) -> None:
                     error_code="AK-CONFIG", why=credential_error)
         _close_task_credential(root, t, "credential_denied")
         return
+    credential_env = os.environ.pop("AGENTKIT_CREDENTIAL_ENV", "")
+    credential_fd = os.environ.pop("AGENTKIT_CREDENTIAL_FD", "")
     original_env = dict(os.environ)
+    credential_value = ""
+    descriptor = _credential_descriptor(cfg, backend, t.get("model", ""), root)
+    if credential_fd:
+        try:
+            fd = int(credential_fd)
+            credential_value = os.read(fd, 65536).decode("utf-8")
+            os.close(fd)
+        except (OSError, ValueError, UnicodeError) as e:
+            update(root, tid, status="failed", reason=f"credential handoff failed: {e}", error_code="AK-CONFIG",
+                   component="credentials", ended=time.time())
+            return
+        try:
+            from . import credentials as C
+
+            grant = C.load_grant(root, str(t.get("credential_grant_id") or ""))
+            matches = grant["ref_kind"] == "env" and grant["ref"] == credential_env
+        except (OSError, ValueError):
+            matches = False
+        if not matches or not credential_value:
+            update(root, tid, status="failed", reason="credential handoff does not match task policy",
+                   error_code="AK-CONFIG", component="credentials", ended=time.time())
+            return
+    elif descriptor and descriptor["ref_kind"] == "env":
+        credential_env = descriptor["ref"]
+        credential_value = original_env.get(credential_env, "")
+    if credential_value:
+        register_secret(credential_value)
     spec = None
     if backend in ("codex", "opencode", "qoder", "cursor"):
         from .backends import codex_config, cursor_config, opencode_config, qoder_config
@@ -1063,31 +1107,11 @@ def run_task(root: Path, tid: str) -> None:
         wcfg = (codex_config(cfg) if backend == "codex" else
                 opencode_config(cfg) if backend == "opencode" else
                 qoder_config(cfg) if backend == "qoder" else cursor_config(cfg))
-        key_env = str(wcfg.get("key_env") or "")
-        if backend == "qoder":
-            source_key = key_env if key_env and original_env.get(key_env) else "QODER_PERSONAL_ACCESS_TOKEN"
-            if original_env.get(source_key):
-                clean[source_key] = original_env[source_key]
-                register_secret(original_env[source_key])
-        if backend == "cursor":
-            source_key = str(wcfg.get("key_env") or "CURSOR_API_KEY")
-            if original_env.get(source_key):
-                clean["CURSOR_API_KEY"] = original_env[source_key]
-                register_secret(original_env[source_key])
-            if source_key != "CURSOR_API_KEY":
-                clean.pop(source_key, None)
-        if backend not in ("cursor", "qoder") and key_env and original_env.get(key_env):
-            clean[key_env] = original_env[key_env]
-            register_secret(original_env[key_env])
     else:
         spec = pick(cfg, t["model"])
-        spec.key()
-        keyval = original_env.get(spec.key_env) if spec.key_env else None
         clean = scrubbed_env(cfg)
-        if spec.key_env and keyval:
-            spec_key_env = spec.key_env
-            spec.key = lambda: keyval  # type: ignore[method-assign]
-            _ = spec_key_env
+        if spec.key_env and credential_value and credential_env == spec.key_env:
+            spec.key = lambda: credential_value  # type: ignore[method-assign]
     for k in list(os.environ):
         if k not in clean:
             os.environ.pop(k, None)
@@ -1158,6 +1182,8 @@ def run_task(root: Path, tid: str) -> None:
         cls = (CodexBackend if backend == "codex" else OpenCodeBackend if backend == "opencode"
                else QoderBackend if backend == "qoder" else CursorBackend)
         backend_options = {"root": root} if backend in ("qoder", "cursor") else {}
+        if credential_value:
+            backend_options.update(credential_env=credential_env, credential_value=credential_value)
         worker = cls(cfg, t, wt, d, **backend_options, on_progress=progress, check_stop=lambda: state["stop"],
                      events=events, max_rounds=int(wcfg.get("max_rounds", 40)))
     else:

@@ -780,6 +780,7 @@ draft → planned → running → verifying → completed
 - `CredentialGrant`/`CredentialBinding`/`CredentialRevocation`/`CredentialAudit` 只存授权元数据与环境变量/认证目录引用，不存密钥值；持久化到 `.agentkit/state/credentials/`，文件权限 0600。
 - 任务创建时签发 Grant 并建立 Task/Run Binding；schedule 与 worker 启动前校验撤销/过期/配置漂移，宿主记录 used，终态由宿主关闭 Binding 并写 closed 审计；sandbox 内不写凭证仓库。
 - worker 结束后、独立验收启动前清除所有已配置模型/后端凭证环境变量，验收与干净构建子进程不得继承 provider Key/PAT。
+- Linux scheduler 通过继承 FD 传递选中凭证，worker 主管进程环境不含 Key/PAT；后端只向官方 CLI 子进程注入值。CLI 自身仍必需持有 provider 凭证，不将此误称为完全不可读。
 - `agentkit credential show TASK_ID|cg_…|cb_…` 只读展示授权元数据；`agentkit credential revoke cg_…|cb_…` 撤销 Grant/Binding，不展示或写入密钥值。
 - 外部 benchmark 只能使用公开或用户明确授权的仓库。
 

@@ -308,6 +308,12 @@ def opencode_v2_settings(allow_bash: bool = False) -> dict:
             "formatter": False, "default_agent": "build", "permissions": permissions, "policies": policies}
 
 
+def _inject_credential(env: dict, key_env: str, value: str) -> dict:
+    if key_env and value:
+        env[key_env] = value
+    return env
+
+
 def _failure(message: str) -> Outcome:
     text = message.lower()
     if re.search(r"\b(401|403)\b|unauthorized|invalid.*key|authentication|login expired|not authenticated", text):
@@ -330,10 +336,13 @@ class CodexBackend:
         return backend_capabilities(self.name)
 
     def __init__(self, cfg: dict, task: dict, worktree: Path, task_dir: Path, *,
+                 credential_env: str = "", credential_value: str = "",
                  on_progress: Callable[[dict], None] = lambda d: None,
                  check_stop: Callable[[], Optional[str]] = lambda: None,
                  events=None, max_rounds: int = 40):
         self.cfg = codex_config(cfg)
+        self.credential_env = credential_env
+        self.credential_value = credential_value
         self.task = task
         self.worktree = worktree
         self.task_dir = task_dir
@@ -493,9 +502,10 @@ class CodexBackend:
         if stopped:
             return Outcome("stopped", f"stopped: {stopped}", stopped=stopped,
                            code="AK-TASK-CANCELLED" if stopped == "cancelled" else "AK-BUDGET")
+        env = _inject_credential(dict(os.environ), self.credential_env, self.credential_value)
         with open(err_log, "wb") as err, open(event_log, "a", encoding="utf-8") as transcript:
             proc = subprocess.Popen(args, cwd=str(self.worktree), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                    stderr=err, env=dict(os.environ), start_new_session=os.name == "posix")
+                                    stderr=err, env=env, start_new_session=os.name == "posix")
             try:
                 try:
                     proc.stdin.write(self._prompt(brief, resume).encode("utf-8"))
@@ -557,10 +567,13 @@ class OpenCodeBackend:
         return backend_capabilities(self.name)
 
     def __init__(self, cfg: dict, task: dict, worktree: Path, task_dir: Path, *,
+                 credential_env: str = "", credential_value: str = "",
                  on_progress: Callable[[dict], None] = lambda d: None,
                  check_stop: Callable[[], Optional[str]] = lambda: None,
                  events=None, max_rounds: int = 40):
         self.cfg = opencode_config(cfg)
+        self.credential_env = credential_env
+        self.credential_value = credential_value
         self.task = task
         self.worktree = worktree
         self.task_dir = task_dir
@@ -744,7 +757,7 @@ class OpenCodeBackend:
         tmp_dir = self.task_dir / "opencode-tmp"
         config_dir.mkdir(parents=True, exist_ok=True)
         tmp_dir.mkdir(parents=True, exist_ok=True)
-        env = dict(os.environ)
+        env = _inject_credential(dict(os.environ), self.credential_env, self.credential_value)
         env.pop("OPENCODE_CONFIG", None)
         env.update({"XDG_CONFIG_HOME": str(config_dir), "OPENCODE_CONFIG_DIR": str(config_dir),
                     "OPENCODE_DISABLE_PROJECT_CONFIG": "1", "OPENCODE_PURE": "1",
@@ -851,11 +864,13 @@ class QoderBackend:
         return backend_capabilities(self.name)
 
     def __init__(self, cfg: dict, task: dict, worktree: Path, task_dir: Path, *,
-                 root: Optional[Path] = None,
+                 root: Optional[Path] = None, credential_env: str = "", credential_value: str = "",
                  on_progress: Callable[[dict], None] = lambda d: None,
                  check_stop: Callable[[], Optional[str]] = lambda: None,
                  events=None, max_rounds: int = 40):
         self.cfg = qoder_config(cfg)
+        self.credential_env = credential_env
+        self.credential_value = credential_value
         self.task = task
         self.worktree = worktree
         self.task_dir = task_dir
@@ -1058,9 +1073,12 @@ class QoderBackend:
         for key in ("QODER_MODEL", "QODER_SESSION_ID", "QODER_PERMISSION_MODE", "QODER_APPEND_SYSTEM_PROMPT"):
             env.pop(key, None)
         env.update({"QODER_CONFIG_DIR": str(config_dir), "QODER_PROGRAM_STATUS": "0"})
-        key_env = str(self.cfg.get("key_env") or "")
-        if key_env and os.environ.get(key_env):
-            env["QODER_PERSONAL_ACCESS_TOKEN"] = os.environ[key_env]
+        if self.credential_value:
+            env["QODER_PERSONAL_ACCESS_TOKEN"] = self.credential_value
+        else:
+            key_env = str(self.cfg.get("key_env") or "")
+            if key_env and os.environ.get(key_env):
+                env["QODER_PERSONAL_ACCESS_TOKEN"] = os.environ[key_env]
         stopped = self.check_stop()
         if stopped:
             return Outcome("stopped", f"stopped: {stopped}", stopped=stopped,
@@ -1131,11 +1149,13 @@ class CursorBackend:
         return backend_capabilities(self.name, {"workers": {"cursor": self.cfg}})
 
     def __init__(self, cfg: dict, task: dict, worktree: Path, task_dir: Path, *,
-                 root: Optional[Path] = None,
+                 root: Optional[Path] = None, credential_env: str = "", credential_value: str = "",
                  on_progress: Callable[[dict], None] = lambda d: None,
                  check_stop: Callable[[], Optional[str]] = lambda: None,
                  events=None, max_rounds: int = 40):
         self.cfg = cursor_config(cfg)
+        self.credential_env = credential_env
+        self.credential_value = credential_value
         self.transport = str(self.cfg.get("transport") or "cli")
         if self.transport not in ("cli", "sdk"):
             raise ValueError("workers.cursor.transport must be cli or sdk")
@@ -1279,7 +1299,7 @@ class CursorBackend:
         (config_dir / ".cursor").mkdir(parents=True, exist_ok=True)
         (config_dir / ".cursor" / "cli-config.json").write_text(
             json.dumps(cursor_settings(), separators=(",", ":")), encoding="utf-8")
-        env = dict(os.environ)
+        env = _inject_credential(dict(os.environ), "CURSOR_API_KEY", self.credential_value)
         for key in tuple(env):
             if key.startswith("CURSOR_") and key != "CURSOR_API_KEY":
                 env.pop(key)
@@ -1407,7 +1427,7 @@ class CursorBackend:
         if self.session_id:
             args += ["--resume", self.session_id]
         args.append(self._prompt(brief, resume))
-        env = dict(os.environ)
+        env = _inject_credential(dict(os.environ), "CURSOR_API_KEY", self.credential_value)
         for key in tuple(env):
             if key.startswith("CURSOR_") and key != "CURSOR_API_KEY":
                 env.pop(key)
