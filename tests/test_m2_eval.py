@@ -110,7 +110,8 @@ def test_external_eval_rejects_unsandboxed_config(tmp_path):
     assert row["pass"] is False and "mode=required" in row["error"]["what"]
 
 
-def test_external_eval_timeout_cancels_task(tmp_path, monkeypatch):
+@pytest.mark.parametrize("finished", [False, True])
+def test_external_eval_timeout_cancels_task(tmp_path, monkeypatch, finished):
     root = tmp_path / "repo"
     task_dir = root / ".agentkit" / "tasks" / "t123abc"
     task_dir.mkdir(parents=True)
@@ -130,18 +131,18 @@ def test_external_eval_timeout_cancels_task(tmp_path, monkeypatch):
             if args[:2] == ("task", "create"):
                 return {"ok": True, "data": {"id": "t123abc"}}
             if args[:2] == ("task", "wait"):
-                return {"data": {"done": False}}
+                return {"data": {"done": finished, **({"checks": [], "verdict": "pass", "status": "done"} if finished else {})}}
             if args[:2] == ("task", "report"):
                 return {"data": {"verdict": "fail", "status": "cancelled"}}
             return {"ok": True}
 
     monkeypatch.setattr(R, "make_repo", lambda *_args: root)
     monkeypatch.setattr(R, "Host", FakeHost)
-    clock = iter([0, 200, 200])
+    clock = iter([0, 0, 200, 200])
     monkeypatch.setattr(R.time, "monotonic", lambda: next(clock))
     row = R.run_worker(TASKS[0], tmp_path, {"config": '[sandbox]\nmode = "required"\n'}, ENV,
                        timeout=100, backend="opencode")
-    assert ("task", "cancel", "t123abc") in calls
+    assert (("task", "cancel", "t123abc") in calls) is (not finished)
     assert row["timed_out"] is True and row["pass"] is False and row["why"] == "evaluation timeout"
 
 

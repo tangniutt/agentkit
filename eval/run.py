@@ -184,13 +184,21 @@ def run_worker(task: dict, work: Path, model: dict, env: dict, budget_tokens: in
     tid = r["data"]["id"]
     timed_out = False
     while True:
-        w = h("task", "wait", tid, "--timeout", "120")
-        if (w.get("data") or {}).get("done"):
-            break
-        if time.monotonic() - t0 > timeout:
+        remaining = timeout - (time.monotonic() - t0)
+        if remaining <= 0:
             timed_out = True
             h("task", "cancel", tid)
             w = h("task", "wait", tid, "--timeout", "30")
+            break
+        w = h("task", "wait", tid, "--timeout", str(max(1, min(120, int(remaining)))))
+        done = bool((w.get("data") or {}).get("done"))
+        if time.monotonic() - t0 > timeout:
+            timed_out = True
+            if not done:
+                h("task", "cancel", tid)
+                w = h("task", "wait", tid, "--timeout", "30")
+            break
+        if done:
             break
     wd = w.get("data") or {}
     rep = wd if wd.get("done") and "checks" in wd else h("task", "report", tid).get("data") or {}
