@@ -10,6 +10,8 @@ from agentkit.protocol import (
     HandoffPacket,
     ProtocolError,
     Retrospective,
+    SandboxCapabilities,
+    SandboxStatus,
     TaskSpec,
     ToolResult,
     sha256,
@@ -82,6 +84,20 @@ def test_tool_result_requires_next_when_truncated():
         ToolResult(ok=True, data="x", truncated=True).validate()
     result = ToolResult.from_dict({"ok": False, "error": {"code": "AK-PATH"}, "truncated": False})
     assert result.error["code"] == "AK-PATH"
+
+
+def test_sandbox_capabilities_and_status_are_conservative():
+    caps = SandboxCapabilities(provider="bubblewrap", snapshot_kinds=["git", "files"],
+                               network_modes=["shared", "isolated", "allowlist"])
+    assert caps.pause is False and caps.resume is False and caps.fork is False
+    assert SandboxCapabilities.from_dict(caps.to_dict()).to_dict() == caps.to_dict()
+    status = SandboxStatus(sandbox_id="sandbox-t123abc", task_id="t123abc", provider="bubblewrap",
+                           state="completed", capabilities=caps.to_dict())
+    assert SandboxStatus.from_dict(status.to_dict()).to_dict() == status.to_dict()
+    with pytest.raises(ProtocolError, match="snapshot kind"):
+        SandboxCapabilities.from_dict({**caps.to_dict(), "snapshot_kinds": ["swap"]})
+    with pytest.raises(ProtocolError, match="state"):
+        SandboxStatus.from_dict({**status.to_dict(), "state": "sleeping"})
 
 
 def test_evidence_retrospective_and_event_roundtrip():

@@ -160,6 +160,76 @@ class BackendCapabilities:
 
 
 @dataclass
+class SandboxCapabilities:
+    provider: str
+    pause: bool = False
+    resume: bool = False
+    fork: bool = False
+    snapshot_kinds: list[str] = field(default_factory=list)
+    network_modes: list[str] = field(default_factory=list)
+    schema_version: str = SCHEMA_VERSION
+
+    def validate(self) -> "SandboxCapabilities":
+        if self.schema_version != SCHEMA_VERSION:
+            raise ProtocolError(f"unsupported schema_version: {self.schema_version}")
+        if not isinstance(self.provider, str) or not self.provider.strip():
+            raise ProtocolError("provider must be a non-empty string")
+        for name in ("pause", "resume", "fork"):
+            if not isinstance(getattr(self, name), bool):
+                raise ProtocolError(f"{name} must be boolean")
+        self.snapshot_kinds = _strings(self.snapshot_kinds, "snapshot_kinds")
+        self.network_modes = _strings(self.network_modes, "network_modes")
+        if set(self.snapshot_kinds) - {"git", "files", "disk", "memory"}:
+            raise ProtocolError("unsupported snapshot kind")
+        if set(self.network_modes) - {"shared", "isolated", "allowlist"}:
+            raise ProtocolError("unsupported network mode")
+        return self
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "SandboxCapabilities":
+        allowed = {"provider", "pause", "resume", "fork", "snapshot_kinds", "network_modes", "schema_version"}
+        _keys(data, allowed, {"provider"})
+        return cls(**{k: data[k] for k in allowed if k in data}).validate()
+
+
+@dataclass
+class SandboxStatus:
+    sandbox_id: str
+    task_id: str
+    provider: str
+    state: str
+    capabilities: dict = field(default_factory=dict)
+    snapshot_ids: list[str] = field(default_factory=list)
+    schema_version: str = SCHEMA_VERSION
+
+    def validate(self) -> "SandboxStatus":
+        if self.schema_version != SCHEMA_VERSION:
+            raise ProtocolError(f"unsupported schema_version: {self.schema_version}")
+        for name in ("sandbox_id", "task_id", "provider"):
+            if not isinstance(getattr(self, name), str) or not getattr(self, name):
+                raise ProtocolError(f"{name} is required")
+        if self.state not in ("pending", "prepared", "running", "paused", "verifying", "completed",
+                              "failed", "cancelled", "destroyed"):
+            raise ProtocolError("unsupported sandbox state")
+        if not isinstance(self.capabilities, dict):
+            raise ProtocolError("capabilities must be object")
+        self.snapshot_ids = _strings(self.snapshot_ids, "snapshot_ids")
+        return self
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "SandboxStatus":
+        allowed = {"sandbox_id", "task_id", "provider", "state", "capabilities", "snapshot_ids", "schema_version"}
+        _keys(data, allowed, {"sandbox_id", "task_id", "provider", "state"})
+        return cls(**{k: data[k] for k in allowed if k in data}).validate()
+
+
+@dataclass
 class TaskSpec:
     goal: str
     acceptance: dict

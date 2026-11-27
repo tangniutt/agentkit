@@ -83,6 +83,8 @@ def test_mcp_tool_call_resource_and_errors(repo):
     assert capabilities["backends"]["cursor"]["usage_reporting"] is False
     assert capabilities["backend_variants"]["cursor_cli"]["usage_reporting"] is False
     assert capabilities["backend_variants"]["cursor_sdk"]["usage_reporting"] is True
+    assert capabilities["sandbox"]["capabilities"]["provider"] == "bubblewrap"
+    assert capabilities["sandbox"]["capabilities"]["pause"] is False
     assert out[2]["error"]["code"] == -32602
     assert out[3]["error"]["code"] == -32601
 

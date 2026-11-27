@@ -9,6 +9,8 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
+from .protocol import SandboxCapabilities
+
 
 class SandboxUnavailable(RuntimeError):
     pass
@@ -23,6 +25,15 @@ def available() -> bool:
         return r.returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
+
+
+def capabilities() -> dict:
+    return SandboxCapabilities(provider="bubblewrap", snapshot_kinds=["git", "files"],
+                               network_modes=["shared", "isolated", "allowlist"]).to_dict()
+
+
+def no_sandbox_capabilities() -> dict:
+    return SandboxCapabilities(provider="none").to_dict()
 
 
 def mode(cfg: dict) -> str:

@@ -364,12 +364,15 @@ def _read_resource(root: Path, uri: str) -> dict:
     if uri == "agentkit://capabilities":
         from .backends import backend_capabilities
         from .config import load_config
+        from .sandbox import capabilities as sandbox_capabilities
+        from .sandbox import mode as sandbox_mode
 
         cfg = load_config(root)
         data = {"server": SERVER_INFO, "protocolVersions": sorted(PROTOCOL_VERSIONS), "root": str(root),
                 "tools": [t["name"] for t in TOOLS],
                 "backends": {name: backend_capabilities(name, cfg)
                              for name in ("builtin", "codex", "opencode", "qoder", "cursor")},
+                "sandbox": {"mode": sandbox_mode(cfg), "capabilities": sandbox_capabilities()},
                 "backend_variants": {"cursor_cli": backend_capabilities("cursor", cfg, transport="cli"),
                                      "cursor_sdk": backend_capabilities("cursor", cfg, transport="sdk")}}
         return {"contents": [{"uri": uri, "mimeType": "application/json", "text": dumps(data)}]}

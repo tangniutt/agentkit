@@ -747,6 +747,8 @@ draft → planned → running → verifying → completed
 - 目标默认拒绝网络，只允许模型接口和显式包管理源；当前提供 `[sandbox] network=false` 硬隔离与域名数组白名单，默认 `true` 仅兼容现有模型调用；白名单要求客户端遵守代理环境变量，直连出站被网络命名空间阻断；
 - 进程组可杀，资源限制生效；
 - 无法沙箱时拒绝派活或明确降级为 direct-only。
+- `SandboxCapabilities` 显式声明 provider、pause/resume/fork、快照类型与网络模式；bubblewrap 当前只声明 Git/文件快照，不假装支持完整磁盘或内存快照。
+- `SandboxStatus` 记录 pending/prepared/running/paused/verifying/completed/failed/cancelled/destroyed 生命周期，任务证据保留 provider 与能力快照。
 
 ### macOS
 

@@ -46,6 +46,7 @@ from . import verify as V
 from .config import load_config, model_configured, saved_credentials_allowed
 from .core import AKError, Ctx, Result, atomic_write, dumps, fill_lines, room_for
 from .events import EventLog
+from .protocol import SandboxStatus
 from .redact import redact, register_secret
 
 VERDICT_CODES = {"fail": "AK-VERIFY-FAIL", "invalid": "AK-VERIFY-INVALID", "needs_review": "AK-VERIFY-SUSPICIOUS"}
@@ -158,6 +159,27 @@ def all_tasks(root: Path) -> list:
             except ValueError:
                 pass
     return sorted(out, key=lambda t: t.get("created", 0))
+
+
+def _set_sandbox_state(root: Path, tid: str, state: str, provider: Optional[str] = None, *,
+                       lock: bool = True) -> None:
+    from . import sandbox as S
+
+    task = load(root, tid)
+    current = task.get("sandbox_status")
+    if not isinstance(current, dict):
+        current = {"sandbox_id": f"sandbox-{tid}", "task_id": tid,
+                   "provider": provider or ("bubblewrap" if task.get("sandbox") == "bwrap" else "none"),
+                   "capabilities": S.capabilities() if task.get("sandbox") == "bwrap" else S.no_sandbox_capabilities()}
+    if provider:
+        current["provider"] = provider
+        current["capabilities"] = S.capabilities() if provider == "bubblewrap" else S.no_sandbox_capabilities()
+    status = SandboxStatus.from_dict({**current, "state": state})
+    if lock:
+        update(root, tid, sandbox_status=status.to_dict())
+    else:
+        task["sandbox_status"] = status.to_dict()
+        save(root, task)
 
 
 # ---------------------------------------------------------------- process liveness
@@ -346,23 +368,28 @@ def schedule(root: Path) -> None:
                         t.update(status="failed", reason=f"restricted sandbox network required but unavailable: {e}",
                                  ended=time.time(), error_code="AK-TASK-STATE", component="task")
                         save(root, t)
+                        _set_sandbox_state(root, t["id"], "failed", lock=False)
                         continue
                 except AKError as e:
                     _stop_proxy(proxy_proc)
                     logf.close()
                     t.update(status="failed", reason=e.what, ended=time.time(), error_code=e.code, component="task")
                     save(root, t)
+                    _set_sandbox_state(root, t["id"], "failed", lock=False)
                     continue
                 except ValueError as e:
                     _stop_proxy(proxy_proc)
                     logf.close()
                     t.update(status="failed", reason=str(e), ended=time.time(), error_code="AK-CONFIG", component="task")
                     save(root, t)
+                    _set_sandbox_state(root, t["id"], "failed", lock=False)
                     continue
             if sandboxed:
                 env["AGENTKIT_SANDBOX"] = "1"
                 if domains is not None:
                     env["AGENTKIT_NETWORK_MODE"] = "allowlist"
+            _set_sandbox_state(root, t["id"], "prepared" if sandboxed else "pending",
+                               "bubblewrap" if sandboxed else "none", lock=False)
             try:
                 proc = subprocess.Popen(
                     command, cwd=str(root), stdin=subprocess.DEVNULL, stdout=logf, stderr=logf,
@@ -382,6 +409,7 @@ def schedule(root: Path) -> None:
             if domains is not None:
                 t["sandbox_domains"] = domains
             save(root, t)
+            _set_sandbox_state(root, t["id"], "running", "bubblewrap" if sandboxed else "none", lock=False)
             running += 1
 
 
@@ -740,6 +768,12 @@ def create(ctx: Ctx, a) -> dict:
             "worktree": str(wt.relative_to(root)), "status": "queued", "created": time.time(),
             "type": task_type(a.goal), "rounds": 0, "tokens": 0, "usd": 0.0,
         }
+        from . import sandbox as S
+
+        provider = "bubblewrap" if S.mode(cfg) != "off" else "none"
+        t["sandbox_status"] = SandboxStatus(sandbox_id=f"sandbox-{tid}", task_id=tid, provider=provider,
+                                            state="pending",
+                                            capabilities=S.capabilities() if provider == "bubblewrap" else S.no_sandbox_capabilities()).to_dict()
         save(root, t)
         EventLog(root, tid, "task").emit("created", step=0, model=model_name or backend, backend=backend,
                                          cli_run=ctx.run_id or None)
@@ -994,6 +1028,7 @@ def run_task(root: Path, tid: str) -> None:
     final = "done" if status == "submitted" else status
     try:
         if final != "cancelled":
+            _set_sandbox_state(root, tid, "verifying")
             tv = time.monotonic()
             rep = verify_task(root, tid)
             final_fields = dict(status=final, verdict=rep["verdict"], ended=time.time())
@@ -1006,6 +1041,9 @@ def run_task(root: Path, tid: str) -> None:
     except Exception as e:
         final_fields = dict(status=final, verdict="invalid", ended=time.time(), reason=(reason + f"; verify error: {e}")[:300])
     update(root, tid, **final_fields)
+    sandbox_state = ("completed" if final == "done" else "cancelled" if final == "cancelled" else
+                     "paused" if final in ("paused", "stopped", "interrupted") else "failed")
+    _set_sandbox_state(root, tid, sandbox_state)
     if not os.environ.get("AGENTKIT_SANDBOX"):
         try:
             learn(root, load(root, tid))
@@ -1598,6 +1636,7 @@ def cmd_task(ctx: Ctx, a) -> Result:
             if not a.keep_branch:
                 subprocess.run(["git", "-C", str(root), "branch", "-D", t["branch"]], capture_output=True)
             update(root, tid, cleaned=True)
+            _set_sandbox_state(root, tid, "destroyed")
             cleaned.append(tid)
         return Result({"cleaned": cleaned, "branches_kept": bool(a.keep_branch)})
     raise AKError(f"unknown task subcommand '{sub}'", "use create|status|wait|report|resume|cancel|clean", "agentkit task --help")
