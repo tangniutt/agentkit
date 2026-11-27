@@ -73,6 +73,20 @@ TOOLS = [
           {"target": {"type": "string"}}, ["target"], {"readOnlyHint": True}),
     _tool("agentkit_credential_revoke", "Revoke a credential grant or task binding without exposing secret values.",
           {"target": {"type": "string"}}, ["target"], {"readOnlyHint": False, "destructiveHint": True}),
+    _tool("agentkit_route", "Route a task using measured model profiles, risk and expected verified cost.",
+          {"task_id": {"type": "string"}, "complexity": {"type": "integer", "minimum": 0, "maximum": 3},
+           "blast_radius": {"type": "integer", "minimum": 0, "maximum": 3},
+           "context_pressure": {"type": "integer", "minimum": 0, "maximum": 3},
+           "required_capabilities": {"type": "array", "items": {"type": "string"}},
+           "verification_strength": {"type": "string", "enum": ["basic", "standard", "strong"]},
+           "profiles": {"type": "array", "items": {"type": "object", "required": ["model_id", "model_version", "evaluated_at", "eval_config_sha256"],
+                         "properties": {"model_id": {"type": "string"}, "model_version": {"type": "string"},
+                                        "status": {"type": "string", "enum": ["provisional", "active", "deprecated", "revoked"]},
+                                        "capabilities": {"type": "object", "additionalProperties": {"type": "number"}},
+                                        "pricing": {"type": "object"}, "limits": {"type": "object"}, "evidence": {"type": "object"},
+                                        "evaluated_at": {"type": "string"}, "eval_config_sha256": {"type": "string"}}}},
+           "min_samples": {"type": "integer", "minimum": 1}, "capability_threshold": {"type": "number", "minimum": 0, "maximum": 1}},
+          ["task_id", "complexity", "blast_radius", "profiles"], {"readOnlyHint": True}),
     _tool("agentkit_task_create", "Create an isolated worker task with frozen fail-to-pass acceptance.",
           {"goal": {"type": "string"}, "checks": {"type": "array", "items": {"type": "string"}, "minItems": 1},
            "allow": {"type": "array", "items": {"type": "string"}}, "model": {"type": "string"},
@@ -313,7 +327,23 @@ def _call_tool(root: Path, name: str, arguments: dict) -> dict:
 
     if name not in {t["name"] for t in TOOLS}:
         raise KeyError(name)
-    env, _code, _human = run_cli(["--root", str(root), *_argv(name, arguments or {})])
+    if name == "agentkit_route":
+        from .protocol import ModelProfile, ProtocolError, TaskRisk, ToolResult
+        from .router import route
+
+        try:
+            risk = TaskRisk.from_dict({k: arguments[k] for k in
+                                       ("complexity", "blast_radius", "context_pressure",
+                                        "required_capabilities", "verification_strength") if k in arguments})
+            profiles = [ModelProfile.from_dict(item) for item in arguments.get("profiles", [])]
+            decision = route(arguments["task_id"], risk, profiles,
+                             min_samples=int(arguments.get("min_samples", 5)),
+                             capability_threshold=float(arguments.get("capability_threshold", 0.6)))
+            env = ToolResult(ok=True, data=decision.to_dict()).to_dict()
+        except (KeyError, TypeError, ValueError, ProtocolError) as e:
+            env = ToolResult(ok=False, error={"what": str(e), "code": "AK-CONFIG"}).to_dict()
+    else:
+        env, _code, _human = run_cli(["--root", str(root), *_argv(name, arguments or {})])
     return {"resultType": "complete", "content": [{"type": "text", "text": dumps(env)}],
             "structuredContent": env, "isError": not bool(env.get("ok"))}
 

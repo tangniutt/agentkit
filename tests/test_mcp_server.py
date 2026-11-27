@@ -58,10 +58,10 @@ def test_mcp_legacy_initialize_and_current_tools(repo):
     assert len(out) == 2
     assert out[0]["result"]["protocolVersion"] == "2025-11-25"
     tools = out[1]["result"]["tools"]
-    assert len(tools) == 34
+    assert len(tools) == 35
     names = {t["name"] for t in tools}
     assert {"agentkit_doctor", "agentkit_read", "agentkit_task_diff", "agentkit_task_answer",
-            "agentkit_credential_show", "agentkit_credential_revoke",
+            "agentkit_credential_show", "agentkit_credential_revoke", "agentkit_route",
             "agentkit_task_handoff", "agentkit_goal_create", "agentkit_goal_run", "agentkit_goal_answer",
             "agentkit_code_search", "agentkit_code_defs", "agentkit_code_index"} <= names
     assert all(t["inputSchema"]["type"] == "object" and "outputSchema" in t for t in out[1]["result"]["tools"])
@@ -115,6 +115,25 @@ def test_mcp_credential_show_and_revoke(repo):
     assert out[0]["result"]["structuredContent"]["data"]["binding_active"] is True
     assert out[1]["result"]["structuredContent"]["ok"] is True
     assert out[2]["result"]["structuredContent"]["data"]["active"] is False
+
+
+def test_mcp_route_uses_measured_profiles(repo):
+    profile = {"model_id": "provider/model-a", "model_version": "v1", "status": "active",
+               "capabilities": {"code_edit": 0.9},
+               "evidence": {"sample_count": 10, "verified_pass_rate": 0.9, "wilson_lower_bound": 0.8,
+                            "average_task_cost": 0.02, "expected_cost_per_verified_success": 0.02},
+               "evaluated_at": "2026-11-28T00:00:00Z", "eval_config_sha256": "a" * 64}
+    arguments = {"task_id": "t123abc", "complexity": 1, "blast_radius": 1,
+                 "required_capabilities": ["code_edit"], "profiles": [profile]}
+    out = handle(repo, {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                        "params": {**_meta(), "name": "agentkit_route", "arguments": arguments}}, _state())
+    data = out["result"]["structuredContent"]
+    assert data["ok"] is True and data["data"]["model_id"] == "provider/model-a"
+    arguments["complexity"] = 4
+    out = handle(repo, {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                        "params": {**_meta(), "name": "agentkit_route", "arguments": arguments}}, _state())
+    assert out["result"]["isError"] is True
+    assert out["result"]["structuredContent"]["error"]["code"] == "AK-CONFIG"
 
 
 def test_mcp_tool_failure_is_result_error(repo):
