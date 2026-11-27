@@ -28,7 +28,7 @@ SUMS = "SHA256SUMS"
 _SEMVER = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")
 _REQUIRED_MODULES = (
     "__init__.py", "__main__.py", "backends.py", "checkpoint.py", "cli.py", "codeintel.py", "compress.py",
-    "config.py", "context.py", "core.py", "diag.py", "doctor.py", "edit.py", "events.py", "fsutil.py",
+    "config.py", "context.py", "core.py", "credentials.py", "diag.py", "doctor.py", "edit.py", "events.py", "fsutil.py",
     "goals.py", "lifecycle.py", "lsp.py", "manual.py", "memory.py", "mcp_server.py", "models.py",
     "netproxy.py", "permissions.py", "protocol.py", "read.py", "redact.py", "release.py", "repomap.py",
     "run.py", "sandbox.py", "search.py", "state.py", "symbols.py", "tasks.py", "verify.py", "worker.py",
