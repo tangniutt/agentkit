@@ -111,6 +111,23 @@ def test_opencode_zero_cost_and_price_fallback(tmp_path):
     assert outcome.status == "submitted" and backend.cost_known is True
 
 
+def test_opencode_events_carry_session_turn_and_item_ids(tmp_path):
+    records = []
+
+    class Events:
+        def emit(self, event, **extra):
+            records.append({"event": event, **extra})
+
+    backend = OpenCodeBackend({"workers": {"opencode": {}}}, {"id": "t123abc"}, tmp_path, tmp_path, events=Events())
+    backend._consume({"type": "step_start", "sessionID": "ses_1", "part": {"id": "step-1"}})
+    backend._consume({"type": "tool_use", "sessionID": "ses_1",
+                      "part": {"id": "tool-1", "tool": "read", "state": {"status": "completed"}}})
+    model_call = next(row for row in records if row["event"] == "model_call")
+    tool = next(row for row in records if row["event"] == "tool")
+    assert model_call["session_id"] == "ses_1" and model_call["turn_id"] == "step-1"
+    assert tool["item_id"] == "tool-1" and tool["turn_id"] == "step-1"
+
+
 def test_opencode_policy_and_invocation_are_noninteractive(tmp_path, monkeypatch):
     capture = tmp_path / "capture.jsonl"
     monkeypatch.setenv("AK_TEST_CAPTURE", str(capture))

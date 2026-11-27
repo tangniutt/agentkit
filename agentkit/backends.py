@@ -19,6 +19,7 @@ from typing import Callable, Optional
 from unittest.mock import patch
 
 from .config import saved_credentials_allowed
+from .protocol import BackendCapabilities
 from .redact import redact_text
 from .worker import Outcome
 
@@ -178,6 +179,36 @@ def cursor_state_paths(cfg: dict, root: Optional[Path] = None) -> list[Path]:
     return [cursor_config_dir(cfg, root)]
 
 
+def _capabilities(backend: str, protocol: str, **flags) -> dict:
+    return BackendCapabilities(backend=backend, event_protocol=protocol, **flags).to_dict()
+
+
+def builtin_capabilities() -> dict:
+    return _capabilities("builtin", "internal", headless=True, streaming=True, api_key=True,
+                         usage_reporting=True, cost_reporting=True, cancel=True)
+
+
+def backend_capabilities(name: str, cfg: Optional[dict] = None, transport: Optional[str] = None) -> dict:
+    if name == "builtin":
+        return builtin_capabilities()
+    if name == "codex":
+        return _capabilities(name, "jsonl", headless=True, streaming=True, session_resume=False,
+                             api_key=True, usage_reporting=True, cancel=True)
+    if name == "opencode":
+        return _capabilities(name, "jsonl", headless=True, streaming=True, session_resume=True,
+                             oauth=True, api_key=True, usage_reporting=True, cost_reporting=True, cancel=True)
+    if name == "qoder":
+        return _capabilities(name, "jsonl", headless=True, streaming=True, session_resume=True,
+                             oauth=True, api_key=True, usage_reporting=True, credits_reporting=True, cancel=True)
+    if name == "cursor":
+        sdk = transport == "sdk" or (transport is None and
+                                      str(cursor_config(cfg or {}).get("transport") or "cli") == "sdk")
+        return _capabilities(name, "sdk" if sdk else "jsonl", headless=True, streaming=True,
+                             session_resume=True, api_key=True, usage_reporting=sdk,
+                             cost_reporting=sdk, cancel=True)
+    raise ValueError(f"unknown worker backend: {name}")
+
+
 def cursor_settings() -> dict:
     return {"permissions": {
         "allow": [],
@@ -295,6 +326,9 @@ def _failure(message: str) -> Outcome:
 class CodexBackend:
     name = "codex"
 
+    def capabilities(self) -> dict:
+        return backend_capabilities(self.name)
+
     def __init__(self, cfg: dict, task: dict, worktree: Path, task_dir: Path, *,
                  on_progress: Callable[[dict], None] = lambda d: None,
                  check_stop: Callable[[], Optional[str]] = lambda: None,
@@ -323,6 +357,8 @@ class CodexBackend:
         self.last_component = "codex"
         self.last_step = 0
         self.thread_id = ""
+        self.turn_id = ""
+        self.item_id = ""
         self.claim = ""
         self.completed = False
         self.error = ""
@@ -335,6 +371,9 @@ class CodexBackend:
 
     def _ev(self, event: str, **extra):
         self.last_step = self.rounds
+        extra.setdefault("session_id", self.thread_id or None)
+        extra.setdefault("turn_id", self.turn_id or None)
+        extra.setdefault("item_id", self.item_id or None)
         if self.events is not None:
             self.events.emit(event, component="codex", step=self.rounds, **extra)
 
@@ -375,6 +414,9 @@ class CodexBackend:
             self._ev("backend_thread", thread_id=self.thread_id)
         elif kind == "turn.started":
             self.rounds += 1
+            self.turn_id = str(event.get("turn_id") or event.get("turnId") or
+                               f"{self.thread_id or 'codex'}:turn:{self.rounds}")
+            self.item_id = ""
             self._ev("model_call")
             self.on_progress(self.stats())
             if self.rounds > self.max_rounds:
@@ -389,6 +431,7 @@ class CodexBackend:
                 self.usd = self.prior_usd + (current_in * self.price_in + current_out * self.price_out) / 1_000_000
                 self.cost_known = True
             self.completed = True
+            self.item_id = ""
             self._ev("model_usage", input_tokens=self.tokens_in, output_tokens=self.tokens_out,
                      cached_input_tokens=usage.get("cached_input_tokens", 0),
                      reasoning_output_tokens=usage.get("reasoning_output_tokens", 0))
@@ -398,6 +441,7 @@ class CodexBackend:
                 return Outcome("stopped", "budget exceeded", stopped=over, code="AK-BUDGET")
         elif kind == "item.completed":
             item = event.get("item") or {}
+            self.item_id = str(item.get("id") or event.get("item_id") or event.get("id") or "")
             item_kind = item.get("type")
             if item_kind == "agent_message":
                 self.claim = str(item.get("text") or "")[:500]
@@ -509,6 +553,9 @@ class CodexBackend:
 class OpenCodeBackend:
     name = "opencode"
 
+    def capabilities(self) -> dict:
+        return backend_capabilities(self.name)
+
     def __init__(self, cfg: dict, task: dict, worktree: Path, task_dir: Path, *,
                  on_progress: Callable[[dict], None] = lambda d: None,
                  check_stop: Callable[[], Optional[str]] = lambda: None,
@@ -547,6 +594,8 @@ class OpenCodeBackend:
         self.last_component = "opencode"
         self.last_step = 0
         self.session_id = str(task.get("backend_session") or "")
+        self.turn_id = ""
+        self.item_id = ""
         self.claim = ""
         self.completed = False
         self.error = ""
@@ -560,6 +609,9 @@ class OpenCodeBackend:
 
     def _ev(self, event: str, **extra):
         self.last_step = self.rounds
+        extra.setdefault("session_id", self.session_id or None)
+        extra.setdefault("turn_id", self.turn_id or None)
+        extra.setdefault("item_id", self.item_id or None)
         if self.events is not None:
             self.events.emit(event, component="opencode", step=self.rounds, **extra)
 
@@ -618,6 +670,10 @@ class OpenCodeBackend:
             self._ev("backend_session", session_id=self.session_id)
         if kind == "step_start":
             self.rounds += 1
+            part = event.get("part") or {}
+            self.turn_id = str(part.get("id") or event.get("turn_id") or
+                               f"{self.session_id or 'opencode'}:step:{self.rounds}")
+            self.item_id = ""
             self._ev("model_call")
             self.on_progress(self.stats())
             if self.rounds > self.max_rounds:
@@ -646,6 +702,7 @@ class OpenCodeBackend:
             elif not self.declared_cost_known:
                 self.cost_known = False
             self.completed = True
+            self.item_id = ""
             self._ev("model_usage", input_tokens=self.tokens_in, output_tokens=self.tokens_out,
                      cached_input_tokens=int(self._number(cache.get("read"))),
                      reasoning_output_tokens=int(self._number(tokens.get("reasoning"))), usd=round(self.usd, 6))
@@ -654,11 +711,14 @@ class OpenCodeBackend:
             if over:
                 return Outcome("stopped", "budget exceeded", stopped=over, code="AK-BUDGET")
         elif kind == "text":
-            text = str((event.get("part") or {}).get("text") or "").strip()
+            part = event.get("part") or {}
+            self.item_id = str(part.get("id") or event.get("item_id") or self.item_id)
+            text = str(part.get("text") or "").strip()
             if text:
                 self.claim = text[:500]
         elif kind == "tool_use":
             part = event.get("part") or {}
+            self.item_id = str(part.get("id") or event.get("item_id") or self.item_id)
             state = part.get("state") or {}
             status = state.get("status")
             if status == "error":
@@ -787,6 +847,9 @@ def _qoder_failure(code, message: str) -> Outcome:
 class QoderBackend:
     name = "qoder"
 
+    def capabilities(self) -> dict:
+        return backend_capabilities(self.name)
+
     def __init__(self, cfg: dict, task: dict, worktree: Path, task_dir: Path, *,
                  root: Optional[Path] = None,
                  on_progress: Callable[[dict], None] = lambda d: None,
@@ -814,6 +877,8 @@ class QoderBackend:
         self.credits_seen = False
         self.cost_known = bool(self.cfg.get("cost_known", False)) or bool(self.price_in or self.price_out)
         self.session_id = str(task.get("backend_session") or "")
+        self.turn_id = ""
+        self.item_id = ""
         self.qodercli_version = ""
         self.initialized = False
         self.claim = ""
@@ -834,6 +899,9 @@ class QoderBackend:
 
     def _ev(self, event: str, **extra):
         self.last_step = self.rounds
+        extra.setdefault("session_id", self.session_id or None)
+        extra.setdefault("turn_id", self.turn_id or None)
+        extra.setdefault("item_id", self.item_id or None)
         if self.events is not None:
             self.events.emit(event, component="qoder", step=self.rounds, **extra)
 
@@ -897,15 +965,20 @@ class QoderBackend:
             self._ev("backend_init", qodercli_version=self.qodercli_version, tools=sorted(tools))
         elif kind == "assistant":
             self.rounds += 1
+            message = event.get("message") or {}
+            self.turn_id = str(event.get("uuid") or message.get("id") or
+                               f"{self.session_id or 'qoder'}:turn:{self.rounds}")
+            self.item_id = ""
             self._ev("model_call")
             self.on_progress(self.stats())
             if self.rounds > self.max_rounds:
                 return Outcome("stopped", f"max rounds ({self.max_rounds})", stopped="rounds", code="AK-WORKER-ROUNDS")
-            message = event.get("message") or {}
             for part in message.get("content") or []:
                 if part.get("type") == "text":
+                    self.item_id = str(part.get("id") or self.item_id)
                     self.claim = str(part.get("text") or "")[:500]
                 elif part.get("type") == "tool_use":
+                    self.item_id = str(part.get("id") or self.item_id)
                     self._ev("tool", tool=part.get("name") or "unknown", status="completed")
             usage = message.get("usage")
             if not isinstance(usage, dict):
@@ -924,6 +997,7 @@ class QoderBackend:
                     self.credits_known = True
                 self.credits_seen = True
                 self.credits += self._number(usage.get("credits"))
+            self.item_id = ""
             self._ev("model_usage", input_tokens=self.tokens_in, output_tokens=self.tokens_out,
                      cached_input_tokens=int(self._number(usage.get("cache_read_input_tokens"))),
                      credits=round(self.credits, 6), credits_known=self.credits_known)
@@ -1053,6 +1127,9 @@ class QoderBackend:
 class CursorBackend:
     name = "cursor"
 
+    def capabilities(self) -> dict:
+        return backend_capabilities(self.name, {"workers": {"cursor": self.cfg}})
+
     def __init__(self, cfg: dict, task: dict, worktree: Path, task_dir: Path, *,
                  root: Optional[Path] = None,
                  on_progress: Callable[[dict], None] = lambda d: None,
@@ -1081,6 +1158,8 @@ class CursorBackend:
         self.session_id = str(task.get("backend_session") or "")
         if task.get("backend_transport") and task["backend_transport"] != self.transport:
             self.session_id = ""
+        self.turn_id = ""
+        self.item_id = ""
         self.initialized = False
         self.completed = False
         self.claim = ""
@@ -1096,6 +1175,9 @@ class CursorBackend:
 
     def _ev(self, event: str, **extra):
         self.last_step = self.rounds
+        extra.setdefault("session_id", self.session_id or None)
+        extra.setdefault("turn_id", self.turn_id or None)
+        extra.setdefault("item_id", self.item_id or None)
         if self.events is not None:
             self.events.emit(event, component="cursor", step=self.rounds, **extra)
 
@@ -1135,19 +1217,24 @@ class CursorBackend:
             self._ev("backend_init", model=str(event.get("model") or ""), api_key_source=source)
         elif kind == "assistant":
             self.rounds += 1
+            message = event.get("message") or {}
+            self.turn_id = str(event.get("turn_id") or message.get("id") or
+                               f"{self.session_id or 'cursor'}:turn:{self.rounds}")
+            self.item_id = ""
             self._ev("model_call")
             self.on_progress(self.stats())
             if self.rounds > self.max_rounds:
                 return Outcome("stopped", f"max rounds ({self.max_rounds})", stopped="rounds", code="AK-WORKER-ROUNDS")
-            message = event.get("message") or {}
             for part in message.get("content") or []:
                 if isinstance(part, dict) and part.get("type") == "text":
+                    self.item_id = str(part.get("id") or self.item_id)
                     self.claim = str(part.get("text") or "")[:500]
         elif kind == "tool_call":
             tool = event.get("tool_call") or {}
             name = next((key for key in tool if isinstance(tool[key], dict)), "unknown")
-            self._ev("tool", tool=name, status=event.get("subtype") or "unknown")
             result = next(iter(tool.values()), {}) if isinstance(tool, dict) else {}
+            self.item_id = str(event.get("item_id") or event.get("id") or result.get("id") or self.item_id)
+            self._ev("tool", tool=name, status=event.get("subtype") or "unknown")
             details = result.get("result") if isinstance(result, dict) else None
             if isinstance(details, dict) and details.get("error"):
                 self.denied.append(str(details["error"])[:200])
@@ -1169,6 +1256,7 @@ class CursorBackend:
     def _sdk_usage(self, usage) -> None:
         self.tokens_in += int(getattr(usage, "input_tokens", 0) or 0)
         self.tokens_out += int(getattr(usage, "output_tokens", 0) or 0)
+        self.item_id = ""
         self._ev("model_usage", input_tokens=self.tokens_in, output_tokens=self.tokens_out)
         self.on_progress(self.stats())
 
@@ -1217,6 +1305,8 @@ class CursorBackend:
                     self._ev("backend_session", session_id=self.session_id)
                     self._ev("backend_init", transport="sdk", tools=options.tools)
                     run = agent.send(self._prompt(brief, resume))
+                    self.turn_id = str(getattr(run, "id", "") or
+                                       f"{self.session_id or 'cursor-sdk'}:turn:{self.rounds + 1}")
                     with open(transcript, "a", encoding="utf-8") as events:
                         for message in run.messages():
                             stop = self.check_stop()
@@ -1228,6 +1318,7 @@ class CursorBackend:
                                 self._cancel_sdk(run)
                                 return Outcome("stopped", "budget exceeded", stopped="budget", code="AK-BUDGET")
                             kind = str(getattr(message, "type", ""))
+                            self.item_id = str(getattr(message, "id", "") or getattr(message, "uuid", "") or self.item_id)
                             if kind == "assistant":
                                 self.rounds += 1
                                 self._ev("model_call")
@@ -1249,7 +1340,9 @@ class CursorBackend:
                             elif kind == "tool_call":
                                 self._ev("tool", tool=str(getattr(message, "name", "unknown")),
                                          status=str(getattr(message, "status", "unknown")))
-                            record = {"type": kind, "run_id": str(getattr(run, "id", ""))}
+                            record = {"type": kind, "run_id": str(getattr(run, "id", "")),
+                                      "session_id": self.session_id, "turn_id": self.turn_id,
+                                      "item_id": self.item_id}
                             if kind == "usage":
                                 usage = getattr(message, "usage", None)
                                 record["input_tokens"] = int(getattr(usage, "input_tokens", 0) or 0)

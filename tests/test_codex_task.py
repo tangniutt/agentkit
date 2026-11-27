@@ -60,6 +60,8 @@ def test_codex_task_end_to_end_without_agentkit_model(ak, repo):
     assert status["status"] == "done" and status["verdict"] == "pass", status
     task = tjson(repo, tid)
     assert task["backend"] == "codex" and task["model"] == "fake-model"
+    assert task["backend_capabilities"]["event_protocol"] == "jsonl"
+    assert task["backend_capabilities"]["session_resume"] is False
     assert task["tokens"] == 120 and task["cost_known"] is True
     receipt = json.loads((repo / ".agentkit" / "tasks" / tid / "receipt.json").read_text(encoding="utf-8"))
     assert receipt["worker"]["backend"] == "codex"

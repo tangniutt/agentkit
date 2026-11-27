@@ -389,6 +389,7 @@ Retrospective 与稳定项目记忆分开存储，按需检索。
 
 - event_id、schema_version、ts；
 - goal_id/task_id/run_id；
+- session_id/turn_id/item_id（存在原生 ID 时保留，否则使用稳定的本地关联 ID）；
 - type、from、to；
 - component、step、duration；
 - error_code、retryable；
@@ -670,7 +671,8 @@ V1 先实现顺序接力。并行协作只用于可拆分的独立子任务和�
 
 **适配器能力**：
 
-- `capabilities()`：headless、JSONL/RPC、取消、usage、session export、工具清单。
+- `capabilities()` 返回版本化 `BackendCapabilities`：headless、streaming、session resume/fork、approval/diff 事件、native MCP、OAuth/API Key、usage/cost/Credits、取消；未声明能力保守为 false。
+- 能力快照写入任务证据，并通过 `agentkit://capabilities` MCP 资源公开；Cursor CLI 与 SDK 的 usage/cost 能力分别声明。
 - `run(HandoffPacket)` / `cancel()` / `status()` / `collect_diff()`。
 - 工具无 headless 接口时，只生成可移植交接包，不伪装成已自动接管。
 - usage 不可见时记录 `unknown`，不得估成 0；跨工具比较统一使用 verified success/USD。

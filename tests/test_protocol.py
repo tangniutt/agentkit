@@ -96,7 +96,10 @@ def test_evidence_retrospective_and_event_roundtrip():
                           changes=[{"path": "calc.py"}], evidence=[{"receipt": "er_1"}], failures=[],
                           cost={"tokens": 10}, next_actions=["merge"], created_at="2026-11-25T00:00:00Z")
     assert Retrospective.from_dict(retro.to_dict()).next_actions == ["merge"]
-    event = Event(event_id="ev_1", ts=1.0, type="task.completed", task_id="t123abc", to_state="done")
-    assert Event.from_dict(event.to_dict()).type == "task.completed"
+    event = Event(event_id="ev_1", ts=1.0, type="task.completed", task_id="t123abc", run_id="r1",
+                  session_id="ses_1", turn_id="turn_1", item_id="item_1", to_state="done")
+    assert Event.from_dict(event.to_dict()).to_dict() == event.to_dict()
+    with pytest.raises(ProtocolError, match="turn_id"):
+        Event.from_dict({**event.to_dict(), "turn_id": ""})
     with pytest.raises(ProtocolError, match="verdict"):
         EvidenceReceipt.from_dict({**receipt.to_dict(), "verdict": "maybe"})

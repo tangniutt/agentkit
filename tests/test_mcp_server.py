@@ -77,7 +77,12 @@ def test_mcp_tool_call_resource_and_errors(repo):
     ])
     assert out[0]["result"]["resultType"] == "complete"
     assert "ok" in out[0]["result"]["structuredContent"]
-    assert "agentkit_doctor" in out[1]["result"]["contents"][0]["text"]
+    capabilities = json.loads(out[1]["result"]["contents"][0]["text"])
+    assert "agentkit_doctor" in capabilities["tools"]
+    assert set(capabilities["backends"]) == {"builtin", "codex", "opencode", "qoder", "cursor"}
+    assert capabilities["backends"]["cursor"]["usage_reporting"] is False
+    assert capabilities["backend_variants"]["cursor_cli"]["usage_reporting"] is False
+    assert capabilities["backend_variants"]["cursor_sdk"]["usage_reporting"] is True
     assert out[2]["error"]["code"] == -32602
     assert out[3]["error"]["code"] == -32601
 

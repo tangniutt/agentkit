@@ -362,8 +362,16 @@ def _read_resource(root: Path, uri: str) -> dict:
 
         return {"contents": [{"uri": uri, "mimeType": "text/markdown", "text": markdown_overview()}]}
     if uri == "agentkit://capabilities":
+        from .backends import backend_capabilities
+        from .config import load_config
+
+        cfg = load_config(root)
         data = {"server": SERVER_INFO, "protocolVersions": sorted(PROTOCOL_VERSIONS), "root": str(root),
-                "tools": [t["name"] for t in TOOLS]}
+                "tools": [t["name"] for t in TOOLS],
+                "backends": {name: backend_capabilities(name, cfg)
+                             for name in ("builtin", "codex", "opencode", "qoder", "cursor")},
+                "backend_variants": {"cursor_cli": backend_capabilities("cursor", cfg, transport="cli"),
+                                     "cursor_sdk": backend_capabilities("cursor", cfg, transport="sdk")}}
         return {"contents": [{"uri": uri, "mimeType": "application/json", "text": dumps(data)}]}
     from . import goals, tasks
     from .core import Ctx

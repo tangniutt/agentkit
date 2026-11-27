@@ -921,6 +921,9 @@ def run_task(root: Path, tid: str) -> None:
     else:
         worker = Worker(spec, wt, root, t, on_progress=progress, transcript=d / "transcript.jsonl", cfg=wcfg,
                         check_stop=lambda: state["stop"], events=events)
+    capabilities = worker.capabilities()
+    update(root, tid, backend_capabilities=capabilities)
+    events.emit("backend_capabilities", step=worker.rounds, component=backend, capabilities=capabilities)
     brief_txt = ""
     try:
         b = memory.brief(Ctx(root=root, cwd=root, budget=500))

@@ -78,6 +78,26 @@ def test_codex_token_budget_stops_process(tmp_path):
     assert backend.tokens_in + backend.tokens_out >= 50
 
 
+def test_codex_events_carry_session_turn_and_item_ids(tmp_path):
+    records = []
+
+    class Events:
+        def emit(self, event, **extra):
+            records.append({"event": event, **extra})
+
+    backend = CodexBackend({"workers": {"codex": {}}}, {"id": "t123abc"}, tmp_path, tmp_path, events=Events())
+    backend._consume({"type": "thread.started", "thread_id": "thread-1"})
+    backend._consume({"type": "turn.started"})
+    backend._consume({"type": "item.completed", "item": {"id": "item-1", "type": "agent_message", "text": "fixed"}})
+    backend._consume({"type": "turn.completed", "usage": {"input_tokens": 1, "output_tokens": 1}})
+    model_call = next(row for row in records if row["event"] == "model_call")
+    tool = next(row for row in records if row["event"] == "tool")
+    usage = next(row for row in records if row["event"] == "model_usage")
+    assert model_call["session_id"] == "thread-1" and model_call["turn_id"] == "thread-1:turn:1"
+    assert tool["item_id"] == "item-1" and tool["turn_id"] == model_call["turn_id"]
+    assert usage["turn_id"] == model_call["turn_id"] and usage["item_id"] is None
+
+
 def test_codex_command_validation(tmp_path):
     assert codex_available({"workers": {"codex": {"command": [sys.executable]}}})
     assert not codex_available({"workers": {"codex": {"command": []}}})

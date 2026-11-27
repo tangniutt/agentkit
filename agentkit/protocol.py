@@ -115,6 +115,51 @@ class ToolResult:
 
 
 @dataclass
+class BackendCapabilities:
+    backend: str
+    event_protocol: str
+    headless: bool = False
+    streaming: bool = False
+    session_resume: bool = False
+    session_fork: bool = False
+    approval_events: bool = False
+    diff_events: bool = False
+    native_mcp: bool = False
+    oauth: bool = False
+    api_key: bool = False
+    usage_reporting: bool = False
+    cost_reporting: bool = False
+    credits_reporting: bool = False
+    cancel: bool = False
+    schema_version: str = SCHEMA_VERSION
+
+    def validate(self) -> "BackendCapabilities":
+        if self.schema_version != SCHEMA_VERSION:
+            raise ProtocolError(f"unsupported schema_version: {self.schema_version}")
+        if not isinstance(self.backend, str) or not self.backend.strip():
+            raise ProtocolError("backend must be a non-empty string")
+        if self.event_protocol not in ("internal", "jsonl", "sdk"):
+            raise ProtocolError("event_protocol must be internal, jsonl or sdk")
+        for name in ("headless", "streaming", "session_resume", "session_fork", "approval_events",
+                     "diff_events", "native_mcp", "oauth", "api_key", "usage_reporting",
+                     "cost_reporting", "credits_reporting", "cancel"):
+            if not isinstance(getattr(self, name), bool):
+                raise ProtocolError(f"{name} must be boolean")
+        return self
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "BackendCapabilities":
+        allowed = {"backend", "event_protocol", "headless", "streaming", "session_resume", "session_fork",
+                   "approval_events", "diff_events", "native_mcp", "oauth", "api_key", "usage_reporting",
+                   "cost_reporting", "credits_reporting", "cancel", "schema_version"}
+        _keys(data, allowed, {"backend", "event_protocol"})
+        return cls(**{k: data[k] for k in allowed if k in data}).validate()
+
+
+@dataclass
 class TaskSpec:
     goal: str
     acceptance: dict
@@ -346,6 +391,9 @@ class Event:
     goal_id: str | None = None
     task_id: str | None = None
     run_id: str | None = None
+    session_id: str | None = None
+    turn_id: str | None = None
+    item_id: str | None = None
     component: str | None = None
     step: int | None = None
     duration: float | None = None
@@ -361,6 +409,10 @@ class Event:
             raise ProtocolError("ts must be non-negative number")
         if self.retryable is not None and not isinstance(self.retryable, bool):
             raise ProtocolError("retryable must be boolean or null")
+        for name in ("session_id", "turn_id", "item_id"):
+            value = getattr(self, name)
+            if value is not None and (not isinstance(value, str) or not value):
+                raise ProtocolError(f"{name} must be a non-empty string or null")
         return self
 
     def to_dict(self) -> dict:
@@ -369,6 +421,7 @@ class Event:
     @classmethod
     def from_dict(cls, data: dict) -> "Event":
         allowed = {"schema_version", "event_id", "ts", "type", "from_state", "to_state", "goal_id", "task_id",
-                   "run_id", "component", "step", "duration", "error_code", "retryable", "artifact"}
+                   "run_id", "session_id", "turn_id", "item_id", "component", "step", "duration",
+                   "error_code", "retryable", "artifact"}
         _keys(data, allowed, {"event_id", "ts", "type"})
         return cls(**{k: data[k] for k in allowed if k in data}).validate()

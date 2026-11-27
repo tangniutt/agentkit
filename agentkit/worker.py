@@ -236,6 +236,9 @@ class Worker:
         self.usd = float(prior.get("usd") or 0.0)
         self.rounds = int(prior.get("rounds") or 0)
         self.start_round = self.rounds
+        self.session_id = f"builtin:{task.get('id', 'task')}"
+        self.turn_id = ""
+        self.item_id = ""
         self.compactions = 0
         self.repairs = 0
         self.denied: list = []
@@ -259,6 +262,11 @@ class Worker:
         self.style_after_chars = int(self.ccfg.get("style_after_chars", STYLE_AFTER_CHARS))
         self.style_at: Optional[str] = None  # "start" | "round N" | None (never sent)
 
+    def capabilities(self) -> dict:
+        from .backends import builtin_capabilities
+
+        return builtin_capabilities()
+
     # ---------------------------------------------------------- helpers
     def stats(self) -> dict:
         return {"rounds": self.rounds, "tokens_in": self.tokens_in, "tokens_out": self.tokens_out,
@@ -267,6 +275,9 @@ class Worker:
 
     def _ev(self, event: str, component: str, duration=None, error_code=None, **extra):
         self.last_component, self.last_step = component, self.rounds
+        extra.setdefault("session_id", self.session_id)
+        extra.setdefault("turn_id", self.turn_id or None)
+        extra.setdefault("item_id", self.item_id or None)
         if self.events is not None:
             self.events.emit(event, step=self.rounds, component=component, duration=duration, error_code=error_code, **extra)
 
@@ -501,6 +512,8 @@ class Worker:
             if self.budget_tokens and self.tokens_in + self.tokens_out + self.est_tokens() > self.budget_tokens:
                 return Outcome("stopped", "token budget would be exceeded by the next call", stopped="budget")
             self.rounds += 1
+            self.turn_id = f"{self.session_id}:turn:{self.rounds}"
+            self.item_id = ""
             tq = time.monotonic()
             try:
                 resp = self.client.chat(self.messages, self.tools)
@@ -590,6 +603,7 @@ class Worker:
             finished = None
             new_info = False
             for tc, name, args in prepared:
+                self.item_id = str(tc.get("id") or self.item_id)
                 stop = self.check_stop()
                 if stop:
                     # still answer the call so the transcript stays well-formed
