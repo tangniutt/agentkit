@@ -141,7 +141,7 @@ SPEC: dict = {
                      "ex": "agentkit debug-bundle t1a2b3c"},
     "feedback": {"do": "draft only; --improve adds evidence; dedup first",
                  "out": "posted(false),title,url,search_first,missing?,body", "err": ["AK-LOGS-UNKNOWN", "AK-USAGE"], "fx": ["ro"],
-                 "ex": "agentkit feedback --idea x"},
+                 "ex": "agentkit feedback --improve x"},
     "uninstall": {"do": "remove package/config/data/worktrees; dry run", "out": "plan{repos,user_paths,package,dry_run,hint}|uninstalled,repos,package,never_touched",
                   "err": ["AK-TASK-STATE"], "fx": ["destructive"], "ex": "agentkit uninstall --this-repo"},
     "release": {"do": "artifacts/signatures; never publishes",

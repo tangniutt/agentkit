@@ -6,7 +6,7 @@ AgentKit: token-frugal coding tools for AI agents + optional cheap worker with i
 
 Global options: --budget N (output tokens, default 2000), --human (text), --root DIR; anywhere on the line.
 
-JSON form: `agentkit manual` (overview, ~1805 tokens), `agentkit manual <command>` (one command), `agentkit manual --all` (everything, ~4970 tokens).
+JSON form: `agentkit manual` (overview, ~1805 tokens), `agentkit manual <command>` (one command), `agentkit manual --all` (everything, ~4971 tokens).
 
 ## Quick start (supervisor)
 
@@ -982,7 +982,7 @@ draft only; --improve adds evidence; dedup first
 - **Output `data`:** `posted(false),title,url,search_first,missing?,body`
 - **Errors:** `AK-LOGS-UNKNOWN` (no events for that run / task id), `AK-USAGE` (bad command line arguments)
 - **Side effects:** ro
-- **Example:** `agentkit feedback --idea x`
+- **Example:** `agentkit feedback --improve x`
 
 ### `agentkit release`
 
