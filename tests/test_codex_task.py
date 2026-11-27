@@ -7,7 +7,7 @@ import sys
 
 import pytest
 
-from agentkit import sandbox
+from agentkit import credentials, sandbox
 from conftest import git
 from test_m2_tasks import CHECK, create, project, tjson, wait
 
@@ -15,6 +15,7 @@ pytestmark = pytest.mark.skipif(os.name != "posix", reason="dispatch mode requir
 
 
 def _repo(repo, ak, script: str, *, allow_unsandboxed=True, prices=True, sandbox_off=False):
+    ak.env["CODEX_TEST_KEY"] = "codex-test-key"
     (repo / "calc.py").write_text("def add(a, b):\n    return a - b\n", encoding="utf-8")
     (repo / "tests").mkdir()
     (repo / "tests" / "test_calc.py").write_text(
@@ -31,7 +32,7 @@ def _repo(repo, ak, script: str, *, allow_unsandboxed=True, prices=True, sandbox
     cfg.write_text(
         "[workers.codex]\n"
         f"command = [{json.dumps(sys.executable)}, {json.dumps(str(fake))}]\n"
-        "model = \"fake-model\"\n"
+        "model = \"fake-model\"\nkey_env = \"CODEX_TEST_KEY\"\n"
         f"allow_unsandboxed = {str(allow_unsandboxed).lower()}\n"
         f"price_in = {1 if prices else 0}\n"
         f"price_out = {1 if prices else 0}\n"
@@ -65,6 +66,10 @@ def test_codex_task_end_to_end_without_agentkit_model(ak, repo):
     assert task["sandbox_status"]["state"] == "completed"
     assert task["sandbox_status"]["provider"] == "bubblewrap"
     assert task["sandbox_status"]["capabilities"]["snapshot_kinds"] == ["git", "files"]
+    binding = credentials.load_binding(repo, task["credential_binding_id"])
+    assert binding["status"] == "closed" and binding["session_id"] == "thread-1"
+    audit = [json.loads(line) for line in (repo / ".agentkit/state/credentials/audit.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert {"granted", "bound", "used", "closed"} <= {row["action"] for row in audit}
     assert task["tokens"] == 120 and task["cost_known"] is True
     receipt = json.loads((repo / ".agentkit" / "tasks" / tid / "receipt.json").read_text(encoding="utf-8"))
     assert receipt["worker"]["backend"] == "codex"

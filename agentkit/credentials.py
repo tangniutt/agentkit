@@ -50,20 +50,25 @@ def _load(path: Path, cls):
     return cls.from_dict(data)
 
 
+def credential_id(*, provider: str, backend: str, auth_kind: str, ref_kind: str, ref: str) -> str:
+    return sha256({"provider": provider, "backend": backend, "auth_kind": auth_kind,
+                   "ref_kind": ref_kind, "ref": ref})[:24]
+
+
 def issue_grant(root: Path, *, provider: str, backend: str, auth_kind: str, ref_kind: str, ref: str,
                 owner: str = "user", scopes: list[str] | None = None, expires_at: float | None = None,
                 policy_sha256: str = "", now: float | None = None) -> dict:
     issued = time.time() if now is None else now
-    credential_id = sha256({"provider": provider, "backend": backend, "auth_kind": auth_kind,
-                            "ref_kind": ref_kind, "ref": ref})[:24]
-    grant = CredentialGrant(grant_id=_new_id("cg"), credential_id=credential_id, provider=provider,
+    credential = credential_id(provider=provider, backend=backend, auth_kind=auth_kind,
+                               ref_kind=ref_kind, ref=ref)
+    grant = CredentialGrant(grant_id=_new_id("cg"), credential_id=credential, provider=provider,
                             backend=backend, auth_kind=auth_kind, ref_kind=ref_kind, ref=ref, owner=owner,
                             scopes=scopes or ["model:call"], issued_at=issued, expires_at=expires_at,
                             policy_sha256=policy_sha256)
     data = grant.to_dict()
     with file_lock(_base(root) / ".lock"):
         _write(_path(root, "grant", data["grant_id"]), data)
-        audit(root, "granted", "allow", owner, credential_id=credential_id, grant_id=data["grant_id"],
+        audit(root, "granted", "allow", owner, credential_id=credential, grant_id=data["grant_id"],
               now=issued, lock=False)
     return data
 
@@ -82,6 +87,33 @@ def create_binding(root: Path, *, grant_id: str, task_id: str, run_id: str, back
         audit(root, "bound", "allow", grant["owner"], credential_id=grant["credential_id"],
               grant_id=grant_id, binding_id=data["binding_id"], task_id=task_id, run_id=run_id,
               session_id=session_id, now=data["created_at"], lock=False)
+    return data
+
+
+def update_binding(root: Path, binding_id: str, *, session_id: str | None = None,
+                   status: str | None = None, expires_at: float | None = None) -> dict:
+    data = load_binding(root, binding_id)
+    if session_id is not None:
+        data["session_id"] = session_id
+    if status is not None:
+        data["status"] = status
+    if expires_at is not None:
+        data["expires_at"] = expires_at
+    data = CredentialBinding.from_dict(data).to_dict()
+    with file_lock(_base(root) / ".lock"):
+        _write(_path(root, "binding", binding_id), data)
+    return data
+
+
+def close_binding(root: Path, binding_id: str, *, reason_code: str = "run_finished",
+                  now: float | None = None) -> dict:
+    data = load_binding(root, binding_id)
+    if data["status"] == "active":
+        data = update_binding(root, binding_id, status="closed")
+        grant = load_grant(root, data["grant_id"])
+        audit(root, "closed", "allow", grant["owner"], credential_id=grant["credential_id"],
+              grant_id=data["grant_id"], binding_id=binding_id, task_id=data["task_id"], run_id=data["run_id"],
+              session_id=data["session_id"], reason_code=reason_code, now=now)
     return data
 
 

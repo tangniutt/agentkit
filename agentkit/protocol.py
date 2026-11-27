@@ -376,7 +376,7 @@ class CredentialAudit:
         for name in ("audit_id", "actor"):
             if not isinstance(getattr(self, name), str) or not getattr(self, name):
                 raise ProtocolError(f"{name} is required")
-        if self.action not in ("granted", "bound", "used", "revoked", "denied"):
+        if self.action not in ("granted", "bound", "used", "closed", "revoked", "denied"):
             raise ProtocolError("unsupported audit action")
         if self.decision not in ("allow", "deny"):
             raise ProtocolError("unsupported audit decision")

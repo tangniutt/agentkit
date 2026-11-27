@@ -257,7 +257,15 @@ def schedule(root: Path) -> None:
         for t in ts:
             if running >= concurrency(cfg):
                 break
+            _finalize_task_credential(root, t)
             if t.get("status") != "queued":
+                continue
+            credential_error = _ensure_task_credential(root, cfg, t, allow_bind=True)
+            if credential_error:
+                t.update(status="failed", reason=credential_error, ended=time.time(), error_code="AK-CONFIG",
+                         component="credentials")
+                _close_task_credential(root, t, "credential_denied")
+                save(root, t)
                 continue
             d = tpath(root, t["id"])
             logf = open(d / "worker.log", "ab")
@@ -369,6 +377,7 @@ def schedule(root: Path) -> None:
                                  ended=time.time(), error_code="AK-TASK-STATE", component="task")
                         save(root, t)
                         _set_sandbox_state(root, t["id"], "failed", lock=False)
+                        _close_task_credential(root, t, "sandbox_failed")
                         continue
                 except AKError as e:
                     _stop_proxy(proxy_proc)
@@ -376,6 +385,7 @@ def schedule(root: Path) -> None:
                     t.update(status="failed", reason=e.what, ended=time.time(), error_code=e.code, component="task")
                     save(root, t)
                     _set_sandbox_state(root, t["id"], "failed", lock=False)
+                    _close_task_credential(root, t, "sandbox_failed")
                     continue
                 except ValueError as e:
                     _stop_proxy(proxy_proc)
@@ -383,6 +393,7 @@ def schedule(root: Path) -> None:
                     t.update(status="failed", reason=str(e), ended=time.time(), error_code="AK-CONFIG", component="task")
                     save(root, t)
                     _set_sandbox_state(root, t["id"], "failed", lock=False)
+                    _close_task_credential(root, t, "sandbox_failed")
                     continue
             if sandboxed:
                 env["AGENTKIT_SANDBOX"] = "1"
@@ -390,6 +401,7 @@ def schedule(root: Path) -> None:
                     env["AGENTKIT_NETWORK_MODE"] = "allowlist"
             _set_sandbox_state(root, t["id"], "prepared" if sandboxed else "pending",
                                "bubblewrap" if sandboxed else "none", lock=False)
+            _record_task_credential_use(root, t)
             try:
                 proc = subprocess.Popen(
                     command, cwd=str(root), stdin=subprocess.DEVNULL, stdout=logf, stderr=logf,
@@ -626,6 +638,176 @@ def _check_credential_policy(cfg: dict, backend: str, wcfg: dict, root: Path, co
         _check_backend_config_dir(path, root, "Cursor", allowed)
 
 
+def _credential_descriptor(cfg: dict, backend: str, model: str, root: Path) -> dict | None:
+    from . import credentials as C
+    from .backends import codex_config, cursor_config, opencode_config, opencode_state_paths, qoder_config, qoder_config_dir
+    from .models import all_models, pick
+
+    provider, auth_kind, ref_kind, ref = backend, "api_key", "env", ""
+    if backend == "builtin":
+        if not all_models(cfg):
+            return None
+        spec = pick(cfg, model)
+        if not spec.key_env or not os.environ.get(spec.key_env):
+            return None
+        provider, ref = spec.name, spec.key_env
+    else:
+        wcfg = (codex_config(cfg) if backend == "codex" else
+                opencode_config(cfg) if backend == "opencode" else
+                qoder_config(cfg) if backend == "qoder" else cursor_config(cfg))
+        if backend == "qoder":
+            dedicated = str(wcfg.get("key_env") or "")
+            if dedicated and os.environ.get(dedicated):
+                auth_kind, ref = "pat", dedicated
+            elif os.environ.get("QODER_PERSONAL_ACCESS_TOKEN"):
+                auth_kind, ref = "pat", "QODER_PERSONAL_ACCESS_TOKEN"
+            elif saved_credentials_allowed(cfg):
+                auth_kind, ref_kind, ref = "saved_login", "config_dir", str(qoder_config_dir({"workers": {"qoder": wcfg}}, root))
+            else:
+                return None
+        elif backend == "opencode":
+            key_env = str(wcfg.get("key_env") or "")
+            if key_env and os.environ.get(key_env):
+                ref = key_env
+                provider = model.split("/", 1)[0] if "/" in model else backend
+            elif wcfg.get("allow_account_login", False) and saved_credentials_allowed(cfg):
+                paths = opencode_state_paths(cfg)
+                if not paths:
+                    return None
+                auth_kind, ref_kind, ref = "saved_login", "config_dir", str(paths[0])
+                provider = model.split("/", 1)[0] if "/" in model else backend
+            else:
+                return None
+        elif backend == "cursor":
+            ref = str(wcfg.get("key_env") or "CURSOR_API_KEY")
+            if not os.environ.get(ref):
+                return None
+        else:
+            ref = str(wcfg.get("key_env") or "")
+            if not ref or not os.environ.get(ref):
+                return None
+    policy = {"security": cfg.get("_user_security") or {}, "sandbox": cfg.get("sandbox") or {},
+              "backend": backend, "auth_kind": auth_kind, "ref_kind": ref_kind, "ref": ref}
+    return {"provider": provider, "backend": backend, "auth_kind": auth_kind, "ref_kind": ref_kind,
+            "ref": ref, "credential_id": C.credential_id(provider=provider, backend=backend,
+                                                          auth_kind=auth_kind, ref_kind=ref_kind, ref=ref),
+            "policy_sha256": C.sha256(policy), "scopes": ["model:call"]}
+
+
+def _bind_task_credential(task: dict, cfg: dict, backend: str, model: str, root: Path,
+                          session_id: str = "") -> dict:
+    from . import credentials as C
+
+    descriptor = _credential_descriptor(cfg, backend, model, root)
+    binding_id = str(task.get("credential_binding_id") or "")
+    if binding_id:
+        try:
+            binding = C.load_binding(root, binding_id)
+            grant = C.load_grant(root, binding["grant_id"])
+            if (descriptor and C.is_binding_active(root, binding_id) and
+                    binding["backend"] == backend and grant["credential_id"] == descriptor["credential_id"]):
+                if session_id and session_id != binding.get("session_id"):
+                    C.update_binding(root, binding_id, session_id=session_id)
+                return {"credential_grant_id": grant["grant_id"], "credential_binding_id": binding_id}
+        except (OSError, ValueError):
+            pass
+        try:
+            C.close_binding(root, binding_id, reason_code="credential_rebound")
+        except (OSError, ValueError):
+            pass
+    if not descriptor:
+        return {}
+    grant = C.issue_grant(root, owner="user", **{k: descriptor[k] for k in
+                                                  ("provider", "backend", "auth_kind", "ref_kind", "ref",
+                                                   "scopes", "policy_sha256")})
+    binding = C.create_binding(root, grant_id=grant["grant_id"], task_id=task["id"], run_id=task["id"],
+                               backend=backend, session_id=session_id)
+    return {"credential_grant_id": grant["grant_id"], "credential_binding_id": binding["binding_id"]}
+
+
+def _task_credential_error(task: dict, cfg: dict, backend: str, model: str, root: Path) -> str | None:
+    from . import credentials as C
+
+    descriptor = _credential_descriptor(cfg, backend, model, root)
+    binding_id = str(task.get("credential_binding_id") or "")
+    if not descriptor:
+        return None
+    if not binding_id:
+        reason = "credential binding missing"
+    else:
+        try:
+            binding = C.load_binding(root, binding_id)
+            grant = C.load_grant(root, binding["grant_id"])
+            if not C.is_binding_active(root, binding_id):
+                reason = "credential grant or binding is revoked or expired"
+            elif binding["backend"] != backend or grant["credential_id"] != descriptor["credential_id"]:
+                reason = "credential configuration changed; resume or handoff the task again"
+            else:
+                return None
+        except (OSError, ValueError):
+            reason = "credential binding is unreadable"
+    try:
+        C.audit(root, "denied", "deny", "user", grant_id=str(task.get("credential_grant_id") or ""),
+                binding_id=binding_id, task_id=task["id"], run_id=task["id"],
+                session_id=str(task.get("backend_session") or ""), reason_code="credential_denied")
+    except (OSError, ValueError):
+        pass
+    return reason
+
+
+def _ensure_task_credential(root: Path, cfg: dict, task: dict, *, allow_bind: bool = False) -> str | None:
+    backend = str(task.get("backend") or "builtin")
+    if allow_bind and not task.get("credential_binding_id") and _credential_descriptor(cfg, backend, task.get("model", ""), root):
+        task.update(_bind_task_credential(task, cfg, backend, task.get("model", ""), root,
+                                          str(task.get("backend_session") or "")))
+        save(root, task)
+    return _task_credential_error(task, cfg, backend, task.get("model", ""), root)
+
+
+def _record_task_credential_use(root: Path, task: dict) -> None:
+    from . import credentials as C
+
+    binding_id = str(task.get("credential_binding_id") or "")
+    if not binding_id:
+        return
+    try:
+        binding = C.load_binding(root, binding_id)
+        grant = C.load_grant(root, binding["grant_id"])
+        C.audit(root, "used", "allow", grant["owner"], credential_id=grant["credential_id"],
+                grant_id=grant["grant_id"], binding_id=binding_id, task_id=task["id"], run_id=task["id"],
+                session_id=binding.get("session_id") or str(task.get("backend_session") or ""))
+    except (OSError, ValueError):
+        pass
+
+
+def _close_task_credential(root: Path, task: dict, reason_code: str = "run_finished") -> None:
+    from . import credentials as C
+
+    binding_id = str(task.get("credential_binding_id") or "")
+    if binding_id:
+        try:
+            C.close_binding(root, binding_id, reason_code=reason_code)
+        except (OSError, ValueError):
+            pass
+
+
+def _finalize_task_credential(root: Path, task: dict) -> None:
+    from . import credentials as C
+
+    binding_id = str(task.get("credential_binding_id") or "")
+    if not binding_id:
+        return
+    try:
+        binding = C.load_binding(root, binding_id)
+        session_id = str(task.get("backend_session") or "")
+        if session_id and session_id != binding.get("session_id"):
+            C.update_binding(root, binding_id, session_id=session_id)
+        if task.get("status") in ("done", "failed", "cancelled"):
+            C.close_binding(root, binding_id, reason_code="run_finished")
+    except (OSError, ValueError):
+        pass
+
+
 def create(ctx: Ctx, a) -> dict:
     from . import models as M
 
@@ -774,6 +956,7 @@ def create(ctx: Ctx, a) -> dict:
         t["sandbox_status"] = SandboxStatus(sandbox_id=f"sandbox-{tid}", task_id=tid, provider=provider,
                                             state="pending",
                                             capabilities=S.capabilities() if provider == "bubblewrap" else S.no_sandbox_capabilities()).to_dict()
+        t.update(_bind_task_credential(t, cfg, backend, model_name, root))
         save(root, t)
         EventLog(root, tid, "task").emit("created", step=0, model=model_name or backend, backend=backend,
                                          cli_run=ctx.run_id or None)
@@ -846,6 +1029,14 @@ def run_task(root: Path, tid: str) -> None:
 
         atexit.register(stop_relay)
     backend = t.get("backend", "builtin")
+    credential_error = _ensure_task_credential(root, cfg, t, allow_bind=True)
+    if credential_error:
+        update(root, tid, status="failed", reason=credential_error, error_code="AK-CONFIG",
+               component="credentials", ended=time.time())
+        events.emit("credential_denied", step=t.get("rounds", 0), component="credentials",
+                    error_code="AK-CONFIG", why=credential_error)
+        _close_task_credential(root, t, "credential_denied")
+        return
     original_env = dict(os.environ)
     spec = None
     if backend in ("codex", "opencode", "qoder", "cursor"):
@@ -977,6 +1168,14 @@ def run_task(root: Path, tid: str) -> None:
         events.emit("resumed", step=worker.rounds, resume=t["resumes"])
     code = None
     outcome = None
+    credential_error = _ensure_task_credential(root, cfg, t)
+    if credential_error:
+        update(root, tid, status="failed", reason=credential_error, error_code="AK-CONFIG",
+               component="credentials", ended=time.time())
+        events.emit("credential_denied", step=worker.rounds, component="credentials",
+                    error_code="AK-CONFIG", why=credential_error)
+        _close_task_credential(root, t, "credential_denied")
+        return
     try:
         outcome = worker.run(brief_txt, resume=resume_txt)
         status, reason, stopped, claim, code = outcome.status, outcome.reason, outcome.stopped, outcome.claim, outcome.code
@@ -1774,6 +1973,8 @@ def resume(ctx: Ctx, a, handoff: bool = False) -> dict:
             if target_backend != old_backend:
                 t.pop("backend_session", None)
                 t.pop("backend_transport", None)
+        t.update(_bind_task_credential(t, ctx.config, target_backend, model_name, root,
+                                       str(t.get("backend_session") or "")))
         d = tpath(root, tid)
         for f in ("report.json", "cancel"):
             (d / f).unlink(missing_ok=True)
@@ -1797,12 +1998,14 @@ def cancel(root: Path, tid: str) -> dict:
     with locked(root):
         t = load(root, tid)
         if t["status"] in TERMINAL:
+            _close_task_credential(root, t, "cancelled")
             return compact_status(root, t)
         (tpath(root, tid) / "cancel").write_text("1")
         if t["status"] == "queued":
             t.update(status="cancelled", reason="cancelled before start", ended=time.time(), error_code="AK-TASK-CANCELLED",
                      component="task", last_step=0)
             save(root, t)
+            _close_task_credential(root, t, "cancelled")
             return compact_status(root, t)
         pid = t.get("pid")
     if pid and pid_alive(pid):
@@ -1834,4 +2037,6 @@ def cancel(root: Path, tid: str) -> dict:
             if t["status"] in TERMINAL:
                 break
             time.sleep(0.1)
+    if t["status"] == "cancelled":
+        _close_task_credential(root, t, "cancelled")
     return compact_status(root, t)

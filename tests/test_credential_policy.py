@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from conftest import git
-from agentkit import tasks
+from agentkit import credentials, tasks
 from agentkit.backends import opencode_state_paths
 from agentkit.config import load_config, saved_credentials_allowed
 from agentkit.core import AKError, Ctx
@@ -216,3 +216,53 @@ def test_backend_config_dir_rejects_tracked_source_directory(tmp_path, monkeypat
     with pytest.raises(AKError) as error:
         tasks._check_credential_policy(cfg, "qoder", {"config_dir": "src"}, root)
     assert error.value.code == "AK-CONFIG" and "tracked" in error.value.what
+
+
+def test_task_credential_revocation_blocks_execution(tmp_path, monkeypatch):
+    monkeypatch.setenv("FAKE_KEY", "selected-model-key")
+    cfg = {"models": {"fake": {"base_url": "http://127.0.0.1:1/v1", "key_env": "FAKE_KEY"}}}
+    task = {"id": "t123abc", "backend": "builtin", "model": "fake"}
+    task.update(tasks._bind_task_credential(task, cfg, "builtin", "fake", tmp_path))
+    binding_id = task["credential_binding_id"]
+    assert credentials.is_binding_active(tmp_path, binding_id)
+    credentials.revoke(tmp_path, target_kind="grant", target_id=task["credential_grant_id"],
+                       reason_code="user_revoked", reason="revoke", now=10.0)
+    error = tasks._ensure_task_credential(tmp_path, cfg, task)
+    assert error and "revoked" in error
+    rows = [json.loads(line) for line in (tmp_path / ".agentkit/state/credentials/audit.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert rows[-1]["action"] == "denied" and rows[-1]["decision"] == "deny"
+
+
+def test_schedule_rejects_revoked_credential_before_injection(tmp_path, monkeypatch):
+    monkeypatch.setenv("FAKE_KEY", "selected-model-key")
+    cfg = {"models": {"fake": {"base_url": "http://127.0.0.1:1/v1", "key_env": "FAKE_KEY"}},
+           "sandbox": {"mode": "off"}}
+    (tmp_path / ".agentkit").mkdir()
+    (tmp_path / ".agentkit/config.toml").write_text(
+        '[sandbox]\nmode = "off"\n[models.fake]\nbase_url = "http://127.0.0.1:1/v1"\nkey_env = "FAKE_KEY"\n',
+        encoding="utf-8")
+    task = {"id": "t123abc", "backend": "builtin", "model": "fake", "status": "queued",
+            "worktree": ".agentkit/worktrees/t123abc", "base": "HEAD", "branch": "agentkit/t123abc",
+            "budget": {"tokens": 0, "usd": 0, "minutes": 5}, "hash": "h"}
+    task.update(tasks._bind_task_credential(task, cfg, "builtin", "fake", tmp_path))
+    tasks.save(tmp_path, task)
+    credentials.revoke(tmp_path, target_kind="binding", target_id=task["credential_binding_id"],
+                       reason_code="user_revoked", reason="revoke", now=10.0)
+    monkeypatch.setattr(tasks, "selected_worker_env", lambda *_args: (_ for _ in ()).throw(AssertionError("injected")))
+    tasks.schedule(tmp_path)
+    failed = tasks.load(tmp_path, "t123abc")
+    assert failed["status"] == "failed" and "revoked" in failed["reason"]
+
+
+def test_task_credential_rebind_closes_previous_binding(tmp_path, monkeypatch):
+    monkeypatch.setenv("FAKE_KEY", "selected-model-key")
+    monkeypatch.setenv("OTHER_KEY", "other-model-key")
+    cfg = {"models": {"fake": {"base_url": "http://127.0.0.1:1/v1", "key_env": "FAKE_KEY"}}}
+    task = {"id": "t123abc", "backend": "builtin", "model": "fake"}
+    task.update(tasks._bind_task_credential(task, cfg, "builtin", "fake", tmp_path))
+    first = task["credential_binding_id"]
+    cfg["models"]["fake"]["key_env"] = "OTHER_KEY"
+    task.update(tasks._bind_task_credential(task, cfg, "builtin", "fake", tmp_path))
+    assert task["credential_binding_id"] != first
+    assert credentials.load_binding(tmp_path, first)["status"] == "closed"
+    assert credentials.is_binding_active(tmp_path, task["credential_binding_id"])
