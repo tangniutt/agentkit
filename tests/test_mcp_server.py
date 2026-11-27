@@ -32,6 +32,8 @@ def _task(repo, tid: str, status: str = "queued"):
 
 
 def test_backend_arguments_map_to_cli():
+    assert _argv("agentkit_credential_show", {"target": "t123abc"}) == ["credential", "show", "t123abc"]
+    assert _argv("agentkit_credential_revoke", {"target": "cb_1"}) == ["credential", "revoke", "cb_1"]
     assert _argv("agentkit_task_create", {"goal": "x", "checks": ["pytest"], "backend": "codex"}) == [
         "task", "create", "x", "--check", "pytest", "--backend", "codex"]
     assert _argv("agentkit_task_handoff", {"id": "t123abc", "backend": "codex"}) == [
@@ -55,14 +57,19 @@ def test_mcp_legacy_initialize_and_current_tools(repo):
     ])
     assert len(out) == 2
     assert out[0]["result"]["protocolVersion"] == "2025-11-25"
-    names = {t["name"] for t in out[1]["result"]["tools"]}
+    tools = out[1]["result"]["tools"]
+    assert len(tools) == 34
+    names = {t["name"] for t in tools}
     assert {"agentkit_doctor", "agentkit_read", "agentkit_task_diff", "agentkit_task_answer",
+            "agentkit_credential_show", "agentkit_credential_revoke",
             "agentkit_task_handoff", "agentkit_goal_create", "agentkit_goal_run", "agentkit_goal_answer",
             "agentkit_code_search", "agentkit_code_defs", "agentkit_code_index"} <= names
     assert all(t["inputSchema"]["type"] == "object" and "outputSchema" in t for t in out[1]["result"]["tools"])
     schemas = {t["name"]: t["inputSchema"] for t in out[1]["result"]["tools"]}
     assert schemas["agentkit_task_create"]["properties"]["backend"]["enum"] == ["builtin", "codex", "opencode", "qoder", "cursor"]
     assert schemas["agentkit_task_handoff"]["properties"]["backend"]["enum"] == ["builtin", "codex", "opencode", "qoder", "cursor"]
+    assert schemas["agentkit_credential_show"]["required"] == ["target"]
+    assert schemas["agentkit_credential_revoke"]["required"] == ["target"]
 
 
 def test_mcp_tool_call_resource_and_errors(repo):
@@ -87,6 +94,27 @@ def test_mcp_tool_call_resource_and_errors(repo):
     assert capabilities["sandbox"]["capabilities"]["pause"] is False
     assert out[2]["error"]["code"] == -32602
     assert out[3]["error"]["code"] == -32601
+
+
+def test_mcp_credential_show_and_revoke(repo):
+    from agentkit import credentials, tasks
+
+    grant = credentials.issue_grant(repo, provider="openai", backend="builtin", auth_kind="api_key",
+                                    ref_kind="env", ref="OPENAI_API_KEY", now=1.0)
+    binding = credentials.create_binding(repo, grant_id=grant["grant_id"], task_id="t123abc",
+                                         run_id="t123abc", backend="builtin", now=2.0)
+    tasks.save(repo, {"id": "t123abc", "status": "queued", "credential_grant_id": grant["grant_id"],
+                      "credential_binding_id": binding["binding_id"]})
+    state = _state()
+    out = []
+    for request_id, name, target in ((1, "agentkit_credential_show", "t123abc"),
+                                     (2, "agentkit_credential_revoke", binding["binding_id"]),
+                                     (3, "agentkit_credential_show", binding["binding_id"])):
+        out.append(handle(repo, {"jsonrpc": "2.0", "id": request_id, "method": "tools/call",
+                                 "params": {**_meta(), "name": name, "arguments": {"target": target}}}, state))
+    assert out[0]["result"]["structuredContent"]["data"]["binding_active"] is True
+    assert out[1]["result"]["structuredContent"]["ok"] is True
+    assert out[2]["result"]["structuredContent"]["data"]["active"] is False
 
 
 def test_mcp_tool_failure_is_result_error(repo):

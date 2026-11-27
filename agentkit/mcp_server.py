@@ -69,6 +69,10 @@ TOOLS = [
           {"readOnlyHint": False, "destructiveHint": False}),
     _tool("agentkit_memory_search", "Search project memory by keyword.",
           {"query": {"type": "string"}}, ["query"], {"readOnlyHint": True}),
+    _tool("agentkit_credential_show", "Show non-secret credential grant/binding metadata for a task or id.",
+          {"target": {"type": "string"}}, ["target"], {"readOnlyHint": True}),
+    _tool("agentkit_credential_revoke", "Revoke a credential grant or task binding without exposing secret values.",
+          {"target": {"type": "string"}}, ["target"], {"readOnlyHint": False, "destructiveHint": True}),
     _tool("agentkit_task_create", "Create an isolated worker task with frozen fail-to-pass acceptance.",
           {"goal": {"type": "string"}, "checks": {"type": "array", "items": {"type": "string"}, "minItems": 1},
            "allow": {"type": "array", "items": {"type": "string"}}, "model": {"type": "string"},
@@ -191,6 +195,10 @@ def _argv(name: str, a: dict) -> list:
         return out
     if name == "agentkit_memory_search":
         return ["memory", "search", a["query"]]
+    if name == "agentkit_credential_show":
+        return ["credential", "show", a["target"]]
+    if name == "agentkit_credential_revoke":
+        return ["credential", "revoke", a["target"]]
     if name == "agentkit_task_create":
         out = ["task", "create", a["goal"]]
         for check in a["checks"]:

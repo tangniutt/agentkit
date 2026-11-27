@@ -785,7 +785,7 @@ draft → planned → running → verifying → completed
 
 提供：
 
-- tools：核心工具和高层 task/goal 工具；
+- tools：核心工具、高层 task/goal 工具，以及只读 `credential show` 与受控 `credential revoke`；
 - resources：report、receipt、diff、log、bundle；
 - notifications：状态变更、等待回答、需要决策；
 - capabilities：版本、平台、工具包、后端健康度；
