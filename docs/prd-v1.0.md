@@ -802,7 +802,7 @@ draft → planned → running → verifying → completed
 
 1. **默认/当前**：API Key 环境变量 + Linux bubblewrap + FD 传递 + 独立验收去钥；保存登录态关闭。
 2. **受控 pilot**：用户显式开启保存登录态，仅对选定后端与公开或明确授权仓库开放；记录 Grant/Binding/Revocation/Audit，演练运行中撤销与取消。
-3. **生产候选**：完成真实主管 Agent、长 Goal 中断恢复、外部工人与公开 benchmark 验证后，才允许有限真实流量。
+3. **生产候选**：完成本地 Goal 中断恢复、运行中撤销/取消、离线 benchmark 与 CI 后可作为有限发布候选；真实主管 Agent、长任务与外部账号由用户后续接 Muse 验证，问题进入反馈回路，不伪造真实账号通过结论。
 4. **发布门禁**：固定版本、远端签名/来源证明、干净安装与回滚演练全部通过后发布；任何一步缺证据都保持“生产候选”。
 
 ## 7.10 MCP 接口
