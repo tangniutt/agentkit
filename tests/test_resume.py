@@ -77,6 +77,36 @@ def test_interrupted_task_resumes(ak, repo, fake):
     assert s["status"] == "done" and s["verdict"] == "pass", s
 
 
+def test_goal_recovers_after_worker_interruption(ak, repo, fake):
+    project(repo, ak, fake)
+    fake.add("[GOAL-INT]", [{"call": "read", "args": {"spec": "calc.py"}},
+                            {"call": "read", "args": {"spec": "calc.py"}, "before": [{"sleep": 30}]}])
+    created = ak("goal", "create", "fix add [GOAL-INT]", "--check", CHECK, "--max-iterations", "2")
+    assert created["ok"], created
+    gid, tid = created["data"]["id"], created["data"]["task_id"]
+    started = ak("goal", "run", gid, "--timeout", "1")
+    assert started["ok"] and started["data"]["status"] == "running", started
+    pid = None
+    for _ in range(100):
+        task = tjson(repo, tid)
+        if task["status"] == "running" and task.get("rounds", 0) >= 1 and task.get("pid"):
+            pid = task["pid"]
+            break
+        time.sleep(0.1)
+    assert pid
+    os.killpg(pid, signal.SIGKILL)
+    fake.add(RESUMED, [{"call": "edit", "args": {"path": "calc.py", "old": "a - b", "new": "a + b"}},
+                       {"call": "finish", "args": {"summary": "fixed after Goal recovery"}}])
+    done = ak("goal", "run", gid, "--timeout", "60")
+    assert done["ok"] and done["data"]["status"] == "completed" and done["data"]["verdict"] == "pass", done
+    goal = json.loads((repo / ".agentkit/goals" / gid / "goal.json").read_text(encoding="utf-8"))
+    task = tjson(repo, tid)
+    assert goal["iterations"] >= 1 and any(h["task_status"] == "interrupted" for h in goal["history"])
+    assert task["resumes"] == 1 and task["worktree"] == f".agentkit/worktrees/{tid}"
+    report = json.loads((repo / ".agentkit" / "tasks" / tid / "report.json").read_text(encoding="utf-8"))
+    assert task["verdict"] == "pass" and goal["receipt"] == report["receipt"]
+
+
 def test_resume_refusals_and_budget(ak, repo, fake):
     project(repo, ak, fake)
     fake.add("[RES3]", [{"call": "read", "args": {"spec": "calc.py"}, "usage": {"prompt_tokens": 5000, "completion_tokens": 10}}])

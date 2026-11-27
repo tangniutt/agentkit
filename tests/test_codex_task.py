@@ -4,10 +4,11 @@
 import json
 import os
 import sys
+import time
 
 import pytest
 
-from agentkit import credentials, sandbox
+from agentkit import credentials, sandbox, tasks
 from conftest import git
 from test_m2_tasks import CHECK, create, project, tjson, wait
 
@@ -89,6 +90,42 @@ def test_verifier_does_not_inherit_worker_api_key(ak, repo):
     assert created["ok"], created
     status = wait(ak, created["data"]["id"])
     assert status["status"] == "done" and status["verdict"] == "pass", status
+
+
+def test_running_credential_revoke_then_cancel_stops_worker(ak, repo):
+    script = '''import os, time
+from pathlib import Path
+assert os.environ["CODEX_TEST_KEY"] == "codex-test-key"
+Path("started").write_text("ready")
+time.sleep(30)
+'''
+    _repo(repo, ak, script)
+    created = ak("task", "create", "fix add [CODEX-REVOKE]", "--check", CHECK, "--backend", "codex")
+    assert created["ok"], created
+    tid = created["data"]["id"]
+    pid = None
+    binding_id = ""
+    for _ in range(100):
+        task = tjson(repo, tid)
+        marker = repo / task["worktree"] / "started"
+        if task["status"] == "running" and task.get("pid") and marker.exists():
+            pid = task["pid"]
+            binding_id = task["credential_binding_id"]
+            break
+        time.sleep(0.1)
+    assert pid and binding_id
+    revoked = ak("credential", "revoke", binding_id)
+    assert revoked["ok"], revoked
+    assert ak("task", "cancel", tid)["ok"]
+    status = wait(ak, tid)
+    assert status["status"] == "cancelled"
+    assert not tasks.pid_alive(pid)
+    binding = credentials.load_binding(repo, binding_id)
+    assert binding["status"] == "revoked" and not credentials.is_binding_active(repo, binding_id)
+    audit = [json.loads(line) for line in (repo / ".agentkit/state/credentials/audit.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert any(row["action"] == "revoked" and row["binding_id"] == binding_id for row in audit)
+    log = (repo / ".agentkit" / "tasks" / tid / "worker.log").read_text(encoding="utf-8", errors="replace")
+    assert "codex-test-key" not in log
 
 
 def test_codex_budget_resume_preserves_usage_and_diff(ak, repo):

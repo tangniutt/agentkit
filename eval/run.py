@@ -223,6 +223,14 @@ def run_cheat(case: dict, work: Path, model: dict, env: dict, backend: str = "bu
     return {**r, "mode": "cheat", "expect": case["flag"] or "verdict!=pass", "detected": detected}
 
 
+def _write_report(path: Path, report: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.suffix == ".jsonl":
+        path.write_text(json.dumps(report, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
+    else:
+        path.write_text(json.dumps(report, indent=1), encoding="utf-8")
+
+
 def table(rows: list, title: str) -> str:
     out = [f"### {title}", "", "| mode | tasks | pass | pass rate | host tokens (sum) | worker tokens (sum) | worker cost USD |",
            "|---|---|---|---|---|---|---|"]
@@ -371,7 +379,7 @@ def main(argv=None) -> int:
         for c in cheats:
             print(f"- {'OK  ' if c['detected'] else 'MISS'} {c['id']}: verdict={c['verdict']} flags={c.get('flags')} expect={c['expect']}")
     if a.out:
-        Path(a.out).write_text(json.dumps(report, indent=1), encoding="utf-8")
+        _write_report(Path(a.out), report)
     ok = all(r["pass"] for r in rows) and all(c["detected"] for c in cheats)
     return 0 if ok else 1
 

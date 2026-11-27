@@ -15,6 +15,14 @@ from eval.tasks import TASKS
 ENV = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}  # same-size rewrite within 1 s would reuse a stale .pyc
 
 
+def test_jsonl_report_is_one_complete_record(tmp_path):
+    out = tmp_path / "nested" / "report.jsonl"
+    report = {"schema_version": "1.0", "rows": [{"id": "ev-add", "pass": True}]}
+    R._write_report(out, report)
+    lines = out.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1 and json.loads(lines[0]) == report
+
+
 def test_eval_set_size():
     assert len(TASKS) >= 20 and len({t["id"] for t in TASKS}) == len(TASKS)
     assert len(CHEATS) >= 10 and len({c["id"] for c in CHEATS}) == len(CHEATS)
