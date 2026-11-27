@@ -69,6 +69,18 @@ def _spec_from_args(a) -> GoalSpec:
     })
 
 
+def _route_goal(ctx: Ctx, goal_id: str, risk_data: dict, exclude_models: set[str] | None = None):
+    from .protocol import TaskRisk
+    from .router import profiles_from_config, route
+
+    risk = TaskRisk.from_dict(risk_data)
+    routing = ctx.config.get("routing") or {}
+    return route(goal_id, risk, profiles_from_config(ctx.config),
+                 min_samples=int(routing.get("min_samples", 5)),
+                 capability_threshold=float(routing.get("capability_threshold", 0.6)),
+                 exclude_models=exclude_models)
+
+
 def create(ctx: Ctx, a) -> dict:
     spec = _spec_from_args(a).to_dict()
     constraints = spec.get("constraints") or {}
@@ -84,11 +96,20 @@ def create(ctx: Ctx, a) -> dict:
     budget = spec.get("budget") or {}
     if int(budget.get("tasks", 1)) != 1:
         raise AKError("Goal v1 supports one underlying task", "set budget.tasks=1", None, code="AK-USAGE")
+    routing_decision = None
+    model_name = getattr(a, "model", None)
+    if constraints.get("risk") and not model_name:
+        try:
+            routing_decision = _route_goal(ctx, "draft", constraints["risk"])
+        except (ProtocolError, TypeError, ValueError) as e:
+            raise AKError("goal routing failed", str(e), "configure routing.profiles or pass --model",
+                          code="AK-CONFIG") from e
+        model_name = routing_decision.model_id
     task_args = SimpleNamespace(
         goal=spec["outcome"], check=spec["acceptance"]["checks"], allow=constraints.get("allowed_paths", []),
         allow_baseline_pass=not spec["acceptance"].get("baseline_must_fail", True),
         budget_tokens=int(budget.get("tokens", 200000)), budget_usd=float(budget.get("usd", 2.0)),
-        budget_minutes=float(budget.get("minutes", 30)), tier=getattr(a, "tier", None), model=getattr(a, "model", None),
+        budget_minutes=float(budget.get("minutes", 30)), tier=getattr(a, "tier", None), model=model_name,
     )
     task = tasks.create(ctx, task_args)
     gid = "g" + secrets.token_hex(3)
@@ -96,6 +117,7 @@ def create(ctx: Ctx, a) -> dict:
         "id": gid, "spec": spec, "task_id": task["id"], "status": "planned", "iterations": 0,
         "max_iterations": max_iterations, "created": time.time(), "history": [],
         "verdict": None, "receipt": None,
+        "routing": routing_decision.to_dict() if routing_decision else None,
     }
     save(ctx.root, g)
     return {"id": gid, "task_id": task["id"], "status": g["status"], "max_iterations": g["max_iterations"]}
@@ -167,7 +189,18 @@ def run(ctx: Ctx, a) -> dict:
         constraints = g["spec"].get("constraints") or {}
         failover = list(constraints.get("failover") or [])
         next_model = None
-        if int(t.get("handoffs") or 0) < int(constraints.get("max_handoffs", 2)):
+        capability_failures = {"AK-VERIFY-FAIL", "AK-WORKER-MALFORMED", "AK-WORKER-STUCK",
+                               "AK-WORKER-ROUNDS", "AK-MODEL-BAD-RESPONSE"}
+        if (constraints.get("risk") and t.get("error_code") in capability_failures and
+                int(t.get("handoffs") or 0) < int(constraints.get("max_handoffs", 2))):
+            try:
+                decision = _route_goal(ctx, g["id"], constraints["risk"], {str(t.get("model") or "")})
+            except (ProtocolError, TypeError, ValueError):
+                decision = None
+            if decision:
+                next_model = decision.model_id
+                g["routing"] = decision.to_dict()
+        if not next_model and int(t.get("handoffs") or 0) < int(constraints.get("max_handoffs", 2)):
             if failover and t.get("model") in failover:
                 next_model = failover[(failover.index(t["model"]) + 1) % len(failover)]
             elif failover and t.get("model") not in failover:

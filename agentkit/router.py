@@ -26,16 +26,31 @@ def _expected_cost(profile: ModelProfile) -> float | None:
     return None
 
 
+def profiles_from_config(cfg: dict) -> list[ModelProfile]:
+    routing = cfg.get("routing") or {}
+    if not isinstance(routing, dict) or not isinstance(routing.get("profiles") or {}, dict):
+        raise ProtocolError("routing.profiles must be a TOML table")
+    profiles = []
+    for name, data in (routing.get("profiles") or {}).items():
+        if not isinstance(name, str) or not name or not isinstance(data, dict):
+            raise ProtocolError("routing profile names and values are invalid")
+        profiles.append(ModelProfile.from_dict({**data, "model_id": name}))
+    return profiles
+
+
 def route(task_id: str, risk: TaskRisk, profiles: list[ModelProfile], *, min_samples: int = 5,
-          capability_threshold: float = 0.6) -> RoutingDecision:
+          capability_threshold: float = 0.6, exclude_models: set[str] | None = None) -> RoutingDecision:
     risk.validate()
     if min_samples < 1:
         raise ProtocolError("min_samples must be positive")
     if not 0 <= capability_threshold <= 1:
         raise ProtocolError("capability_threshold must be between 0 and 1")
     candidates = []
+    excluded = exclude_models or set()
     for profile in profiles:
         profile.validate()
+        if profile.model_id in excluded:
+            continue
         evidence = profile.evidence
         if profile.status != "active" or int(evidence.get("sample_count", 0)) < min_samples:
             continue

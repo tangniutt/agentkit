@@ -544,7 +544,7 @@ CodeIntelBackend
 
 ### 模型能力档案
 
-`TaskRisk`/`ModelProfile`/`RoutingDecision` 提供版本化跨厂商契约；`agentkit.router` 按实测能力、样本量、Wilson 下界与每成功任务成本确定性选择，不读取品牌固定规则。Skill 是同一策略的可移植外壳，原生 Router 后续消费相同证据。
+`TaskRisk`/`ModelProfile`/`RoutingDecision` 提供版本化跨厂商契约；`agentkit.router` 按实测能力、样本量、Wilson 下界与每成功任务成本确定性选择，不读取品牌固定规则。Skill 是同一策略的可移植外壳，原生 Router 消费相同证据。GoalSpec `constraints.risk` 可触发初始路由；`[routing.profiles.<模型名>]` 提供 `model_version/status/capabilities/evidence/evaluated_at/eval_config_sha256`，模型名必须对应 `[models.<模型名>]`。仅在 `AK-VERIFY-FAIL`、worker 能力错误等证据下排除当前模型并升级；429、网络、认证和预算错误不触发动态升级。
 
 每个模型记录：
 

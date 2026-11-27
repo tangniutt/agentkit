@@ -4,7 +4,7 @@
 import pytest
 
 from agentkit.protocol import ModelProfile, ProtocolError, RoutingDecision, TaskRisk
-from agentkit.router import role_topology, route
+from agentkit.router import profiles_from_config, role_topology, route
 
 
 def _profile(model_id, cost, *, status="active", samples=10, capability=0.9):
@@ -47,6 +47,21 @@ def test_route_selects_lowest_expected_cost_among_measured_profiles():
     assert decision.role == "implementer" and decision.reasoning_level == "low"
     assert decision.fallback_profiles == ["provider/expensive@v1"]
     assert RoutingDecision.from_dict(decision.to_dict()).to_dict() == decision.to_dict()
+
+
+def test_profiles_from_config_and_exclusion():
+    cfg = {"routing": {"profiles": {
+        "cheap": {"model_version": "v1", "status": "active", "capabilities": {"code_edit": 0.9},
+                  "evidence": {"sample_count": 10, "expected_cost_per_verified_success": 0.02},
+                  "evaluated_at": "2026-11-28T00:00:00Z", "eval_config_sha256": "a" * 64},
+        "fallback": {"model_version": "v1", "status": "active", "capabilities": {"code_edit": 0.9},
+                     "evidence": {"sample_count": 10, "expected_cost_per_verified_success": 0.04},
+                     "evaluated_at": "2026-11-28T00:00:00Z", "eval_config_sha256": "a" * 64},
+    }}}
+    profiles = profiles_from_config(cfg)
+    risk = TaskRisk(complexity=1, blast_radius=1, required_capabilities=["code_edit"])
+    assert route("task-1", risk, profiles).model_id == "cheap"
+    assert route("task-1", risk, profiles, exclude_models={"cheap"}).model_id == "fallback"
 
 
 def test_route_rejects_missing_evidence_or_capability():
