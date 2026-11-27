@@ -399,6 +399,142 @@ class CredentialAudit:
 
 
 @dataclass
+class TaskRisk:
+    complexity: int
+    blast_radius: int
+    context_pressure: int = 0
+    required_capabilities: list[str] = field(default_factory=list)
+    verification_strength: str = "standard"
+    schema_version: str = SCHEMA_VERSION
+
+    def validate(self) -> "TaskRisk":
+        if self.schema_version != SCHEMA_VERSION:
+            raise ProtocolError(f"unsupported schema_version: {self.schema_version}")
+        for name in ("complexity", "blast_radius", "context_pressure"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 3:
+                raise ProtocolError(f"{name} must be an integer from 0 to 3")
+        self.required_capabilities = _strings(self.required_capabilities, "required_capabilities")
+        if self.verification_strength not in ("basic", "standard", "strong"):
+            raise ProtocolError("verification_strength must be basic, standard or strong")
+        if self.blast_radius == 3 and self.verification_strength == "basic":
+            raise ProtocolError("blast_radius=3 requires standard or strong verification")
+        return self
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "TaskRisk":
+        allowed = {"complexity", "blast_radius", "context_pressure", "required_capabilities",
+                   "verification_strength", "schema_version"}
+        _keys(data, allowed, {"complexity", "blast_radius"})
+        return cls(**{k: data[k] for k in allowed if k in data}).validate()
+
+
+@dataclass
+class ModelProfile:
+    model_id: str
+    model_version: str
+    status: str = "provisional"
+    capabilities: dict = field(default_factory=dict)
+    pricing: dict = field(default_factory=dict)
+    limits: dict = field(default_factory=dict)
+    evidence: dict = field(default_factory=dict)
+    evaluated_at: str = ""
+    eval_config_sha256: str = ""
+    schema_version: str = SCHEMA_VERSION
+
+    def validate(self) -> "ModelProfile":
+        if self.schema_version != SCHEMA_VERSION:
+            raise ProtocolError(f"unsupported schema_version: {self.schema_version}")
+        for name in ("model_id", "model_version", "evaluated_at", "eval_config_sha256"):
+            if not isinstance(getattr(self, name), str) or not getattr(self, name):
+                raise ProtocolError(f"{name} is required")
+        if self.status not in ("provisional", "active", "deprecated", "revoked"):
+            raise ProtocolError("unsupported model status")
+        if not isinstance(self.capabilities, dict):
+            raise ProtocolError("capabilities must be object")
+        for name, value in self.capabilities.items():
+            if not isinstance(name, str) or not name:
+                raise ProtocolError("capability names must be non-empty strings")
+            score = _number(value, f"capabilities.{name}")
+            if score > 1:
+                raise ProtocolError("capability scores must be between 0 and 1")
+        _keys(self.pricing, {"input_per_million", "output_per_million", "cached_input_per_million"})
+        for name, value in self.pricing.items():
+            _number(value, f"pricing.{name}")
+        _keys(self.limits, {"context", "max_output", "rpm"})
+        for name, value in self.limits.items():
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ProtocolError(f"limits.{name} must be a non-negative integer")
+        _keys(self.evidence, {"sample_count", "verified_pass_rate", "wilson_lower_bound",
+                              "average_task_cost", "expected_cost_per_verified_success"})
+        for name, value in self.evidence.items():
+            if name == "sample_count":
+                if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                    raise ProtocolError("evidence.sample_count must be a non-negative integer")
+            else:
+                _number(value, f"evidence.{name}")
+        for name in ("verified_pass_rate", "wilson_lower_bound"):
+            if name in self.evidence and self.evidence[name] > 1:
+                raise ProtocolError(f"evidence.{name} must be between 0 and 1")
+        return self
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ModelProfile":
+        allowed = {"model_id", "model_version", "status", "capabilities", "pricing", "limits", "evidence",
+                   "evaluated_at", "eval_config_sha256", "schema_version"}
+        _keys(data, allowed, {"model_id", "model_version", "evaluated_at", "eval_config_sha256"})
+        return cls(**{k: data[k] for k in allowed if k in data}).validate()
+
+
+@dataclass
+class RoutingDecision:
+    task_id: str
+    model_id: str
+    model_version: str
+    role: str
+    reasoning_level: str
+    expected_cost_per_verified_success: float
+    fallback_profiles: list[str] = field(default_factory=list)
+    review_required: bool = False
+    reason: str = ""
+    schema_version: str = SCHEMA_VERSION
+
+    def validate(self) -> "RoutingDecision":
+        if self.schema_version != SCHEMA_VERSION:
+            raise ProtocolError(f"unsupported schema_version: {self.schema_version}")
+        for name in ("task_id", "model_id", "model_version"):
+            if not isinstance(getattr(self, name), str) or not getattr(self, name):
+                raise ProtocolError(f"{name} is required")
+        if self.role not in ("planner", "implementer", "reviewer"):
+            raise ProtocolError("unsupported routing role")
+        if self.reasoning_level not in ("low", "medium", "high"):
+            raise ProtocolError("unsupported reasoning level")
+        _number(self.expected_cost_per_verified_success, "expected_cost_per_verified_success")
+        self.fallback_profiles = _strings(self.fallback_profiles, "fallback_profiles")
+        if not isinstance(self.review_required, bool) or not isinstance(self.reason, str):
+            raise ProtocolError("review_required/reason have invalid types")
+        return self
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "RoutingDecision":
+        allowed = {"task_id", "model_id", "model_version", "role", "reasoning_level",
+                   "expected_cost_per_verified_success", "fallback_profiles", "review_required", "reason",
+                   "schema_version"}
+        _keys(data, allowed, {"task_id", "model_id", "model_version", "role", "reasoning_level",
+                              "expected_cost_per_verified_success"})
+        return cls(**{k: data[k] for k in allowed if k in data}).validate()
+
+
+@dataclass
 class TaskSpec:
     goal: str
     acceptance: dict

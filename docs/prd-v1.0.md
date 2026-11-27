@@ -544,6 +544,8 @@ CodeIntelBackend
 
 ### 模型能力档案
 
+`TaskRisk`/`ModelProfile`/`RoutingDecision` 提供版本化跨厂商契约；`agentkit.router` 按实测能力、样本量、Wilson 下界与每成功任务成本确定性选择，不读取品牌固定规则。Skill 是同一策略的可移植外壳，原生 Router 后续消费相同证据。
+
 每个模型记录：
 
 - context、max output、tool calling、reasoning 字段；

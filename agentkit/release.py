@@ -31,7 +31,7 @@ _REQUIRED_MODULES = (
     "config.py", "context.py", "core.py", "credentials.py", "diag.py", "doctor.py", "edit.py", "events.py", "fsutil.py",
     "goals.py", "lifecycle.py", "lsp.py", "manual.py", "memory.py", "mcp_server.py", "models.py",
     "netproxy.py", "permissions.py", "protocol.py", "read.py", "redact.py", "release.py", "repomap.py",
-    "run.py", "sandbox.py", "search.py", "state.py", "symbols.py", "tasks.py", "verify.py", "worker.py",
+    "run.py", "router.py", "sandbox.py", "search.py", "state.py", "symbols.py", "tasks.py", "verify.py", "worker.py",
 )
 _REQUIRED_FILTERS = (
     "cargo-test.json", "eslint.json", "generic.json", "git-diff.json", "git-log.json", "git-status.json",

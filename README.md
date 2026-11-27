@@ -110,7 +110,7 @@ AI 读 [`llms.txt`](llms.txt) 即可上手；管理 AgentKit 的主管 AI 用 `a
 
 ### 成本优化 Skill
 
-仓库内置通用 `cost-efficient-ai-development` Skill：按任务复杂度、错误影响范围、模型能力、实测成功率和每成功任务成本路由，不绑定模型品牌。目录位于 `agentkit/skills/cost-efficient-ai-development/`，随 wheel/sdist 分发；可复制到支持 Agent Skills 的工具用户级或项目级 `skills/` 目录。Qoder 中用 `/skills list` 确认发现、`/cost-efficient-ai-development` 调用；Codex 兼容性按实际版本验证。
+仓库内置通用 `cost-efficient-ai-development` Skill：按任务复杂度、错误影响范围、模型能力、实测成功率和每成功任务成本路由，不绑定模型品牌。目录位于 `agentkit/skills/cost-efficient-ai-development/`，随 wheel/sdist 分发；可复制到支持 Agent Skills 的工具用户级或项目级 `skills/` 目录。Qoder 中用 `/skills list` 确认发现、`/cost-efficient-ai-development` 调用；Codex 兼容性按实际版本验证。AgentKit 原生 `TaskRisk`/`ModelProfile`/`RoutingDecision` 与 `agentkit.router` 提供相同的跨厂商策略契约，当前先作为确定性路由内核，尚未默认替代人工选模型。
 
 ### 报告问题
 AI 代用户报 Bug / 提需求：先搜已有 Issue，**先问人类用户**（Issue 公开），用 `agentkit feedback` 生成草稿，不含密钥或私有代码，一个问题一个 Issue。
