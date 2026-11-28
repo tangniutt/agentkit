@@ -256,7 +256,8 @@ def test_doctor_rejects_invalid_network_allowlist(ak, repo):
     cfg.parent.mkdir(exist_ok=True)
     cfg.write_text('[sandbox]\nnetwork = ["https://example.com"]\n', encoding="utf-8")
     result = ak("doctor")
-    assert result["data"]["healthy"] is False
+    assert result["data"]["healthy"] is True and result["data"]["healthy_for"] == "direct"
+    assert result["data"]["direct_ready"] is True and result["data"]["dispatch_ready"] is False
     check = next(c for c in result["data"]["checks"] if c["name"] == "sandbox_network_policy")
     assert check["ok"] is False and check["fix"]
 
