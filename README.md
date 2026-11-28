@@ -5,9 +5,9 @@
 >
 > **核心设计理念：AgentKit 是一个让 AI 自己提建议、持续改进、持续吸收先进工具设计理念的 AI 编程工具。** AI 用户带证据提 bug 与设计建议（`agentkit feedback --improve`）→ [评分](docs/triage.md) → 接受的成为基线变更 → 合并前用评测量化。
 
-**状态：`v0.2.1` 已发布为生产候选（[Release](https://github.com/tangniutt/agentkit/releases/tag/v0.2.1)）——包含 Muse v0.2.0 反馈修复：沙箱失败关闭、CLI/MCP/验收契约、去重可见性、心跳、全局模型配置、直接验收回执和轮次成本明细。固定版本签名/provenance 与回滚门禁已落地；真实账号与其余 LSP 服务器按用户决定延后到发布后用 Muse 验证。官方 CLI 自身仍须持有 provider 凭证，不声称提供完整反代 broker。Windows 仅保留开发机 direct-mode 兼容，不作为生产部署平台或验收门槛。**
+**状态：`v0.2.2` 已发布为生产候选（[Release](https://github.com/tangniutt/agentkit/releases/tag/v0.2.2)）——包含前两轮 Muse 反馈修复：沙箱失败关闭与正式 policy 档位、CLI/MCP/验收契约、去重与心跳、全局模型配置、直接验收回执、轮次成本明细、上下文硬上限/工作预算、paused 生命周期、分模式 doctor 和 search 参数容错。固定版本签名/provenance 与回滚门禁已落地；真实账号与其余 LSP 服务器按用户决定延后到发布后用 Muse 验证。官方 CLI 自身仍须持有 provider 凭证，不声称提供完整反代 broker。Windows 仅保留开发机 direct-mode 兼容，不作为生产部署平台或验收门槛。**
 
-> Muse 复测任务书：[`docs/muse-v0.2.1-test-plan.md`](docs/muse-v0.2.1-test-plan.md)。
+> Muse 复测任务书：[`docs/muse-v0.2.2-test-plan.md`](docs/muse-v0.2.2-test-plan.md)。
 
 ## 它解决什么
 - 现有编程工具为人设计，AI 用起来读得多、改容易失败、不知道改得对不对。
@@ -59,11 +59,11 @@ AI 读 [`llms.txt`](llms.txt) 即可上手；管理 AgentKit 的主管 AI 用 `a
 | `agentkit verify --check "pytest -q" [--receipt]` | 在干净 worktree（非 git 则临时副本）跑验收；≤300 token 报告：pass/fail/invalid/needs_review、改动文件、可疑标记；`--receipt` 重跑基线并生成 EvidenceReceipt |
 | `agentkit checkpoint list / diff ID / rollback ID` | 每次改动前自动快照，回滚后哈希校验；不依赖 git |
 | `agentkit memory brief / add / list / search / show / forget` | 项目记忆（Markdown + front matter，SQLite FTS5 检索，代码锚定失效标记） |
-| `agentkit doctor` | 自检，每项给修复建议 |
+| `agentkit doctor` | 自检，分别给出 `direct_ready` / `dispatch_ready`，`healthy` 对应当前 `healthy_for` 模式 |
 | `agentkit model add/list/test/remove` | 配置工人模型（任意 OpenAI 兼容接口）；`add/remove --global` 使用用户级配置，项目级同名模型覆盖；只存 Key 的**环境变量名** |
 | `agentkit task create "目标" --check "pytest -q" [--backend builtin\|codex\|opencode\|qoder\|cursor] [--model NAME] [--allow DIR] [--budget-tokens/--budget-usd/--budget-minutes] [--tier] [--fresh]` | 派活：builtin API Key 模型、Codex、OpenCode、Qoder 或 Cursor CLI 在独立 worktree/分支 `agentkit/<id>` 干活；默认要求验收在基线失败、修复后通过；`--fresh` 跳过内容去重，无模型时返回「直接模式」提示 |
 | `agentkit task status / wait / report [--details] / diff / steer / answer / accept / reject / cancel / clean` | status <100 token 且活跃任务含 `idle_s`；report 默认 ≤300 token，`--details` 展开轮次明细；支持 diff、纠偏、提问回答和接受/拒绝 |
-| `agentkit task resume ID [--model NAME] [--backend builtin\|codex\|opencode\|qoder\|cursor] [--budget-*]` | 续跑 paused（429/超时）/ interrupted / stopped 任务：沿用原 worktree 和分支；可换模型或后端，token / 金额预算按整个任务累计 |
+| `agentkit task resume [ID ...] [--all-paused] [--model NAME] [--backend builtin\|codex\|opencode\|qoder\|cursor] [--budget-*]` | 续跑 paused（429/超时）/ interrupted / stopped 任务；`--all-paused` 显式批量恢复，默认不自动重试；沿用原 worktree、分支和累计预算 |
 | `agentkit task handoff ID [--model NAME] [--backend builtin\|codex\|opencode\|qoder\|cursor]` | 显式换工人接力，保留 worktree、diff、记忆和累计预算，记录接力历史 |
 | `agentkit goal create/run/status/wait/report/steer/answer/cancel/resume` | 有界结果闭环：执行、独立验收、失败反馈、提问回答、续跑或换模型，只有验收通过才完成 |
 | `agentkit uninstall [--yes] [--this-repo] [--delete-branches]` | 卸载：不带 `--yes` 只列出将删除的内容；删除包、`~/.config/agentkit`、`~/.local/share/agentkit`、各仓库 `.agentkit/` 与 worktree；**不动你的代码和 git 历史**（任务分支默认保留，git 已跟踪的共享记忆保留） |
@@ -81,14 +81,15 @@ AI 读 [`llms.txt`](llms.txt) 即可上手；管理 AgentKit 的主管 AI 用 `a
 ### 多工人后端
 
 - 接入边界：只接可脚本化的官方 CLI/API/RPC/MCP 编程工具；不接 GUI 自动化、电脑操作工具，也不为需要模拟 Windows 沙箱的工具做兼容层。生产运行平台为 Linux VPS。
-- API Key 模型：`agentkit model add ... --key-env VAR`，使用 builtin OpenAI 兼容工人。
+- API Key 模型：`agentkit model add ... --key-env VAR`，使用 builtin OpenAI 兼容工人。`--context-limit` 登记模型硬窗口（0/未知时不会伪装成 32k），`--context-budget` 控制历史压缩与每轮成本；旧 `--context` 作为 limit 别名继续可用。
+- AgentKit 不自动下载或安装 Qoder CLI / Codex CLI；未安装时只提示当前选中的后端缺少哪个可执行文件，由用户自行安装官方 CLI。
 - 保存登录态授权：Qoder 保存账号登录、OpenCode `allow_account_login=true`，以及仓库外的 Qoder `config_dir`，都要求先在用户级 `~/.config/agentkit/config.toml`（或 `$XDG_CONFIG_HOME/agentkit/config.toml`）设置 `[security] allow_saved_credentials=true`；项目配置不能自行开启。API Key/PAT 路径不需要此开关。宿主侧 Grant/Binding/Revocation 审计与 FD 隔离不替代 CLI 自身的安全；开启保存登录态后不可信仓库仍不得使用真实登录态。
 - Codex CLI：配置 `[workers.codex]` 的 `command`、`model`、可选 `key_env`、`sandbox` 和 `price_in/price_out`，然后 `task create ... --backend codex`。bubblewrap 默认掩蔽宿主 HOME/XDG 与常见云凭证文件/agent socket，仅重新挂载显式授权的后端状态目录；Codex 保存登录不会隐式可用，请使用专用 API Key 环境变量。
 - OpenCode V1：配置 `[workers.opencode]` 的 `command` 与 `model=provider/model`，使用官方 `opencode run --format json`；默认禁用 shell、网络工具、子 Agent 和项目配置，验收由 AgentKit 执行。
 - OpenCode V2：设置 `version = "v2"`，可指定 `model = "opencode/beam-free"` 等官方免费模型，无需登录；AgentKit 使用 `--standalone run --format json`、V2 `permissions/policies` 和独立数据目录。免费额度用尽返回 429 并暂停续跑，不绕过限额；需要保存账号登录时必须显式 `allow_account_login = true`，并获得上述用户级授权。真实 V2 2.4.2 最小任务已验证 token/session 解析。
 - Qoder CLI 账号：安装官方 Qoder CLI。AgentKit 默认使用专用 `XDG_CONFIG_HOME/agentkit/qoder` 目录，不复用 `~/.qoder`；保存账号登录需要上述用户级授权，先设置 `QODER_CONFIG_DIR=<该目录>` 再运行 `qodercli login`，或显式配置 `[workers.qoder].config_dir` 后使用 `--backend qoder`。也可用 `QODER_PERSONAL_ACCESS_TOKEN`，无需授权开关。适配器只调用 CLI，不读取登录文件；默认关闭遥测、项目配置、MCP、shell、网络工具和子 Agent，并记录请求 Credits。Credits 不等同于 USD；`--budget-usd` 需配置价格或确认零成本。
 - Cursor CLI：安装官方 `agent` CLI，配置 `[workers.cursor]` 并设置 `CURSOR_API_KEY`（或专用 `key_env`），使用 `--backend cursor --budget-minutes N`。适配器使用官方 headless/stream-json、独立配置目录和 session resume，默认拒绝 shell、网络、MCP 与密钥路径；CLI 模式不报告 token/成本，因此拒绝 token/USD 预算。可选 `transport = "sdk"`（需 `pip install -e '.[cursor]'` 和显式 `model`）使用官方 Python SDK，支持工具白名单、session resume、运行时 token 用量与按运行成本；SDK 未报告用量时仍拒绝 token 预算，USD 硬预算仍不支持。真实 Cursor API Key 任务尚未验证。
-- 所有外部后端默认要求 bubblewrap；`allow_unsandboxed` 仅供测试。接力可在 builtin/Codex/OpenCode/Qoder/Cursor 间进行，保留同一 worktree、diff、AgentKit 记忆和累计预算；Cursor 仅支持轮次/时间预算。
+- 所有外部后端默认要求 bubblewrap；嵌套容器 VM 可显式选择 `[sandbox] mode="policy"`，保留 worktree、凭证 Grant、独立验收与证据收据，但没有进程级 jail、网络隔离或宿主文件保护，且只支持共享网络。`mode="off"`/`allow_unsandboxed` 仍仅用于测试。接力可在 builtin/Codex/OpenCode/Qoder/Cursor 间进行，保留同一 worktree、diff、AgentKit 记忆和累计预算；Cursor 仅支持轮次/时间预算。
 - 域名白名单要求模型 CLI/工具遵守 `HTTP_PROXY`/`HTTPS_PROXY`；不遵守代理的客户端会在独立网络命名空间内直连失败，不会自动回退到共享网络。`network=false` 或白名单在 bubblewrap 不可用时也会拒绝启动。
 - Antigravity 只接官方条款明确允许的企业/API 方案；consumer 登录态不包装。所有外部工具均不做反代、不共享登录态、不轮换账号。
 
@@ -121,7 +122,7 @@ AI 代用户报 Bug / 提需求：先搜已有 Issue，**先问人类用户**（
 
 ### 本地发布与回滚
 
-- 已发布 [`v0.2.1`](https://github.com/tangniutt/agentkit/releases/tag/v0.2.1)：wheel/sdist、SHA256 校验和及分离式签名、公钥、manifest、provenance 与 Muse 复测任务书均可下载；远端下载后已验证全部哈希与签名。
+- 已发布 [`v0.2.2`](https://github.com/tangniutt/agentkit/releases/tag/v0.2.2)：wheel/sdist、SHA256 校验和及分离式签名、公钥、manifest、provenance 与 Muse 复测任务书均可下载；远端下载后已验证全部哈希与签名。
 - `agentkit release plan`：只读显示版本、git 提交、产物目录和构建计划。
 - `agentkit release build`：要求干净 git 工作树，构建 wheel/sdist、`SHA256SUMS` 和 `release-manifest.json`；`--allow-dirty` 仅用于测试构建，`--overwrite` 需显式确认。
 - `agentkit release verify dist/release-manifest.json`：校验文件哈希、大小、wheel METADATA/必需模块和 sdist 安全路径，不导入或执行 artifact；`trusted:false` 表示哈希不证明发布来源。可加 `--signature SHA256SUMS.sig --public-key public.pem` 校验分离式签名。

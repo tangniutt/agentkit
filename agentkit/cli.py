@@ -149,7 +149,9 @@ def build_parser() -> argparse.ArgumentParser:
     moa.add_argument("--base-url", help="OpenAI-compatible base URL (required unless --preset)")
     moa.add_argument("--model", help="provider model id (default: NAME)")
     moa.add_argument("--key-env", help="NAME of the env var holding the key (never the key itself)")
-    moa.add_argument("--context", type=int, default=None, help="context window, tokens (default 32000 or preset)")
+    moa.add_argument("--context", type=int, default=None, help="legacy alias for --context-limit")
+    moa.add_argument("--context-limit", type=int, default=None, help="hard window; 0=unknown")
+    moa.add_argument("--context-budget", type=int, default=None, help="history budget before compaction")
     moa.add_argument("--rpm", type=float, default=None, help="max requests per minute this worker sends (free-tier pacing)")
     moa.add_argument("--rate-wait", type=float, default=None,
                      help="seconds to sit out a 429 that has no Retry-After, once per call (0 = pause the task at once)")
@@ -200,6 +202,7 @@ def build_parser() -> argparse.ArgumentParser:
     trs.add_argument("--budget-minutes", type=float, help="time budget for this resumed run")
     trs.add_argument("--model", help="target model")
     trs.add_argument("--backend", choices=("builtin", "codex", "opencode", "qoder", "cursor"), help="target backend")
+    trs.add_argument("--all-paused", action="store_true", help="resume every paused task; opt-in batch recovery")
     th = ts.add_parser("handoff", help="resume a paused/interrupted/stopped task with another model/backend")
     th.add_argument("ids", nargs="*")
     th.add_argument("--model", help="target model")
@@ -512,6 +515,33 @@ def render_human(env: dict) -> str:
     return "\n".join(out)
 
 
+def _normalize_search_args(argv: list) -> list:
+    bool_flags = {"--fixed", "-F", "--ignore-case", "-i", "--no-ignore"}
+    value_flags = {"--glob", "-g", "--offset"}
+    options, positionals = [], []
+    index = 1
+    while index < len(argv):
+        token = argv[index]
+        if token == "--":
+            positionals.extend(argv[index + 1:])
+            break
+        if token in bool_flags:
+            options.append(token)
+        elif token in value_flags:
+            options.append(token)
+            if index + 1 < len(argv):
+                index += 1
+                options.append(argv[index])
+        elif token.startswith("--offset=") or token.startswith("--glob="):
+            options.append(token)
+        elif token.startswith("-"):
+            options.append(token)
+        else:
+            positionals.append(token)
+        index += 1
+    return ["search", *options, *positionals]
+
+
 def run_cli(argv: list, cwd=None) -> tuple[dict, int, bool]:
     import time as _time
 
@@ -525,6 +555,8 @@ def run_cli(argv: list, cwd=None) -> tuple[dict, int, bool]:
     root_for_log = None
     try:
         rest, budget, human, root = split_globals(argv)
+        if rest and rest[0] == "search":
+            rest = _normalize_search_args(rest)
         parser = build_parser()
         if not rest or rest[0] in ("-h", "--help", "help"):
             cmds = sorted(k for k in _handlers() if k not in ("repo-map", "map", "_task-run"))

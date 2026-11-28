@@ -169,11 +169,11 @@ def _set_sandbox_state(root: Path, tid: str, state: str, provider: Optional[str]
     current = task.get("sandbox_status")
     if not isinstance(current, dict):
         current = {"sandbox_id": f"sandbox-{tid}", "task_id": tid,
-                   "provider": provider or ("bubblewrap" if task.get("sandbox") == "bwrap" else "none"),
-                   "capabilities": S.capabilities() if task.get("sandbox") == "bwrap" else S.no_sandbox_capabilities()}
+                   "provider": provider or ("bubblewrap" if task.get("sandbox") == "bwrap" else "policy" if task.get("sandbox") == "policy" else "none"),
+                   "capabilities": S.capabilities() if task.get("sandbox") == "bwrap" else S.policy_capabilities() if task.get("sandbox") == "policy" else S.no_sandbox_capabilities()}
     if provider:
         current["provider"] = provider
-        current["capabilities"] = S.capabilities() if provider == "bubblewrap" else S.no_sandbox_capabilities()
+        current["capabilities"] = S.capabilities() if provider == "bubblewrap" else S.policy_capabilities() if provider == "policy" else S.no_sandbox_capabilities()
     status = SandboxStatus.from_dict({**current, "state": state})
     if lock:
         update(root, tid, sandbox_status=status.to_dict())
@@ -305,12 +305,20 @@ def schedule(root: Path) -> None:
             from . import sandbox as S
 
             smode = S.mode(cfg)
+            if smode == "policy" and S.restricted_network(cfg):
+                logf.close()
+                t.update(status="failed", reason="policy sandbox requires shared network; use bubblewrap for isolated/allowlist",
+                         ended=time.time(), error_code="AK-CONFIG", component="sandbox")
+                save(root, t)
+                _set_sandbox_state(root, t["id"], "failed", lock=False)
+                _close_task_credential(root, t, "sandbox_failed")
+                continue
             sandboxed = False
             network = S.network_enabled(cfg)
             domains = None
             proxy_proc = None
             pid_file = ready_file = None
-            if smode != "off":
+            if smode not in ("off", "policy"):
                 try:
                     backend = t.get("backend", "builtin")
                     if backend in ("codex", "opencode", "qoder", "cursor"):
@@ -451,12 +459,12 @@ def schedule(root: Path) -> None:
                 logf.close()
             t["status"] = "starting"
             t["pid"] = proc.pid
-            t["sandbox"] = "bwrap" if sandboxed else "off"
+            t["sandbox"] = "bwrap" if sandboxed else smode
             t["sandbox_network"] = (S.network_label(cfg) if sandboxed else "host")
             if domains is not None:
                 t["sandbox_domains"] = domains
             save(root, t)
-            _set_sandbox_state(root, t["id"], "running", "bubblewrap" if sandboxed else "none", lock=False)
+            _set_sandbox_state(root, t["id"], "running", "bubblewrap" if sandboxed else smode, lock=False)
             running += 1
 
 
@@ -904,8 +912,8 @@ def create(ctx: Ctx, a) -> dict:
         if not getattr(B, f"{backend}_available")(cfg):
             raise AKError(f"{backend} executable not found", f"set workers.{backend}.command or install {label} CLI",
                           "agentkit doctor", code="AK-MODEL-NONE")
-        if not wcfg.get("allow_unsandboxed", False) and (S.mode(cfg) == "off" or not S.available()):
-            raise AKError(f"{backend} backend requires a working sandbox", "install bubblewrap or set [sandbox] mode=required",
+        if not wcfg.get("allow_unsandboxed", False) and S.mode(cfg) != "policy" and (S.mode(cfg) == "off" or not S.available()):
+            raise AKError(f"{backend} backend requires a working sandbox", "install bubblewrap or set [sandbox] mode=policy/required",
                           "agentkit doctor", code="AK-TASK-STATE")
         model_name = str(a.model or wcfg.get("model") or "")
         if backend == "cursor":
@@ -1008,10 +1016,11 @@ def create(ctx: Ctx, a) -> dict:
         }
         from . import sandbox as S
 
-        provider = "bubblewrap" if S.mode(cfg) != "off" else "none"
+        smode = S.mode(cfg)
+        provider = "bubblewrap" if smode not in ("off", "policy") else "policy" if smode == "policy" else "none"
+        caps = S.capabilities() if provider == "bubblewrap" else S.policy_capabilities() if provider == "policy" else S.no_sandbox_capabilities()
         t["sandbox_status"] = SandboxStatus(sandbox_id=f"sandbox-{tid}", task_id=tid, provider=provider,
-                                            state="pending",
-                                            capabilities=S.capabilities() if provider == "bubblewrap" else S.no_sandbox_capabilities()).to_dict()
+                                            state="pending", capabilities=caps).to_dict()
         t.update(_bind_task_credential(t, cfg, backend, model_name, root))
         save(root, t)
         EventLog(root, tid, "task").emit("created", step=0, model=model_name or backend, backend=backend,
@@ -1655,6 +1664,9 @@ def compact_status(root: Path, t: dict) -> dict:
         s["s"] = int(end - start)
     if t["status"] not in TERMINAL and t.get("updated"):
         s["idle_s"] = max(0, int(time.time() - float(t["updated"])))
+    if t["status"] == "paused":
+        paused_at = t.get("ended") or t.get("updated") or t.get("created") or time.time()
+        s["paused_s"] = max(0, int(time.time() - float(paused_at)))
     if t.get("error_code") and t["status"] in TERMINAL:
         s["code"] = t["error_code"]
         s["at"] = f"{t.get('component') or 'task'}#{t.get('last_step', t.get('rounds', 0))}"
@@ -1863,6 +1875,20 @@ def cmd_task(ctx: Ctx, a) -> Result:
             return Result(full, False, None, budget_chars=REPORT_CHARS * 4)
         return Result(out, trunc, nxt, budget_chars=REPORT_CHARS)
     if sub == "resume":
+        if getattr(a, "all_paused", False):
+            if a.ids:
+                raise AKError("--all-paused does not accept task ids", "pass either ids or --all-paused",
+                              "agentkit task resume --all-paused", code="AK-USAGE")
+            targets = [t["id"] for t in all_tasks(root) if t.get("status") == "paused"]
+            if not targets:
+                raise AKError("no paused tasks to resume", "nothing to do", "agentkit task status", code="AK-TASK-STATE")
+            results = []
+            for tid in targets:
+                item = SimpleNamespace(ids=[tid], model=a.model, backend=a.backend,
+                                       budget_tokens=a.budget_tokens, budget_usd=a.budget_usd,
+                                       budget_minutes=a.budget_minutes)
+                results.append(resume(ctx, item))
+            return Result({"resumed": targets, "tasks": results})
         out = resume(ctx, a)
         return Result(out, False, ctx.next_cmd("task", "wait", out["id"], "--timeout", "600"))
     if sub == "handoff":
@@ -1955,9 +1981,9 @@ def resume(ctx: Ctx, a, handoff: bool = False) -> dict:
                 raise AKError(f"{target_backend} executable not found",
                               f"set workers.{target_backend}.command or install {label} CLI",
                               "agentkit doctor", code="AK-MODEL-NONE")
-            if not wcfg.get("allow_unsandboxed", False) and (S.mode(ctx.config) == "off" or not S.available()):
+            if not wcfg.get("allow_unsandboxed", False) and S.mode(ctx.config) != "policy" and (S.mode(ctx.config) == "off" or not S.available()):
                 raise AKError(f"{target_backend} backend requires a working sandbox",
-                              "install bubblewrap or set [sandbox] mode=required",
+                              "install bubblewrap or set [sandbox] mode=policy/required",
                               "agentkit doctor", code="AK-TASK-STATE")
             model_name = requested_model or (old_model if old_backend == target_backend else wcfg.get("model") or "")
             if target_backend == "opencode" and model_name and (len(model_name.split("/", 1)) != 2 or
@@ -2064,14 +2090,16 @@ def resume(ctx: Ctx, a, handoff: bool = False) -> dict:
 def cancel(root: Path, tid: str) -> dict:
     with locked(root):
         t = load(root, tid)
-        if t["status"] in TERMINAL:
+        if t["status"] in TERMINAL and t["status"] not in RESUMABLE:
             _close_task_credential(root, t, "cancelled")
             return compact_status(root, t)
         (tpath(root, tid) / "cancel").write_text("1")
-        if t["status"] == "queued":
-            t.update(status="cancelled", reason="cancelled before start", ended=time.time(), error_code="AK-TASK-CANCELLED",
-                     component="task", last_step=0)
+        if t["status"] in {"queued"} | RESUMABLE:
+            previous = t["status"]
+            t.update(status="cancelled", reason="cancelled before start" if previous == "queued" else f"cancelled from {previous}",
+                     ended=time.time(), error_code="AK-TASK-CANCELLED", component="task", last_step=0)
             save(root, t)
+            _set_sandbox_state(root, tid, "cancelled", lock=False)
             _close_task_credential(root, t, "cancelled")
             return compact_status(root, t)
         pid = t.get("pid")

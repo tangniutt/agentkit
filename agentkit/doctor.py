@@ -63,15 +63,17 @@ def cmd_doctor(ctx: Ctx, a) -> Result:
     from . import sandbox
 
     smode = sandbox.mode(ctx.config)
-    savail = sandbox.available() if os.name == "posix" and smode != "off" else False
+    savail = sandbox.available() if os.name == "posix" and smode not in ("off", "policy") else False
     try:
         network_label = sandbox.network_label(ctx.config)
-        network_ok = True
+        network_ok = not (smode == "policy" and sandbox.restricted_network(ctx.config))
+        if not network_ok:
+            network_label = "policy requires shared network; isolated/allowlist needs bubblewrap"
     except ValueError as e:
         network_label, network_ok = str(e), False
-    checks.append(_check("sandbox", smode == "off" or savail,
+    checks.append(_check("sandbox", smode in ("off", "policy") or savail,
                          f"mode={smode}, bubblewrap={'available' if savail else 'unavailable'}, network={network_label}",
-                         "install bubblewrap or set [sandbox] mode=required to refuse unsandboxed dispatch"))
+                         "install bubblewrap, use [sandbox] mode=policy for explicit no-jail execution, or mode=off for tests"))
     checks.append(_check("sandbox_network_policy", network_ok, network_label,
                          "use true, false, or an array of bare hostnames/IP addresses"))
     from . import codeintel
@@ -129,7 +131,9 @@ def cmd_doctor(ctx: Ctx, a) -> Result:
 
     for m in all_models(ctx.config).values():
         key_ok = (not m.key_env) or bool(os.environ.get(m.key_env))
-        val = f"{m.model_id} @ {m.base_url} ({m.tier})" + ("" if key_ok else f"; ${m.key_env} not set")
+        limit = str(m.context_limit) if m.context_limit else "unknown"
+        val = (f"{m.model_id} @ {m.base_url} ({m.tier}); context_limit={limit}; "
+               f"context_budget={m.context_budget}{' (default)' if m.context_budget_defaulted else ''}") + ("" if key_ok else f"; ${m.key_env} not set")
         fix = f"export {m.key_env}=...  (the key is read from this variable; never put it in config)"
         if key_ok and getattr(a, "online", False):
             try:
@@ -146,11 +150,21 @@ def cmd_doctor(ctx: Ctx, a) -> Result:
     external = bool(codex_config(ctx.config) or opencode_config(ctx.config) or qoder_config(ctx.config)
                     or cursor_config(ctx.config))
     dispatch = (bool(model) or external) and os.name == "posix"
-    required = {"python>=3.10", "write_permission", "disk_space", "config_parse", "sandbox_network_policy"}
-    if dispatch:
-        required.add("sandbox")
-    ok = all(c["ok"] for c in checks if c["name"] in required)
-    return Result({"healthy": ok, "mode": "dispatch" if dispatch else "direct", "checks": checks})
+    by_name = {check["name"]: check for check in checks}
+    direct_required = {"python>=3.10", "write_permission", "disk_space", "config_parse"}
+    direct_ready = all(check["ok"] for check in checks if check["name"] in direct_required)
+    worker_ready = any(by_name.get(f"model:{name}", {}).get("ok", False) for name in all_models(ctx.config))
+    for backend, table in (("codex", codex_config(ctx.config)), ("opencode", opencode_config(ctx.config)),
+                           ("qoder", qoder_config(ctx.config)), ("cursor", cursor_config(ctx.config))):
+        if table:
+            worker_ready = worker_ready or by_name.get(f"{backend}_backend", {}).get("ok", False)
+    dispatch_ready = bool(dispatch and direct_ready and worker_ready and
+                          by_name.get("sandbox", {}).get("ok", False) and
+                          by_name.get("sandbox_network_policy", {}).get("ok", False))
+    mode = "dispatch" if dispatch else "direct"
+    healthy = dispatch_ready if dispatch else direct_ready
+    return Result({"healthy": healthy, "healthy_for": mode, "direct_ready": direct_ready,
+                   "dispatch_ready": dispatch_ready, "mode": mode, "checks": checks})
 
 
 _ = os

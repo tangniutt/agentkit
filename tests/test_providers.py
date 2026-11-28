@@ -37,10 +37,12 @@ def test_model_add_presets(ak, repo):
     assert not bad["ok"] and "unknown preset" in bad["error"]["what"]
     nob = ak("model", "add", "y")
     assert not nob["ok"] and "--base-url" in nob["error"]["what"]
-    # no preset: old defaults unchanged
-    assert ak("model", "add", "plain", "--base-url", "http://127.0.0.1:9/v1")["ok"]
+    # no preset: unknown hard limit, explicit conservative working budget
+    plain = ak("model", "add", "plain", "--base-url", "http://127.0.0.1:9/v1")
+    assert plain["ok"] and "context_warning" in plain["data"]
     p = all_models({"models": _toml(repo)["models"]})["plain"]
-    assert p.context == 32000 and p.rpm == 0 and p.max_wait == 30 and p.max_tokens == 0
+    assert p.context_limit == 0 and p.context_budget == 128000 and p.context_budget_defaulted
+    assert p.rpm == 0 and p.max_wait == 30 and p.max_tokens == 0
 
 
 def _toml(repo):

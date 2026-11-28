@@ -182,6 +182,20 @@ def test_builtin_task_hands_off_to_codex_in_same_worktree(ak, repo, fake):
     assert task["round_details"], "builtin round details survive handoff to an external backend"
 
 
+def test_codex_policy_mode_is_explicit_production_level(ak, repo):
+    _repo(repo, ak, SCRIPT, allow_unsandboxed=False)
+    cfg = repo / ".agentkit" / "config.toml"
+    cfg.write_text(cfg.read_text(encoding="utf-8") + '\n[sandbox]\nmode = "policy"\n', encoding="utf-8")
+    created = ak("task", "create", "fix add [CODEX-POLICY]", "--check", CHECK, "--backend", "codex")
+    assert created["ok"], created
+    status = wait(ak, created["data"]["id"])
+    assert status["status"] == "done" and status["verdict"] == "pass", status
+    task = tjson(repo, created["data"]["id"])
+    assert task["sandbox"] == "policy" and task["sandbox_status"]["provider"] == "policy"
+    receipt = json.loads((repo / ".agentkit" / "tasks" / created["data"]["id"] / "receipt.json").read_text(encoding="utf-8"))
+    assert receipt["worker"]["sandbox"] == "policy"
+
+
 @pytest.mark.skipif(not sandbox.available(), reason="bubblewrap is unavailable")
 def test_codex_task_runs_inside_bubblewrap(ak, repo):
     _repo(repo, ak, SCRIPT, allow_unsandboxed=False)

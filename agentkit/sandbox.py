@@ -37,9 +37,13 @@ def no_sandbox_capabilities() -> dict:
     return SandboxCapabilities(provider="none").to_dict()
 
 
+def policy_capabilities() -> dict:
+    return SandboxCapabilities(provider="policy", snapshot_kinds=["git"], network_modes=["shared"]).to_dict()
+
+
 def mode(cfg: dict) -> str:
     value = str(((cfg or {}).get("sandbox") or {}).get("mode", "auto")).lower()
-    return value if value in ("auto", "required", "off") else "auto"
+    return value if value in ("auto", "required", "policy", "off") else "auto"
 
 
 def network_enabled(cfg: dict) -> bool:

@@ -76,6 +76,15 @@ def _search_fixture(repo):
     (repo / "debug.log").write_text("TARGET\n")
 
 
+def test_search_accepts_flags_between_positionals(ak, repo):
+    _search_fixture(repo)
+    middle = ak("search", "TARGET", "--fixed", "src/a.py")
+    leading = ak("search", "--fixed", "TARGET", "src/a.py")
+    assert middle["ok"] and middle["data"]["matches"] == ["src/a.py:2:TARGET = 2"]
+    assert leading["data"] == middle["data"]
+    assert not ak("search", "TARGET", "--bogus", "src/a.py")["ok"]
+
+
 @pytest.mark.parametrize("engine", ["rg", "python"])
 @pytest.mark.parametrize("use_git", [True, False])
 def test_search_respects_gitignore(ak, repo, engine, use_git):

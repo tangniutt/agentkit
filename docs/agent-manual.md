@@ -6,7 +6,7 @@ AgentKit: token-frugal coding tools for AI agents + optional cheap worker with i
 
 Global options: --budget N (output tokens, default 2000), --human (text), --root DIR; anywhere on the line.
 
-JSON form: `agentkit manual` (overview, ~1800 tokens), `agentkit manual <command>` (one command), `agentkit manual --all` (everything, ~4984 tokens).
+JSON form: `agentkit manual` (overview, ~1789 tokens), `agentkit manual <command>` (one command), `agentkit manual --all` (everything, ~4982 tokens).
 
 ## Quick start (supervisor)
 
@@ -411,14 +411,14 @@ self check with fix hints
 |---|---|---|---|
 | `--online` | bool |  | also call each configured model once |
 
-- **Output `data`:** `healthy,mode(direct|dispatch),checks[{name,ok,value,fix?}]`
+- **Output `data`:** `healthy,healthy_for,direct_ready,dispatch_ready,mode,checks`
 - **Errors:** only the common ones
 - **Side effects:** ro, tokens if --online
 - **Example:** `agentkit doctor`
 
 ### `agentkit model add`
 
-add model; store key env name
+add model; env name
 
 | arg | type | default | notes |
 |---|---|---|---|
@@ -427,7 +427,9 @@ add model; store key env name
 | `--base-url` | str |  | OpenAI-compatible base URL (required unless --preset) |
 | `--model` | str |  | provider model id (default: NAME) |
 | `--key-env` | str |  | NAME of the env var holding the key (never the key itself) |
-| `--context` | int |  | context window, tokens (default 32000 or preset) |
+| `--context` | int |  | legacy alias for --context-limit |
+| `--context-limit` | int |  | hard window; 0=unknown |
+| `--context-budget` | int |  | history budget before compaction |
 | `--rpm` | float |  | max requests per minute this worker sends (free-tier pacing) |
 | `--rate-wait` | float |  | seconds to sit out a 429 that has no Retry-After, once per call (0 = pause the task at once) |
 | `--max-wait` | float |  | longest Retry-After (s) to sit out before pausing (default 30) |
@@ -438,23 +440,23 @@ add model; store key env name
 | `--default` | bool |  |  |
 | `--global` | bool |  | write to the user config; project models override it |
 
-- **Output `data`:** `added,scope,config,key_env_set,warning?`
+- **Output `data`:** `added,scope,limit,budget,key_env_set,warning?`
 - **Errors:** `AK-USAGE` (bad command line arguments)
 - **Side effects:** state
 - **Example:** `agentkit model add x --preset nvidia`
 
 ### `agentkit model list`
 
-models (no keys)
+models; no keys
 
-- **Output `data`:** `models[{name,model,tier,context,price,key_env,key_set,scope}],default`
+- **Output `data`:** `models[{name,model,tier,limit,budget,key_env,scope}],default`
 - **Errors:** only the common ones
 - **Side effects:** ro
 - **Example:** `agentkit model list`
 
 ### `agentkit model test`
 
-one tiny chat call to a model
+tiny chat call
 
 | arg | type | default | notes |
 |---|---|---|---|
@@ -468,7 +470,7 @@ one tiny chat call to a model
 
 ### `agentkit model remove`
 
-remove a model from config
+remove model
 
 | arg | type | default | notes |
 |---|---|---|---|
@@ -506,13 +508,13 @@ dispatch with fail-to-pass
 
 ### `agentkit task status`
 
-<100 tokens; bare = recent
+<100 tokens; bare=recent
 
 | arg | type | default | notes |
 |---|---|---|---|
 | `ids` | str |  | zero or more |
 
-- **Output `data`:** `id,status,verdict?,rounds,tok,s,idle_s?,queue?,code?,at?,log?`
+- **Output `data`:** `id,status,verdict?,rounds,tok,s,idle_s?,paused_s?,queue?,code?,at?,log?`
 - **Errors:** `AK-TASK-UNKNOWN` (unknown or invalid task id)
 - **Side effects:** ro
 - **Example:** `agentkit task status t1a2b3c`
@@ -546,7 +548,7 @@ verdict; details=rounds
 
 ### `agentkit task wait`
 
-block until done/timeout; one finished task returns its report inline
+wait; one done task inlines report
 
 | arg | type | default | notes |
 |---|---|---|---|
@@ -561,7 +563,7 @@ block until done/timeout; one finished task returns its report inline
 
 ### `agentkit task resume`
 
-resume task; switch model/backend in place
+resume; batch paused
 
 | arg | type | default | notes |
 |---|---|---|---|
@@ -571,6 +573,7 @@ resume task; switch model/backend in place
 | `--budget-minutes` | float |  | time budget for this resumed run |
 | `--model` | str |  | target model |
 | `--backend` | str |  | target backend |
+| `--all-paused` | bool |  | resume every paused task; opt-in batch recovery |
 
 - **Output `data`:** `id,status,resumes,handoff?,models? (next: task wait)`
 - **Errors:** `AK-TASK-STATE` (operation not allowed in the task's current state), `AK-BUDGET` (task stopped: token / USD / time budget exceeded)

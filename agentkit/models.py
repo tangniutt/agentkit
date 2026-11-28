@@ -104,7 +104,9 @@ class ModelSpec:
     base_url: str
     model_id: str
     key_env: Optional[str] = None
-    context: int = 32000
+    context_limit: int = 0  # 0 = unknown; never silently claim a 32k hard limit
+    context_budget: int = 128000
+    context_budget_defaulted: bool = True
     price_in: float = 0.0  # USD per 1M input tokens
     price_out: float = 0.0
     tier: str = "low"
@@ -114,6 +116,10 @@ class ModelSpec:
     max_tokens: int = 0       # >0: sent as max_tokens (reasoning models need room to think AND call a tool)
     rate_wait: float = 0.0    # >0: a 429 WITHOUT Retry-After is sat out this long once (per-minute limits that
                               # don't say when they reset, e.g. Agnes free tier); 0 = pause at once (old behaviour)
+
+    @property
+    def context(self) -> int:
+        return self.context_limit
 
     def key(self) -> Optional[str]:
         if not self.key_env:
@@ -127,14 +133,28 @@ class ModelSpec:
         return (tin * self.price_in + tout * self.price_out) / 1e6
 
 
+def default_context_budget(limit: int) -> int:
+    if limit <= 0:
+        return 128000
+    return max(1024, min(256000, int(limit * 0.7)))
+
+
 def all_models(cfg: dict) -> dict:
     out = {}
     for name, m in (cfg.get("models") or {}).items():
         if not isinstance(m, dict) or not m.get("base_url"):
             continue
+        limit = int(m.get("context_limit", m.get("context", 0)) or 0)
+        raw_budget = m.get("context_budget")
+        budget = int(default_context_budget(limit) if raw_budget is None else raw_budget)
+        if budget <= 0:
+            raise ValueError("context_budget must be positive")
+        if limit > 0 and budget > limit:
+            raise ValueError("context_budget exceeds context_limit")
         out[name] = ModelSpec(
             name=name, base_url=str(m["base_url"]), model_id=str(m.get("model") or name),
-            key_env=m.get("key_env") or None, context=int(m.get("context", 32000)),
+            key_env=m.get("key_env") or None, context_limit=limit, context_budget=budget,
+            context_budget_defaulted=bool(m.get("context_budget_defaulted", m.get("context_budget") is None)),
             price_in=float(m.get("price_in", 0)), price_out=float(m.get("price_out", 0)),
             tier=str(m.get("tier", "low")), timeout=float(m.get("timeout", 120)),
             rpm=float(m.get("rpm", 0) or 0), max_wait=float(m.get("max_wait", RETRY_AFTER_CAP_S)),
@@ -395,13 +415,24 @@ def cmd_model(ctx: Ctx, a) -> Result:
         if not base_url:
             raise AKError("--base-url is required (or --preset)", f"presets: {', '.join(PRESETS)}",
                           f"agentkit model add {a.name} --preset nvidia --model nvidia/nemotron-3.5-lightning-30b-a3b")
+        if a.context is not None and a.context_limit is not None:
+            raise AKError("use only one of --context or --context-limit", "--context is a legacy alias",
+                          "agentkit model add --help", code="AK-USAGE")
+        limit = a.context_limit if a.context_limit is not None else a.context
+        if limit is None:
+            limit = int(pre.get("context", 0) or 0)
+        budget = a.context_budget if a.context_budget is not None else default_context_budget(limit)
+        if limit < 0 or budget <= 0 or (limit > 0 and budget > limit):
+            raise AKError("invalid context limit/budget", "context_budget must be positive and not exceed a known context_limit",
+                          "agentkit model add --help", code="AK-USAGE")
         a.base_url = base_url
         a.key_env = a.key_env or pre.get("key_env")
         if a.key_env and not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", a.key_env):
             raise AKError("--key-env takes the NAME of an environment variable, not a key",
                           "keys are never stored in config (M-17)", "export MY_KEY=...; agentkit model add NAME --key-env MY_KEY ...")
         vals = {"base_url": base_url, "model": a.model or a.name, "key_env": a.key_env,
-                "context": a.context or pre.get("context", 32000),
+                "context_limit": limit, "context_budget": budget,
+                "context_budget_defaulted": a.context_budget is None,
                 "price_in": a.price_in, "price_out": a.price_out, "tier": a.tier}
         for k in ("rpm", "max_wait", "max_tokens", "rate_wait"):
             v = getattr(a, k, None)
@@ -414,7 +445,13 @@ def cmd_model(ctx: Ctx, a) -> Result:
             set_table(ctx.root, "worker", {**(load_config(ctx.root).get("worker") or {}), "default_model": a.name})
         data = {"added": a.name, "scope": "global" if global_config else "project",
                 "config": str(p) if global_config else ctx.rel(p),
+                "context_limit": limit, "context_budget": budget,
+                "context_budget_defaulted": a.context_budget is None,
                 "key_env_set": bool(a.key_env and os.environ.get(a.key_env))}
+        if limit == 0:
+            data["context_warning"] = "context_limit unknown; worker uses the explicit context_budget, not a claimed 32k hard limit"
+        elif a.context_budget is None:
+            data["context_hint"] = "context_budget defaulted from context_limit; pass --context-budget to tune quality/cost"
         if pre:
             data["preset"] = {"name": a.preset, "note": pre["note"]}
         if a.key_env and not data["key_env_set"]:
@@ -430,7 +467,9 @@ def cmd_model(ctx: Ctx, a) -> Result:
         return Result({"models": [
             {"name": m.name, "model": m.model_id, "tier": m.tier, "context": m.context, "price": [m.price_in, m.price_out],
              "key_env": m.key_env, "key_set": bool(m.key_env and os.environ.get(m.key_env)) if m.key_env else None,
-             "base_url": m.base_url, "scope": (cfg.get("_model_scopes") or {}).get(m.name, "project")} for m in ms.values()],
+             "base_url": m.base_url, "scope": (cfg.get("_model_scopes") or {}).get(m.name, "project"),
+             "context_limit": m.context_limit, "context_budget": m.context_budget,
+             "context_budget_defaulted": m.context_budget_defaulted} for m in ms.values()],
             "default": pick(cfg).name if ms else None})
     if sub == "remove":
         if getattr(a, "global_config", False):

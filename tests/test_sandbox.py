@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from agentkit import sandbox, tasks
+from agentkit import backends, sandbox, tasks
 
 
 def _starting_task(root: Path) -> Path:
@@ -45,9 +45,12 @@ def test_doctor_dispatch_requires_available_sandbox(tmp_path, monkeypatch):
     from agentkit.core import Ctx
 
     cfg = {"models": {"fake": {"base_url": "http://127.0.0.1:1/v1", "key_env": "FAKE_KEY"}}}
+    monkeypatch.setenv("FAKE_KEY", "test-key")
     monkeypatch.setattr(sandbox, "available", lambda: False)
     result = doctor.cmd_doctor(Ctx(root=tmp_path, cwd=tmp_path, config=cfg), SimpleNamespace(online=False))
     assert result.data["mode"] == "dispatch" and result.data["healthy"] is False
+    assert result.data["healthy_for"] == "dispatch"
+    assert result.data["direct_ready"] is True and result.data["dispatch_ready"] is False
     check = next(item for item in result.data["checks"] if item["name"] == "sandbox")
     assert check["ok"] is False
 
@@ -174,6 +177,52 @@ def test_sandbox_network_policy_and_command(tmp_path, monkeypatch):
     assert cmd.index(str(tmp_path.resolve())) > cmd.index(str(state.resolve()))
     assert cmd[cmd.index(str(source.resolve())) - 1] == "--ro-bind"
     assert cmd[cmd.index(str(state.resolve())) - 1] == "--bind"
+
+
+def test_policy_mode_is_explicit_and_records_capabilities(tmp_path, monkeypatch):
+    assert sandbox.mode({"sandbox": {"mode": "policy"}}) == "policy"
+    caps = sandbox.policy_capabilities()
+    assert caps["provider"] == "policy" and caps["snapshot_kinds"] == ["git"] and caps["network_modes"] == ["shared"]
+    root = tmp_path / "repo"
+    task_dir = root / ".agentkit" / "tasks" / "t123abc"
+    task_dir.mkdir(parents=True)
+    (root / ".agentkit/config.toml").write_text('[sandbox]\nmode = "policy"\n', encoding="utf-8")
+    task = {"id": "t123abc", "status": "queued", "backend": "builtin", "model": "", "worktree": ".agentkit/worktrees/t123abc",
+            "base": "HEAD", "branch": "agentkit/t123abc", "budget": {"tokens": 0, "usd": 0, "minutes": 5}, "hash": "h"}
+    (task_dir / "task.json").write_text(json.dumps(task), encoding="utf-8")
+    monkeypatch.setattr(tasks.subprocess, "Popen", lambda *_args, **_kwargs: SimpleNamespace(pid=123))
+    tasks.schedule(root)
+    saved = json.loads((task_dir / "task.json").read_text(encoding="utf-8"))
+    assert saved["sandbox"] == "policy" and saved["sandbox_status"]["provider"] == "policy"
+    assert saved["sandbox_status"]["capabilities"] == caps
+
+
+def test_policy_mode_rejects_restricted_network(tmp_path, monkeypatch):
+    root = tmp_path / "repo"
+    task_dir = root / ".agentkit" / "tasks" / "t123abc"
+    task_dir.mkdir(parents=True)
+    (root / ".agentkit/config.toml").write_text('[sandbox]\nmode = "policy"\nnetwork = false\n', encoding="utf-8")
+    task = {"id": "t123abc", "status": "queued", "backend": "builtin", "model": "", "worktree": ".agentkit/worktrees/t123abc",
+            "base": "HEAD", "branch": "agentkit/t123abc", "budget": {"tokens": 0, "usd": 0, "minutes": 5}, "hash": "h"}
+    (task_dir / "task.json").write_text(json.dumps(task), encoding="utf-8")
+    monkeypatch.setattr(tasks.subprocess, "Popen", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("launched")))
+    tasks.schedule(root)
+    saved = json.loads((task_dir / "task.json").read_text(encoding="utf-8"))
+    assert saved["status"] == "failed" and saved["error_code"] == "AK-CONFIG"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="dispatch doctor requires POSIX")
+def test_doctor_policy_mode_is_dispatch_ready_without_bwrap(tmp_path, monkeypatch):
+    from agentkit import doctor
+    from agentkit.core import Ctx
+
+    cfg = {"models": {"fake": {"base_url": "http://127.0.0.1:1/v1", "key_env": "FAKE_KEY"}},
+           "sandbox": {"mode": "policy", "network": True}}
+    monkeypatch.setenv("FAKE_KEY", "test-key")
+    monkeypatch.setattr(sandbox, "available", lambda: False)
+    result = doctor.cmd_doctor(Ctx(root=tmp_path, cwd=tmp_path, config=cfg), SimpleNamespace(online=False))
+    assert result.data["direct_ready"] is True and result.data["dispatch_ready"] is True
+    assert result.data["healthy"] is True and result.data["healthy_for"] == "dispatch"
 
 
 def test_sandbox_policy_and_unavailable(tmp_path, monkeypatch):

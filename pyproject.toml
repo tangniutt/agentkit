@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agentkit"
-version = "0.2.1"
+version = "0.2.2"
 description = "A lightweight, token-frugal coding toolkit for AI agents (M2 Python prototype)"
 readme = "README.md"
 license = {text = "Apache-2.0"}

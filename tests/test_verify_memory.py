@@ -244,6 +244,8 @@ def test_doctor(ak, repo):
     names = {c["name"] for c in r["data"]["checks"]}
     assert {"version", "git", "write_permission", "disk_space", "model_config", "sandbox_network_policy"} <= names
     assert r["data"]["mode"] == "direct"
+    assert r["data"]["direct_ready"] is True and r["data"]["dispatch_ready"] is False
+    assert r["data"]["healthy_for"] == "direct"
     for c in r["data"]["checks"]:
         if not c["ok"]:
             assert c.get("fix"), c

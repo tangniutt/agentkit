@@ -29,7 +29,6 @@ from .core import dumps
 from .models import ChatClient, ModelError, ModelSpec, reasoning_text, usage_of
 from .redact import redact, redact_text
 
-COMPACT_AT = 0.70
 KEEP_TURNS = 4
 
 TOOLS_SPEC = [
@@ -443,7 +442,7 @@ class Worker:
 
     # ---------------------------------------------------------- compaction
     def maybe_compact(self):
-        limit = int(self.spec.context * COMPACT_AT)
+        limit = int(self.spec.context_budget)
         if self.est_tokens() <= limit:
             return
         self.compactions += 1

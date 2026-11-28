@@ -77,7 +77,7 @@ allow_unsandboxed = false
 # CLI stream-json has no token/cost fields; SDK reports usage when the runtime provides it.
 
 [sandbox]
-mode = "auto"          # auto | required: dispatch fails closed without bubblewrap; off: explicit unsandboxed
+mode = "auto"          # auto | required: fail closed without bubblewrap; policy: explicit no process jail; off: test-only
 network = true         # false = no network; ["api.openai.com"] = domain allowlist via isolated proxy
 
 [codeintel]

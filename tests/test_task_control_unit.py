@@ -46,6 +46,38 @@ def test_compact_status_exposes_heartbeat_idle(repo):
     assert 11 <= status["idle_s"] <= 13
 
 
+def test_cancel_paused_task_is_terminal(repo):
+    tid, _ = _task(repo, status="paused")
+    result = tasks.cancel(repo, tid)
+    assert result["status"] == "cancelled"
+    task = tasks.load(repo, tid)
+    assert task["status"] == "cancelled" and task["error_code"] == "AK-TASK-CANCELLED"
+
+
+def test_compact_status_exposes_paused_age(repo):
+    import time
+
+    tid, _ = _task(repo, status="paused", ended=time.time() - 9)
+    status = tasks.compact_status(repo, tasks.load(repo, tid))
+    assert 8 <= status["paused_s"] <= 10
+
+
+def test_resume_all_paused_is_explicit_batch(repo, monkeypatch):
+    first, _ = _task(repo, status="paused")
+    tasks.save(repo, {"id": "t456def", "status": "paused", "created": 1, "rounds": 0, "tokens": 0})
+    resumed = []
+
+    def resume(ctx, a):
+        resumed.append(a.ids[0])
+        return {"id": a.ids[0], "status": "queued"}
+
+    monkeypatch.setattr(tasks, "resume", resume)
+    ctx = Ctx(root=repo, cwd=repo, config=load_config(repo))
+    result = tasks.cmd_task(ctx, build_parser().parse_args(["task", "resume", "--all-paused"]))
+    assert result.data["resumed"] == [first, "t456def"]
+    assert resumed == [first, "t456def"]
+
+
 def test_task_diff_includes_tracked_and_untracked(repo):
     tid, wt = _task(repo)
     (wt / "a.py").write_text("A = 2\n", encoding="utf-8")

@@ -1,7 +1,7 @@
-# Muse × AgentKit v0.2.1 测试任务书
+# Muse × AgentKit v0.2.2 测试任务书
 
-> 版本：v0.2.1  
-> 发布页：https://github.com/tangniutt/agentkit/releases/tag/v0.2.1  
+> 版本：v0.2.2  
+> 发布页：https://github.com/tangniutt/agentkit/releases/tag/v0.2.2  
 > 执行者：Muse  
 > 目标：验证直接模式、MCP stdio、派活模式三条真实使用路径，并产出可复现的脱敏证据。  
 > 重要：本任务书只生成测试结论和 Issue 草稿；**未经人类用户确认，不得提交公开 Issue、推送代码、发布 Release 或部署服务。**
@@ -9,7 +9,7 @@
 ## 1. 交给 Muse 的开场提示词
 
 ```text
-请在 Linux 测试环境中安装 AgentKit v0.2.1，严格按照 docs/muse-v0.2.1-test-plan.md 执行直接模式、MCP、派活模式测试。使用临时仓库和测试专用凭证；不得修改验收命令来制造通过，不得轮换账号或绕过限额。失败时保存精确命令、工作目录、退出码、error.code、error.run、task/goal ID、日志 ID 和最小复现步骤。所有输出先脱敏；最终把结果和 Issue 草稿交给我确认，不要自行提交 Issue。
+请在 Linux 测试环境中安装 AgentKit v0.2.2，严格按照 docs/muse-v0.2.2-test-plan.md 执行直接模式、MCP、派活模式测试。使用临时仓库和测试专用凭证；不得修改验收命令来制造通过，不得轮换账号或绕过限额。失败时保存精确命令、工作目录、退出码、error.code、error.run、task/goal ID、日志 ID 和最小复现步骤。所有输出先脱敏；最终把结果和 Issue 草稿交给我确认，不要自行提交 Issue。
 ```
 
 ## 2. 目标与完成标准
@@ -31,7 +31,7 @@
 - [ ] 两个模型之间的 `task handoff`。
 - [ ] 测试专用凭证的 `credential show → revoke → cancel` 演练。
 
-## 2.1 v0.2.1 Muse 复测重点
+## 2.1 v0.2.1 回归重点（保留）
 
 本轮是在 v0.2.0 反馈基础上的定向复测，先完成下表，再继续完整三阶段回归。
 
@@ -49,6 +49,20 @@
 | #6.6 轮次明细 | 派活后运行 `task report --details` | 包含每轮 token、模型耗时和动作；默认紧凑 report 不展开 |
 
 每个复测项都记录 command、exit/code、run/task/log ID 和最小复现；未触发环境写 `skipped + 原因`，不要写 pass。
+
+## 2.2 v0.2.2 定向复测
+
+| 反馈 | 复测动作 | 预期 |
+|---|---|---|
+| #7 paused cancel | 让任务进入 paused，再 `task cancel` | 状态立即变 cancelled，不再可 resume |
+| #8.1 上下文 | 不传 context 添加模型；再显式传 `--context-limit/--context-budget`；查看 model list/doctor | 未知上限不再写 32k 假值；显示 limit=unknown、budget=128000 与默认提示；预算控制压缩 |
+| #8.2 paused 老化/批量 | 查看 paused status；运行 `task resume --all-paused` | status 有 `paused_s`；仅显式批量恢复，默认不自动重试 |
+| #8.3 doctor | 同仓库分别在有/无可用沙箱时运行 doctor | 返回 `direct_ready`、`dispatch_ready`、`healthy_for`，不再用一个 healthy 混淆两种模式 |
+| #8.4 policy 档位 | 在无 bubblewrap 的嵌套容器设 `[sandbox] mode="policy"` 后派活 | 不需 test-only `allow_unsandboxed`；task/report/receipt 标 policy；文档明确无进程 jail，且只支持共享网络 |
+| #8.5 search | `search "pattern" --fixed file.py` | 正常返回结果，不再 AK-USAGE |
+| CLI 缺失提示 | 未安装 Qoder/Codex 时分别选择后端 | 只提示缺少被选中的 CLI；不自动下载、不安装、不联网 |
+
+先完成本节，再回归 v0.2.1 检查表和完整三阶段流程。
 
 ## 3. 安全与停止条件
 
@@ -70,7 +84,7 @@ python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install \
-  https://github.com/tangniutt/agentkit/releases/download/v0.2.1/agentkit-0.2.1-py3-none-any.whl
+  https://github.com/tangniutt/agentkit/releases/download/v0.2.2/agentkit-0.2.2-py3-none-any.whl
 
 agentkit doctor
 agentkit manual
@@ -220,7 +234,7 @@ agentkit run "git push"
 
 预期：
 
-- 读取 `.env` 返回 `AK-PATH`（v0.2.1 的受保护文件拒绝行为）。
+- 读取 `.env` 返回 `AK-PATH`（v0.2.2 的受保护文件拒绝行为）。
 - `git push` 返回 `AK-RUN-DENIED`。
 - 两个失败都不得泄露文件内容或凭证。
 
@@ -484,13 +498,13 @@ agentkit feedback --bug RUN_ID
 或手工按以下结构生成草稿：
 
 ```text
-Title: [v0.2.1][MODE][BACKEND] concise failure
+Title: [v0.2.2][MODE][BACKEND] concise failure
 
 Summary:
 - 一句话说明用户影响
 
 Environment:
-- AgentKit v0.2.1, commit, OS, Python, backend/model
+- AgentKit v0.2.2, commit, OS, Python, backend/model
 
 Steps to reproduce:
 1. ...
@@ -518,7 +532,7 @@ Security / secrets:
 ## 9. 最终报告模板
 
 ```text
-# Muse × AgentKit v0.2.1 测试报告
+# Muse × AgentKit v0.2.2 测试报告
 
 ## 环境
 - 版本 / commit：

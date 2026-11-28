@@ -3,7 +3,7 @@
 """M-12 model config + OpenAI-compatible client: retries, 429, timeouts, invalid key."""
 import pytest
 
-from agentkit.models import ChatClient, ModelError, ModelSpec
+from agentkit.models import ChatClient, ModelError, ModelSpec, all_models
 
 # fake key assembled at runtime (never a real credential, never a literal that scanners flag)
 KEY = "fk" + "-" + "unit" + "7" * 18
@@ -31,6 +31,24 @@ def test_model_add_list_never_stores_key(ak, repo, fake):
     assert not bad["ok"] and "NAME of an environment variable" in bad["error"]["what"]
     assert ak("model", "add", "y", "--base-url", fake.url, "--tier", "ultra")["ok"] is False
     assert ak("model", "remove", "cheap")["ok"] and ak("model", "list")["data"]["models"] == []
+
+
+def test_context_limit_and_budget_are_explicit(ak, repo):
+    unknown = ak("model", "add", "unknown", "--base-url", "http://127.0.0.1:9/v1")
+    assert unknown["data"]["context_limit"] == 0 and unknown["data"]["context_budget"] == 128000
+    assert "context_warning" in unknown["data"]
+    large = ak("model", "add", "large", "--base-url", "http://127.0.0.1:9/v1", "--context-limit", "1000000")
+    assert large["data"]["context_limit"] == 1000000 and large["data"]["context_budget"] == 256000
+    tuned = ak("model", "add", "tuned", "--base-url", "http://127.0.0.1:9/v1",
+               "--context-limit", "1000000", "--context-budget", "200000")
+    assert tuned["data"]["context_budget"] == 200000 and tuned["data"]["context_budget_defaulted"] is False
+    legacy = ak("model", "add", "legacy", "--base-url", "http://127.0.0.1:9/v1", "--context", "64000")
+    assert legacy["data"]["context_limit"] == 64000 and legacy["data"]["context_budget"] == 44800
+    bad = ak("model", "add", "bad", "--base-url", "http://127.0.0.1:9/v1",
+             "--context-limit", "1000", "--context-budget", "2000")
+    assert not bad["ok"] and bad["error"]["code"] == "AK-USAGE"
+    with pytest.raises(ValueError, match="context_budget must be positive"):
+        all_models({"models": {"bad": {"base_url": "http://127.0.0.1:9/v1", "context_budget": 0}}})
 
 
 def test_global_models_layer_under_project_overrides(ak, repo, tmp_path):
