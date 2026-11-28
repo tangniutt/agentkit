@@ -244,6 +244,18 @@
 - 附件单张 5 MiB、总计 10 MiB，不做自动缩放或 VLM 自动裁判；外部 CLI 原生图片输入暂未适配。
 - 回归：Linux 聚合 **208 passed**，Windows 契约 **154 passed**，外部后端拒绝测试通过。
 
+### 2026-11-29 v0.2.3 发布
+
+- Release：https://github.com/tangniutt/agentkit/releases/tag/v0.2.3 ；不可变 annotated tag `221bf18cf48c514c07f15803c59a3a637097c7e9` 指向 `0eefc521b697495326d0d5f93ad000d8f34f8b58`。
+- CI run `46188641780`：Linux Python 3.10/3.12、Windows direct-mode、release 最终全部成功。首次 Python 3.10 allowlist E2E 偶发失败；定向复现与完整 3.10 回归均通过，重跑后全绿，未放宽断言。
+- 本地全量：Windows **536 passed, 106 skipped**；Linux Python 3.10/3.12 + bubblewrap 各 **638 passed, 4 skipped**。
+- 当前提交离线评测：direct **24/24**、worker **24/24**、作弊库 **14/14**；`offline-gate.jsonl` SHA-256 `f80319b72c9c0d4317dbaf577da1f07811a9e4ec91ceda6fd92292da6ce5544a`。
+- wheel：258,651 bytes，SHA-256 `5bb648f0f8d8f53269830a38c1a8ce66ba2e04e84cbf0a6212c6b88fc59f74c5`；sdist：345,710 bytes，SHA-256 `5b1c7c1490f1c62cd676dc1f490fe1b08f208e961ffa555c5d976da5ae292deb`。
+- `SHA256SUMS` 与 `provenance.json` 均使用 RSA-3072/SHA-256 分离式签名；公钥 SHA-256 `6b4b0c8d5be5b0f3b63e5163cac99d58802379943dc1277f90778ae5dde9f98f`，provenance SHA-256 `f28beeaa8f91b4019e24cc8e7d659fc4559329a61ca69b41c5ce43b06d1d7101`。私钥未进入仓库、日志或文档，签名后已删除临时副本。
+- wheel/sdist 全新安装、隔离导入、doctor、MCP 35 工具/图片 schema、twine、CI 工件下载回验均通过；v0.2.2 → v0.2.3 临时 Windows venv 回滚演练成功。
+- 从 GitHub Release 重新下载全部资产后，manifest、wheel/sdist 哈希、两类签名、provenance 与远端 wheel 全新安装/MCP 冒烟全部复验通过。
+- Muse 复测任务书 `muse-v0.2.3-test-plan.md`：22,363 bytes，SHA-256 `c82c43b129e4e76da4d8cd020ee34c675f757b21d7a7aa6014796ca55dfc0a79`，已作为 Release 资产上传。
+
 ### 2026-11-28 v0.2.2 发布
 
 - Release：https://github.com/tangniutt/agentkit/releases/tag/v0.2.2 ；不可变 annotated tag 指向 `f1cdc715f56908ac87d6790287b2ad40aa981541`。
