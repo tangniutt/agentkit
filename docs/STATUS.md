@@ -228,6 +228,15 @@
 - `SHA256SUMS` 与 `provenance.json` 均使用 RSA-3072/SHA-256 分离式签名；公钥 SHA-256 `c1f232c43e214d772aff43bdd7b00634c13436b116ce3c69804746f2fee50d04`。私钥未进入仓库、日志或文档，签名后已删除临时副本。
 - 临时 Windows venv 回滚演练成功，`agentkit doctor healthy`；从 GitHub Release 重新下载后，manifest、wheel/sdist 哈希、校验和签名与 provenance 签名全部复验通过。
 
+### 2026-11-28 v0.2.1 发布
+
+- Release：https://github.com/tangniutt/agentkit/releases/tag/v0.2.1 ；不可变 annotated tag 指向 `4ed059a657f6a0f9b2f9382106da112ed582758f`。
+- CI run `46095750105`：Linux Python 3.10/3.12、Windows direct-mode、release 全部成功。
+- wheel：252,783 bytes，SHA-256 `62945773ecaa74a28eaa4ba504d79609a4eb177562c9bde12af537c4a8f45fb7`；sdist：336,864 bytes，SHA-256 `a5fcf0159641f48924b2953328a8377bf9e35a745f3a3189afd6e136213015cb`。
+- `SHA256SUMS` 与 `provenance.json` 均使用 RSA-3072/SHA-256 分离式签名；公钥 SHA-256 `86b7b68a15bd6d8ed511f602b38f7ccfe5a925a85f40e9b802f50f89d6fc8821`。私钥未进入仓库、日志或文档，签名后已删除临时副本。
+- v0.2.0 → v0.2.1 临时 Windows venv 回滚演练成功，`doctor healthy`；远端下载的 manifest、wheel/sdist、签名、provenance 与 Muse 任务书全部复验通过。
+- Muse 复测任务书 `muse-v0.2.1-test-plan.md`：19,586 bytes，SHA-256 `a8d3b331fd324009f4dd06979d21f0d6b52f7928bf1d36ffa794480fc8abc777`，已作为 Release 资产上传。
+
 ### 2026-11-28 Muse v0.2.0 反馈修复
 
 - Issue #1：bubblewrap doctor 探针与真实 `--unshare-all --proc` 启动等价；`auto` 模式不可用时失败关闭，只有显式 `mode=off` 可无沙箱运行；`starting` 死亡快速进入 `AK-SANDBOX-UNAVAILABLE`，cancel 可收尾。
@@ -236,7 +245,7 @@
 - Issue #4：MCP 按 inputSchema 校验参数，错误返回 `-32602 Invalid arguments`；增加 `id/ids`、`spec/path` 兼容别名，相对路径按 `--root` 解析。
 - Issue #5：修正 Muse 测试任务书，并让 verify changed 列表过滤 `__pycache__`/字节码噪声。
 - Issue #6：去重结果显式标记并支持 `--fresh`；status 增加 `idle_s`；模型配置支持 `--global` 与项目覆盖；`verify --receipt` 重跑基线并生成 EvidenceReceipt；builtin 完整 report/`task report --details` 增加轮次 token、耗时和动作明细。
-- 上述修复尚未打入新 Release tag；真实账号测试仍按用户决定由 Muse 在发布后执行。
+- 上述修复已打入 `v0.2.1`；真实账号测试仍按用户决定由 Muse 在发布后执行。
 
 ## 2026-11-25 生产化验证
 
