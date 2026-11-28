@@ -2084,7 +2084,7 @@ def cancel(root: Path, tid: str) -> dict:
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
             t = load(root, tid)
-            if t["status"] in TERMINAL or t["status"] == "verifying" or not pid_alive(pid):
+            if t["status"] in TERMINAL or t["status"] == "verifying":
                 break
             time.sleep(0.1)
     t = load(root, tid)
