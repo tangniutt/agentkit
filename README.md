@@ -7,6 +7,8 @@
 
 **状态：`v0.2.0` 已发布为生产候选（[Release](https://github.com/tangniutt/agentkit/releases/tag/v0.2.0)）——M2 Python 原型 + P0 可信基座 + Goal/MCP 2025 + 任务控制面 + Builtin/XERJ/LSP 代码智能、宿主侧凭证授权/FD 隔离、导入劫持防护、固定版本签名/provenance 与回滚门禁已落地。真实账号与其余 LSP 服务器按用户决定延后到发布后用 Muse 验证；官方 CLI 自身仍须持有 provider 凭证，不声称提供完整反代 broker。Windows 仅保留开发机 direct-mode 兼容，不作为生产部署平台或验收门槛。**
 
+> v0.2.0 发布后的 Muse 反馈修复已进入 `main`，尚未创建新版本 tag。
+
 ## 它解决什么
 - 现有编程工具为人设计，AI 用起来读得多、改容易失败、不知道改得对不对。
 - 主管级大模型（贵）亲自读日志、跑测试，成本高；便宜模型又常「说做完了其实没做完」。
@@ -54,13 +56,13 @@ AI 读 [`llms.txt`](llms.txt) 即可上手；管理 AgentKit 的主管 AI 用 `a
 | `agentkit patch` (stdin JSON) | 多文件原子补丁（replace/create/delete/rename），任一失败全部回滚 |
 | `agentkit create / delete / rename` | 新建 / 删除 / 重命名，同样自动快照 |
 | `agentkit run "cmd" [--timeout 120] [--raw]` | 超时杀进程组；返回 exit_code、耗时、stderr 尾部优先；完整日志落盘。C-08：按命令过滤冗长输出（pytest / jest / go / cargo / tsc / eslint / ruff / mypy / pip / npm / git status·diff·log / 通用），去 ANSI 与进度条、重复行计数折叠，错误 / 失败行永不删；`filtered.raw` 给出 `agentkit logs RUN --raw` 找回原文；`--raw` 或 `[compress] run_filters = false` 关闭 |
-| `agentkit verify --check "pytest -q"` | 在干净 worktree（非 git 则临时副本）跑验收；≤300 token 报告：pass/fail/invalid、改动文件、可疑标记 |
+| `agentkit verify --check "pytest -q" [--receipt]` | 在干净 worktree（非 git 则临时副本）跑验收；≤300 token 报告：pass/fail/invalid/needs_review、改动文件、可疑标记；`--receipt` 重跑基线并生成 EvidenceReceipt |
 | `agentkit checkpoint list / diff ID / rollback ID` | 每次改动前自动快照，回滚后哈希校验；不依赖 git |
 | `agentkit memory brief / add / list / search / show / forget` | 项目记忆（Markdown + front matter，SQLite FTS5 检索，代码锚定失效标记） |
 | `agentkit doctor` | 自检，每项给修复建议 |
-| `agentkit model add/list/test/remove` | 配置工人模型（任意 OpenAI 兼容接口）；配置里只存 Key 的**环境变量名** |
-| `agentkit task create "目标" --check "pytest -q" [--backend builtin\|codex\|opencode\|qoder\|cursor\|cursor] [--model NAME] [--allow DIR] [--budget-tokens/--budget-usd/--budget-minutes] [--tier]` | 派活：builtin API Key 模型、Codex、OpenCode、Qoder 或 Cursor CLI 在独立 worktree/分支 `agentkit/<id>` 干活；默认要求验收在基线失败、修复后通过；无模型时返回「直接模式」提示 |
-| `agentkit task status / wait / report / diff / steer / answer / accept / reject / cancel / clean` | status <100 token；report ≤300 token；支持预算内 diff、中途纠偏、工人提问回答和接受/拒绝记录 |
+| `agentkit model add/list/test/remove` | 配置工人模型（任意 OpenAI 兼容接口）；`add/remove --global` 使用用户级配置，项目级同名模型覆盖；只存 Key 的**环境变量名** |
+| `agentkit task create "目标" --check "pytest -q" [--backend builtin\|codex\|opencode\|qoder\|cursor] [--model NAME] [--allow DIR] [--budget-tokens/--budget-usd/--budget-minutes] [--tier] [--fresh]` | 派活：builtin API Key 模型、Codex、OpenCode、Qoder 或 Cursor CLI 在独立 worktree/分支 `agentkit/<id>` 干活；默认要求验收在基线失败、修复后通过；`--fresh` 跳过内容去重，无模型时返回「直接模式」提示 |
+| `agentkit task status / wait / report [--details] / diff / steer / answer / accept / reject / cancel / clean` | status <100 token 且活跃任务含 `idle_s`；report 默认 ≤300 token，`--details` 展开轮次明细；支持 diff、纠偏、提问回答和接受/拒绝 |
 | `agentkit task resume ID [--model NAME] [--backend builtin\|codex\|opencode\|qoder\|cursor] [--budget-*]` | 续跑 paused（429/超时）/ interrupted / stopped 任务：沿用原 worktree 和分支；可换模型或后端，token / 金额预算按整个任务累计 |
 | `agentkit task handoff ID [--model NAME] [--backend builtin\|codex\|opencode\|qoder\|cursor]` | 显式换工人接力，保留 worktree、diff、记忆和累计预算，记录接力历史 |
 | `agentkit goal create/run/status/wait/report/steer/answer/cancel/resume` | 有界结果闭环：执行、独立验收、失败反馈、提问回答、续跑或换模型，只有验收通过才完成 |

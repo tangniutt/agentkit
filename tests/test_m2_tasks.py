@@ -96,11 +96,12 @@ def test_task_end_to_end_isolated(ak, repo, fake):
 
 
 def test_lean_create_and_wait_with_inline_report(ak, repo, fake):
-    """C-06: create says only id/status (next in the envelope); wait on one finished task carries the report."""
+    """C-06: create stays lean but explicitly reports dedupe state; wait carries the report."""
     project(repo, ak, fake)
     fake.add("[LEAN]", FIX)
     r = ak("task", "create", "fix add [LEAN]", "--check", CHECK)
-    assert set(r["data"]) == {"id", "status"} and r["next"].startswith("agentkit task wait " + r["data"]["id"])
+    assert set(r["data"]) == {"id", "status", "deduped"} and r["data"]["deduped"] is False
+    assert r["next"].startswith("agentkit task wait " + r["data"]["id"])
     w = ak("task", "wait", r["data"]["id"], "--timeout", "90")
     d = w["data"]
     assert d["done"] and d["verdict"] == "pass" and d["changed"] == ["M calc.py"] and d["suspicious"] == []
@@ -109,6 +110,13 @@ def test_lean_create_and_wait_with_inline_report(ak, repo, fake):
     assert len(w["_raw"]) <= 1200
     full = ak("task", "report", r["data"]["id"])["data"]
     assert {k: v for k, v in full.items()} == {k: v for k, v in d.items() if k != "done"}
+    stored = json.loads((repo / ".agentkit" / "tasks" / r["data"]["id"] / "report.json").read_text(encoding="utf-8"))
+    details = stored["round_details"]
+    assert details and all({"round", "tokens_in", "tokens_out", "model_s", "actions"} <= set(item) for item in details)
+    assert sum(item["tokens_in"] + item["tokens_out"] for item in details) == stored["cost"]["tokens"]
+    assert "round_details" not in d and "round_details" not in full
+    detailed = ak("task", "report", r["data"]["id"], "--details", budget=4000)["data"]
+    assert detailed["round_details"] == details
 
 
 def test_task_refuses_non_git_and_empty_repo(ak, repo, fake):
@@ -134,13 +142,18 @@ def test_dedupe_and_queue(ak, repo, fake):
     t1 = create(ak, "fix add [SLOW1]")
     again = ak("task", "create", "fix add [SLOW1]", "--check", CHECK)
     assert again["data"]["id"] == t1 and again["data"]["deduped"] is True
+    assert again["data"]["reused"] is True and again["data"]["original_status"] in {"queued", "starting", "running"}
     t2 = create(ak, "fix add [FAST2]")
     s2 = ak("task", "status", t2)["data"]
     assert s2["status"] == "queued" and s2["pos"] == 1
     r = ak("task", "wait", t1, t2, "--timeout", "90")
     assert r["data"]["done"] and [t["verdict"] for t in r["data"]["tasks"]] == ["pass", "pass"]
-    # a passed task with identical content is still deduped
-    assert ak("task", "create", "fix add [FAST2]", "--check", CHECK)["data"].get("deduped") is True
+    # a passed task is visibly reused unless the supervisor explicitly asks for a fresh run
+    reused = ak("task", "create", "fix add [FAST2]", "--check", CHECK)["data"]
+    assert reused["id"] == t2 and reused["deduped"] is True and reused["verdict"] == "pass"
+    fresh = ak("task", "create", "fix add [FAST2]", "--check", CHECK, "--fresh")
+    assert fresh["ok"] and fresh["data"]["id"] != t2 and fresh["data"]["deduped"] is False
+    assert wait(ak, fresh["data"]["id"])["verdict"] == "pass"
 
 
 def test_malformed_tool_call_repaired(ak, repo, fake):

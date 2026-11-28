@@ -20,7 +20,8 @@ def available() -> bool:
     if os.name != "posix" or not shutil.which("bwrap"):
         return False
     try:
-        r = subprocess.run(["bwrap", "--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev", "true"],
+        r = subprocess.run(["bwrap", "--new-session", "--unshare-all", "--share-net",
+                            "--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "true"],
                            capture_output=True, timeout=5)
         return r.returncode == 0
     except (OSError, subprocess.SubprocessError):

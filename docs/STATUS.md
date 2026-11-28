@@ -228,6 +228,16 @@
 - `SHA256SUMS` 与 `provenance.json` 均使用 RSA-3072/SHA-256 分离式签名；公钥 SHA-256 `c1f232c43e214d772aff43bdd7b00634c13436b116ce3c69804746f2fee50d04`。私钥未进入仓库、日志或文档，签名后已删除临时副本。
 - 临时 Windows venv 回滚演练成功，`agentkit doctor healthy`；从 GitHub Release 重新下载后，manifest、wheel/sdist 哈希、校验和签名与 provenance 签名全部复验通过。
 
+### 2026-11-28 Muse v0.2.0 反馈修复
+
+- Issue #1：bubblewrap doctor 探针与真实 `--unshare-all --proc` 启动等价；`auto` 模式不可用时失败关闭，只有显式 `mode=off` 可无沙箱运行；`starting` 死亡快速进入 `AK-SANDBOX-UNAVAILABLE`，cancel 可收尾。
+- Issue #2：修正 `task diff/steer/answer/accept/reject` 的 Namespace 参数契约，单 ID 命令不再崩溃。
+- Issue #3：直接 verify 出现可疑标记时顶层 verdict 改为 `needs_review`，不再以 pass 放行。
+- Issue #4：MCP 按 inputSchema 校验参数，错误返回 `-32602 Invalid arguments`；增加 `id/ids`、`spec/path` 兼容别名，相对路径按 `--root` 解析。
+- Issue #5：修正 Muse 测试任务书，并让 verify changed 列表过滤 `__pycache__`/字节码噪声。
+- Issue #6：去重结果显式标记并支持 `--fresh`；status 增加 `idle_s`；模型配置支持 `--global` 与项目覆盖；`verify --receipt` 重跑基线并生成 EvidenceReceipt；builtin 完整 report/`task report --details` 增加轮次 token、耗时和动作明细。
+- 上述修复尚未打入新 Release tag；真实账号测试仍按用户决定由 Muse 在发布后执行。
+
 ## 2026-11-25 生产化验证
 
 - Windows 直接模式与跨平台模块：`pytest -q` = **344 passed, 62 skipped**（Python 3.13.7）；已修复 UTF-8 文档在 GBK locale 下的测试读取，并新增 Windows CI job。最终 wheel 构建成功（184,591 字节，SHA-256 `60812aea…`），在全新虚拟环境安装后 `doctor` 健康通过、MCP 列出 31 个工具且后端 schema 正确、HandoffPacket 与 CodexBackend 导入校验通过。

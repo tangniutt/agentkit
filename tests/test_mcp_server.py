@@ -7,7 +7,7 @@ import subprocess
 import sys
 import threading
 
-from agentkit.mcp_server import _argv, _state, _watch, handle
+from agentkit.mcp_server import _argv, _normalize_tool_arguments, _schema_issues, _state, _watch, handle
 
 
 def _run(repo, messages):
@@ -31,11 +31,53 @@ def _task(repo, tid: str, status: str = "queued"):
     return path
 
 
+def test_tool_argument_aliases_normalize_without_breaking_cli_mapping():
+    read, issues = _normalize_tool_arguments("agentkit_read", {"path": "calc.py"})
+    assert not issues and _argv("agentkit_read", read) == ["read", "calc.py"]
+    report, issues = _normalize_tool_arguments("agentkit_task_report", {"ids": ["t123abc"]})
+    assert not issues and _argv("agentkit_task_report", report) == ["task", "report", "t123abc"]
+    status, issues = _normalize_tool_arguments("agentkit_task_status", {"id": "t123abc"})
+    assert not issues and _argv("agentkit_task_status", status) == ["task", "status", "t123abc"]
+    assert _schema_issues({"type": "integer"}, True) == ["arguments: expected integer"]
+
+
+def test_mcp_invalid_arguments_are_not_unknown_tool(repo):
+    out = _run(repo, [
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+         "params": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "test", "version": "1"}}},
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+         "params": {"name": "agentkit_task_report", "arguments": {"ids": []}, **_meta()}},
+    ])
+    error = out[-1]["error"]
+    assert error["code"] == -32602 and "Invalid arguments" in error["message"]
+    assert "Unknown tool" not in error["message"]
+    assert error["data"]["tool"] == "agentkit_task_report" and error["data"]["issues"]
+
+
+def test_mcp_read_path_alias_resolves_from_root(repo):
+    (repo / "calc.py").write_text("def add(a, b):\n    return a + b\n", encoding="utf-8")
+    out = _run(repo, [
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+         "params": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "test", "version": "1"}}},
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+         "params": {"name": "agentkit_read", "arguments": {"path": "calc.py"}, **_meta()}},
+    ])
+    result = out[-1]["result"]
+    assert result["isError"] is False
+    assert "return a + b" in result["structuredContent"]["data"]["content"]
+
+
 def test_backend_arguments_map_to_cli():
     assert _argv("agentkit_credential_show", {"target": "t123abc"}) == ["credential", "show", "t123abc"]
     assert _argv("agentkit_credential_revoke", {"target": "cb_1"}) == ["credential", "revoke", "cb_1"]
     assert _argv("agentkit_task_create", {"goal": "x", "checks": ["pytest"], "backend": "codex"}) == [
         "task", "create", "x", "--check", "pytest", "--backend", "codex"]
+    assert _argv("agentkit_task_create", {"goal": "x", "checks": ["true"], "fresh": True}) == [
+        "task", "create", "x", "--check", "true", "--fresh"]
+    assert _argv("agentkit_task_report", {"id": "t123abc", "details": True}) == [
+        "task", "report", "t123abc", "--details"]
+    assert _argv("agentkit_verify", {"checks": ["true"], "receipt": True}) == [
+        "verify", "--check", "true", "--receipt"]
     assert _argv("agentkit_task_handoff", {"id": "t123abc", "backend": "codex"}) == [
         "task", "handoff", "t123abc", "--backend", "codex"]
     assert _argv("agentkit_task_create", {"goal": "x", "checks": ["pytest"], "backend": "opencode"}) == [
@@ -132,8 +174,7 @@ def test_mcp_route_uses_measured_profiles(repo):
     arguments["complexity"] = 4
     out = handle(repo, {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
                         "params": {**_meta(), "name": "agentkit_route", "arguments": arguments}}, _state())
-    assert out["result"]["isError"] is True
-    assert out["result"]["structuredContent"]["error"]["code"] == "AK-CONFIG"
+    assert out["error"]["code"] == -32602 and "Invalid arguments" in out["error"]["message"]
 
 
 def test_mcp_tool_failure_is_result_error(repo):

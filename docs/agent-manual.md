@@ -6,7 +6,7 @@ AgentKit: token-frugal coding tools for AI agents + optional cheap worker with i
 
 Global options: --budget N (output tokens, default 2000), --human (text), --root DIR; anywhere on the line.
 
-JSON form: `agentkit manual` (overview, ~1805 tokens), `agentkit manual <command>` (one command), `agentkit manual --all` (everything, ~4971 tokens).
+JSON form: `agentkit manual` (overview, ~1800 tokens), `agentkit manual <command>` (one command), `agentkit manual --all` (everything, ~4984 tokens).
 
 ## Quick start (supervisor)
 
@@ -313,8 +313,9 @@ run checks in a clean worktree/copy, ≤300-token report
 | `--check` | str |  | repeatable; check command, e.g. 'pytest -q' |
 | `--timeout` | float |  | seconds per check |
 | `--base` | str | `HEAD` | git ref the clean worktree starts from |
+| `--receipt` | bool |  | rerun checks on the base commit and write an EvidenceReceipt |
 
-- **Output `data`:** `verdict,checks,changed,suspicious,cost,code?`
+- **Output `data`:** `verdict,checks,changed,suspicious,cost,receipt?,code?`
 - **Errors:** `AK-VERIFY-NOCHECK` (verify/task has no check command), `AK-VERIFY-INVALID` (a check command is missing or broken), `AK-RUN-DENIED` (command refused by a permission rule (M-22)), `AK-GIT` (a git command failed), `AK-DISK-FULL` (not enough free disk space)
 - **Side effects:** exec
 - **Example:** `agentkit verify --check 'pytest -q'`
@@ -417,7 +418,7 @@ self check with fix hints
 
 ### `agentkit model add`
 
-add OpenAI-compatible model; store key env name
+add model; store key env name
 
 | arg | type | default | notes |
 |---|---|---|---|
@@ -435,17 +436,18 @@ add OpenAI-compatible model; store key env name
 | `--price-out` | float | `0.0` | USD per 1M output tokens |
 | `--tier` | str | `low` | low\|mid\|high |
 | `--default` | bool |  |  |
+| `--global` | bool |  | write to the user config; project models override it |
 
-- **Output `data`:** `added,config,key_env_set,warning?`
+- **Output `data`:** `added,scope,config,key_env_set,warning?`
 - **Errors:** `AK-USAGE` (bad command line arguments)
 - **Side effects:** state
 - **Example:** `agentkit model add x --preset nvidia`
 
 ### `agentkit model list`
 
-configured models (no keys)
+models (no keys)
 
-- **Output `data`:** `models[{name,model,tier,context,price,key_env,key_set}],default`
+- **Output `data`:** `models[{name,model,tier,context,price,key_env,key_set,scope}],default`
 - **Errors:** only the common ones
 - **Side effects:** ro
 - **Example:** `agentkit model list`
@@ -471,15 +473,16 @@ remove a model from config
 | arg | type | default | notes |
 |---|---|---|---|
 | `name` | str |  |  |
+| `--global` | bool |  | remove from the user config |
 
-- **Output `data`:** `removed`
+- **Output `data`:** `removed,scope`
 - **Errors:** `AK-MODEL-NONE` (no worker model configured (direct mode))
 - **Side effects:** state
 - **Example:** `agentkit model remove cheap`
 
 ### `agentkit task create`
 
-dispatch worker with fail-to-pass
+dispatch with fail-to-pass
 
 | arg | type | default | notes |
 |---|---|---|---|
@@ -494,37 +497,25 @@ dispatch worker with fail-to-pass
 | `--tier` | str |  | low\|mid\|high: pick a model by tier |
 | `--model` | str |  | builtin name, Codex id, OpenCode provider/model, Qoder model, or Cursor model |
 | `--backend` | str | `builtin` | worker backend |
+| `--fresh` | bool |  | bypass task content dedupe and create a new run |
 
-- **Output `data`:** `id,status,deduped?,warnings?`
+- **Output `data`:** `id,status,deduped,reused?,verdict?,warnings?`
 - **Errors:** `AK-MODEL-NONE` (no worker model configured (direct mode)), `AK-VERIFY-NOCHECK` (verify/task has no check command), `AK-TASK-STATE` (operation not allowed in the task's current state)
 - **Side effects:** tokens, net, exec, state
 - **Example:** `agentkit task create x --check true`
 
 ### `agentkit task status`
 
-<100 tokens/task; bare task = recent
+<100 tokens; bare = recent
 
 | arg | type | default | notes |
 |---|---|---|---|
 | `ids` | str |  | zero or more |
 
-- **Output `data`:** `id,status,verdict?,rounds,tok,s,queue?,code?,at?,log?`
+- **Output `data`:** `id,status,verdict?,rounds,tok,s,idle_s?,queue?,code?,at?,log?`
 - **Errors:** `AK-TASK-UNKNOWN` (unknown or invalid task id)
 - **Side effects:** ro
 - **Example:** `agentkit task status t1a2b3c`
-
-### `agentkit task report`
-
-≤300-token verdict; never trust worker
-
-| arg | type | default | notes |
-|---|---|---|---|
-| `ids` | str |  | zero or more |
-
-- **Output `data`:** `task,status,verdict,checks,changed,suspicious,cost,error?`
-- **Errors:** `AK-TASK-UNKNOWN` (unknown or invalid task id)
-- **Side effects:** ro
-- **Example:** `agentkit task report t1a2b3c`
 
 ### `agentkit task cancel`
 
@@ -538,6 +529,20 @@ stop a queued/running task (this is 'stop')
 - **Errors:** `AK-TASK-UNKNOWN` (unknown or invalid task id)
 - **Side effects:** state
 - **Example:** `agentkit task cancel t1a2b3c`
+
+### `agentkit task report`
+
+verdict; details=rounds
+
+| arg | type | default | notes |
+|---|---|---|---|
+| `ids` | str |  | zero or more |
+| `--details` | bool |  | include full per-round token and action details |
+
+- **Output `data`:** `task,status,verdict,checks,changed,suspicious,cost,rounds?,error?`
+- **Errors:** `AK-TASK-UNKNOWN` (unknown or invalid task id)
+- **Side effects:** ro
+- **Example:** `agentkit task report t1a2b3c`
 
 ### `agentkit task wait`
 

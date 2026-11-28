@@ -40,6 +40,96 @@ def _tool(name: str, description: str, properties: dict, required: list[str] | N
             "outputSchema": OUTPUT_SCHEMA, "annotations": annotations or {}}
 
 
+def _type_matches(value: Any, expected: str) -> bool:
+    if expected == "object":
+        return isinstance(value, dict)
+    if expected == "array":
+        return isinstance(value, list)
+    if expected == "string":
+        return isinstance(value, str)
+    if expected == "boolean":
+        return isinstance(value, bool)
+    if expected == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if expected == "number":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    return True
+
+
+def _schema_issues(schema: dict, value: Any, path: str = "arguments") -> list[str]:
+    issues = []
+    expected = schema.get("type")
+    types = expected if isinstance(expected, list) else [expected] if expected else []
+    if types and not any(_type_matches(value, item) for item in types):
+        return [f"{path}: expected {' or '.join(types)}"]
+    if "enum" in schema and value not in schema["enum"]:
+        issues.append(f"{path}: expected one of {schema['enum']}")
+    if isinstance(value, dict):
+        properties = schema.get("properties") or {}
+        for key in schema.get("required") or []:
+            if key not in value:
+                issues.append(f"{path}: missing required field '{key}'")
+        if schema.get("additionalProperties") is False:
+            for key in value:
+                if key not in properties:
+                    issues.append(f"{path}: unknown field '{key}'")
+        for key, item in value.items():
+            child = properties.get(key)
+            if child is None and isinstance(schema.get("additionalProperties"), dict):
+                child = schema["additionalProperties"]
+            if isinstance(child, dict):
+                issues += _schema_issues(child, item, f"{path}.{key}")
+    elif isinstance(value, list):
+        if len(value) < schema.get("minItems", 0):
+            issues.append(f"{path}: expected at least {schema['minItems']} item(s)")
+        items = schema.get("items")
+        if isinstance(items, dict):
+            for index, item in enumerate(value):
+                issues += _schema_issues(items, item, f"{path}[{index}]")
+    elif isinstance(value, (int, float)) and not isinstance(value, bool):
+        if "minimum" in schema and value < schema["minimum"]:
+            issues.append(f"{path}: must be >= {schema['minimum']}")
+        if "maximum" in schema and value > schema["maximum"]:
+            issues.append(f"{path}: must be <= {schema['maximum']}")
+    return issues
+
+
+def _normalize_tool_arguments(name: str, arguments: dict) -> tuple[dict, list[str]]:
+    args = dict(arguments)
+    issues = []
+    if name == "agentkit_read":
+        if "spec" in args and "path" in args:
+            issues.append("arguments: use only one of 'spec' or 'path'")
+        elif "path" in args:
+            args["spec"] = args.pop("path")
+        if "spec" not in args:
+            issues.append("arguments: missing required field 'spec' (or alias 'path')")
+    single = {"agentkit_task_report", "agentkit_task_diff", "agentkit_task_steer", "agentkit_task_answer",
+              "agentkit_task_accept", "agentkit_task_reject", "agentkit_task_handoff"}
+    if name in single:
+        if "id" in args and "ids" in args:
+            issues.append("arguments: use only one of 'id' or 'ids'")
+        elif "ids" in args:
+            ids = args.pop("ids")
+            if not isinstance(ids, list) or len(ids) != 1 or not isinstance(ids[0], str):
+                issues.append("arguments.ids: single-task tools require exactly one string id")
+            else:
+                args["id"] = ids[0]
+        if "id" not in args:
+            issues.append("arguments: missing required field 'id' (or alias 'ids')")
+    if name in ("agentkit_task_status", "agentkit_task_wait"):
+        if "id" in args and "ids" in args:
+            issues.append("arguments: use only one of 'id' or 'ids'")
+        elif "id" in args:
+            if not isinstance(args["id"], str):
+                issues.append("arguments.id: expected string")
+            else:
+                args["ids"] = [args.pop("id")]
+        if name == "agentkit_task_wait" and not args.get("ids"):
+            issues.append("arguments: missing required field 'ids' (or alias 'id')")
+    return args, issues
+
+
 TOOLS = [
     _tool("agentkit_doctor", "Check version, git, write access, disk, tree-sitter and model configuration.", {},
           annotations={"readOnlyHint": True}),
@@ -52,9 +142,9 @@ TOOLS = [
           {"pattern": {"type": "string"}, "path": {"type": "string"}, "glob": {"type": "string"},
            "fixed": {"type": "boolean"}, "ignore_case": {"type": "boolean"}, "offset": {"type": "integer"}},
           ["pattern"], {"readOnlyHint": True}),
-    _tool("agentkit_read", "Read a file, line range, or symbol with budgeted output.",
-          {"spec": {"type": "string"}, "allow_secret_file": {"type": "boolean"}}, ["spec"],
-          {"readOnlyHint": True}),
+    _tool("agentkit_read", "Read a file, line range, or symbol with budgeted output; 'path' is an alias for 'spec'.",
+          {"spec": {"type": "string"}, "path": {"type": "string"}, "allow_secret_file": {"type": "boolean"}},
+          annotations={"readOnlyHint": True}),
     _tool("agentkit_edit", "Replace one exact unique snippet; syntax errors are rejected.",
           {"path": {"type": "string"}, "old": {"type": "string"}, "new": {"type": "string"},
            "all": {"type": "boolean"}, "dry_run": {"type": "boolean"}},
@@ -65,7 +155,7 @@ TOOLS = [
           {"readOnlyHint": False, "destructiveHint": True}),
     _tool("agentkit_verify", "Run acceptance checks in a clean worktree or temporary copy.",
           {"checks": {"type": "array", "items": {"type": "string"}, "minItems": 1},
-           "timeout": {"type": "number"}, "base": {"type": "string"}}, ["checks"],
+           "timeout": {"type": "number"}, "base": {"type": "string"}, "receipt": {"type": "boolean"}}, ["checks"],
           {"readOnlyHint": False, "destructiveHint": False}),
     _tool("agentkit_memory_search", "Search project memory by keyword.",
           {"query": {"type": "string"}}, ["query"], {"readOnlyHint": True}),
@@ -92,30 +182,38 @@ TOOLS = [
            "allow": {"type": "array", "items": {"type": "string"}}, "model": {"type": "string"},
            "backend": {"type": "string", "enum": ["builtin", "codex", "opencode", "qoder", "cursor"]},
            "tier": {"type": "string"}, "budget_tokens": {"type": "integer"}, "budget_usd": {"type": "number"},
-           "budget_minutes": {"type": "number"}, "allow_baseline_pass": {"type": "boolean"}},
+           "budget_minutes": {"type": "number"}, "allow_baseline_pass": {"type": "boolean"},
+           "fresh": {"type": "boolean"}},
           ["goal", "checks"], {"readOnlyHint": False, "destructiveHint": False}),
-    _tool("agentkit_task_status", "Return compact status for one or more tasks.",
-          {"ids": {"type": "array", "items": {"type": "string"}}}, annotations={"readOnlyHint": True}),
-    _tool("agentkit_task_wait", "Wait for tasks to finish and return a compact report.",
-          {"ids": {"type": "array", "items": {"type": "string"}, "minItems": 1},
-           "timeout": {"type": "number"}, "no_report": {"type": "boolean"}}, ["ids"],
-          {"readOnlyHint": True}),
-    _tool("agentkit_task_report", "Return the independent verification report for a task.",
-          {"id": {"type": "string"}}, ["id"], {"readOnlyHint": True}),
-    _tool("agentkit_task_diff", "Return a budgeted tracked and untracked task diff.",
-          {"id": {"type": "string"}, "offset": {"type": "integer"}}, ["id"], {"readOnlyHint": True}),
-    _tool("agentkit_task_steer", "Append a constraint to a queued or paused task.",
-          {"id": {"type": "string"}, "text": {"type": "string"}}, ["id", "text"], {"readOnlyHint": False}),
-    _tool("agentkit_task_answer", "Answer a worker question and resume the task.",
-          {"id": {"type": "string"}, "text": {"type": "string"}}, ["id", "text"], {"readOnlyHint": False}),
-    _tool("agentkit_task_accept", "Record acceptance of a verified pass without merging.",
-          {"id": {"type": "string"}}, ["id"], {"readOnlyHint": False}),
-    _tool("agentkit_task_reject", "Record task rejection and reason.",
-          {"id": {"type": "string"}, "reason": {"type": "string"}}, ["id"], {"readOnlyHint": False}),
-    _tool("agentkit_task_handoff", "Resume a paused task with another model or backend while preserving worktree and budgets.",
-          {"id": {"type": "string"}, "model": {"type": "string"},
+    _tool("agentkit_task_status", "Return compact status for one or more tasks; 'id' is a single-task alias for 'ids'.",
+          {"id": {"type": "string"}, "ids": {"type": "array", "items": {"type": "string"}}},
+          annotations={"readOnlyHint": True}),
+    _tool("agentkit_task_wait", "Wait for tasks to finish and return a compact report; 'id' is a single-task alias for 'ids'.",
+          {"id": {"type": "string"}, "ids": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+           "timeout": {"type": "number"}, "no_report": {"type": "boolean"}},
+          annotations={"readOnlyHint": True}),
+    _tool("agentkit_task_report", "Return the independent verification report for a task; 'ids' accepts one id.",
+          {"id": {"type": "string"}, "ids": {"type": "array", "items": {"type": "string"}},
+           "details": {"type": "boolean"}}, annotations={"readOnlyHint": True}),
+    _tool("agentkit_task_diff", "Return a budgeted tracked and untracked task diff; 'ids' accepts one id.",
+          {"id": {"type": "string"}, "ids": {"type": "array", "items": {"type": "string"}},
+           "offset": {"type": "integer"}}, annotations={"readOnlyHint": True}),
+    _tool("agentkit_task_steer", "Append a constraint to a queued or paused task; 'ids' accepts one id.",
+          {"id": {"type": "string"}, "ids": {"type": "array", "items": {"type": "string"}},
+           "text": {"type": "string"}}, ["text"], {"readOnlyHint": False}),
+    _tool("agentkit_task_answer", "Answer a worker question and resume the task; 'ids' accepts one id.",
+          {"id": {"type": "string"}, "ids": {"type": "array", "items": {"type": "string"}},
+           "text": {"type": "string"}}, ["text"], {"readOnlyHint": False}),
+    _tool("agentkit_task_accept", "Record acceptance of a verified pass without merging; 'ids' accepts one id.",
+          {"id": {"type": "string"}, "ids": {"type": "array", "items": {"type": "string"}}},
+          {"readOnlyHint": False}),
+    _tool("agentkit_task_reject", "Record task rejection and reason; 'ids' accepts one id.",
+          {"id": {"type": "string"}, "ids": {"type": "array", "items": {"type": "string"}},
+           "reason": {"type": "string"}}, {"readOnlyHint": False}),
+    _tool("agentkit_task_handoff", "Resume a paused task with another model or backend while preserving worktree and budgets; 'ids' accepts one id.",
+          {"id": {"type": "string"}, "ids": {"type": "array", "items": {"type": "string"}}, "model": {"type": "string"},
            "backend": {"type": "string", "enum": ["builtin", "codex", "opencode", "qoder", "cursor"]}, "budget_tokens": {"type": "integer"},
-           "budget_usd": {"type": "number"}, "budget_minutes": {"type": "number"}}, ["id"],
+           "budget_usd": {"type": "number"}, "budget_minutes": {"type": "number"}},
           {"readOnlyHint": False, "destructiveHint": False}),
     _tool("agentkit_goal_create", "Create a bounded Goal that loops through execution and independent verification.",
           {"outcome": {"type": "string"}, "checks": {"type": "array", "items": {"type": "string"}, "minItems": 1},
@@ -206,6 +304,8 @@ def _argv(name: str, a: dict) -> list:
             out += ["--timeout", str(a["timeout"])]
         if a.get("base"):
             out += ["--base", a["base"]]
+        if a.get("receipt"):
+            out.append("--receipt")
         return out
     if name == "agentkit_memory_search":
         return ["memory", "search", a["query"]]
@@ -226,6 +326,8 @@ def _argv(name: str, a: dict) -> list:
                 out += [flag, str(a[key])]
         if a.get("allow_baseline_pass"):
             out.append("--allow-baseline-pass")
+        if a.get("fresh"):
+            out.append("--fresh")
         return out
     if name == "agentkit_task_status":
         return ["task", "status", *(a.get("ids") or [])]
@@ -237,7 +339,7 @@ def _argv(name: str, a: dict) -> list:
             out.append("--no-report")
         return out
     if name == "agentkit_task_report":
-        return ["task", "report", a["id"]]
+        return ["task", "report", a["id"], *(["--details"] if a.get("details") else [])]
     if name == "agentkit_task_diff":
         return ["task", "diff", a["id"], *(["--offset", str(a["offset"])] if a.get("offset") is not None else [])]
     if name == "agentkit_task_steer":
@@ -343,7 +445,7 @@ def _call_tool(root: Path, name: str, arguments: dict) -> dict:
         except (KeyError, TypeError, ValueError, ProtocolError) as e:
             env = ToolResult(ok=False, error={"what": str(e), "code": "AK-CONFIG"}).to_dict()
     else:
-        env, _code, _human = run_cli(["--root", str(root), *_argv(name, arguments or {})])
+        env, _code, _human = run_cli(["--root", str(root), *_argv(name, arguments or {})], cwd=root)
     return {"resultType": "complete", "content": [{"type": "text", "text": dumps(env)}],
             "structuredContent": env, "isError": not bool(env.get("ok"))}
 
@@ -550,10 +652,20 @@ def handle(root: Path, msg: dict, state: dict | None = None) -> dict | None:
         name = params.get("name")
         if not isinstance(name, str):
             return _error(req_id, -32602, "Invalid params: tool name is required")
-        try:
-            return _result(req_id, _call_tool(root, name, params.get("arguments") or {}), version)
-        except KeyError:
+        tool = next((item for item in TOOLS if item["name"] == name), None)
+        if tool is None:
             return _error(req_id, -32602, f"Unknown tool: {name}")
+        arguments = params.get("arguments", {})
+        if arguments is None:
+            arguments = {}
+        if not isinstance(arguments, dict):
+            return _error(req_id, -32602, f"Invalid arguments for {name}: expected an object")
+        normalized, issues = _normalize_tool_arguments(name, arguments)
+        issues += _schema_issues(tool["inputSchema"], normalized)
+        if issues:
+            return _error(req_id, -32602, f"Invalid arguments for {name}", {"tool": name, "issues": issues})
+        try:
+            return _result(req_id, _call_tool(root, name, normalized), version)
         except Exception as e:
             return _error(req_id, -32603, f"Tool dispatch failed: {type(e).__name__}: {e}")
     if method == "resources/list":

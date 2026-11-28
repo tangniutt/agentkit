@@ -23,7 +23,7 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Optional
 
-from .config import load_config, set_table
+from .config import load_config, load_user_config, set_table, set_user_table
 from .core import AKError, Ctx, Result
 from .redact import redact, redact_text, register_secret
 
@@ -408,10 +408,13 @@ def cmd_model(ctx: Ctx, a) -> Result:
             v = v if v is not None else pre.get(k)
             if v is not None:
                 vals[k] = v
-        p = set_table(ctx.root, f"models.{a.name}", vals)
+        global_config = bool(getattr(a, "global_config", False))
+        p = set_user_table(f"models.{a.name}", vals) if global_config else set_table(ctx.root, f"models.{a.name}", vals)
         if a.default:
             set_table(ctx.root, "worker", {**(load_config(ctx.root).get("worker") or {}), "default_model": a.name})
-        data = {"added": a.name, "config": ctx.rel(p), "key_env_set": bool(a.key_env and os.environ.get(a.key_env))}
+        data = {"added": a.name, "scope": "global" if global_config else "project",
+                "config": str(p) if global_config else ctx.rel(p),
+                "key_env_set": bool(a.key_env and os.environ.get(a.key_env))}
         if pre:
             data["preset"] = {"name": a.preset, "note": pre["note"]}
         if a.key_env and not data["key_env_set"]:
@@ -427,13 +430,19 @@ def cmd_model(ctx: Ctx, a) -> Result:
         return Result({"models": [
             {"name": m.name, "model": m.model_id, "tier": m.tier, "context": m.context, "price": [m.price_in, m.price_out],
              "key_env": m.key_env, "key_set": bool(m.key_env and os.environ.get(m.key_env)) if m.key_env else None,
-             "base_url": m.base_url} for m in ms.values()],
+             "base_url": m.base_url, "scope": (cfg.get("_model_scopes") or {}).get(m.name, "project")} for m in ms.values()],
             "default": pick(cfg).name if ms else None})
     if sub == "remove":
+        if getattr(a, "global_config", False):
+            user_models = load_user_config().get("models") or {}
+            if a.name not in user_models:
+                raise AKError(f"unknown global model '{a.name}'", "", "agentkit model list")
+            set_user_table(f"models.{a.name}", None)
+            return Result({"removed": a.name, "scope": "global"})
         if a.name not in all_models(cfg):
             raise AKError(f"unknown model '{a.name}'", "", "agentkit model list")
         set_table(ctx.root, f"models.{a.name}", None)
-        return Result({"removed": a.name})
+        return Result({"removed": a.name, "scope": "project"})
     if sub == "test":
         m = pick(cfg, a.name)
         if m.key_env and not os.environ.get(m.key_env):

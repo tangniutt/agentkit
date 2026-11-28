@@ -114,6 +114,7 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("--check", action="append", default=[], help="check command, e.g. 'pytest -q'")
     v.add_argument("--timeout", type=float, help="seconds per check")
     v.add_argument("--base", default="HEAD", help="git ref the clean worktree starts from")
+    v.add_argument("--receipt", action="store_true", help="rerun checks on the base commit and write an EvidenceReceipt")
 
     mem = sub.add_parser("memory", help="project memory: add|list|search|show|forget|brief")
     ms = mem.add_subparsers(dest="mem_cmd", parser_class=_Parser)
@@ -158,12 +159,14 @@ def build_parser() -> argparse.ArgumentParser:
     moa.add_argument("--price-out", type=float, default=0.0, help="USD per 1M output tokens")
     moa.add_argument("--tier", default="low", help="low|mid|high")
     moa.add_argument("--default", action="store_true")
+    moa.add_argument("--global", dest="global_config", action="store_true", help="write to the user config; project models override it")
     mos.add_parser("list")
     mot = mos.add_parser("test")
     mot.add_argument("name", nargs="?")
     mot.add_argument("--timeout", type=float, default=60)
     mor = mos.add_parser("remove")
     mor.add_argument("name")
+    mor.add_argument("--global", dest="global_config", action="store_true", help="remove from the user config")
 
     t = sub.add_parser("task", help="dispatch to a worker: create|status|wait|report|resume|handoff|cancel|clean")
     ts = t.add_subparsers(dest="task_cmd", parser_class=_Parser)
@@ -179,9 +182,13 @@ def build_parser() -> argparse.ArgumentParser:
     tc.add_argument("--tier", help="low|mid|high: pick a model by tier")
     tc.add_argument("--model", help="builtin name, Codex id, OpenCode provider/model, Qoder model, or Cursor model")
     tc.add_argument("--backend", choices=("builtin", "codex", "opencode", "qoder", "cursor"), default="builtin", help="worker backend")
-    for name in ("status", "report", "cancel"):
+    tc.add_argument("--fresh", action="store_true", help="bypass task content dedupe and create a new run")
+    for name in ("status", "cancel"):
         x = ts.add_parser(name)
         x.add_argument("ids", nargs="*")
+    trp = ts.add_parser("report")
+    trp.add_argument("ids", nargs="*")
+    trp.add_argument("--details", action="store_true", help="include full per-round token and action details")
     tw = ts.add_parser("wait")
     tw.add_argument("ids", nargs="*")
     tw.add_argument("--timeout", type=float, default=300, help="seconds to wait")
@@ -505,7 +512,7 @@ def render_human(env: dict) -> str:
     return "\n".join(out)
 
 
-def run_cli(argv: list) -> tuple[dict, int, bool]:
+def run_cli(argv: list, cwd=None) -> tuple[dict, int, bool]:
     import time as _time
 
     from .events import EventLog, classify, new_run_id
@@ -532,7 +539,7 @@ def run_cli(argv: list) -> tuple[dict, int, bool]:
         cmd = rest[0]
         a = parser.parse_args(rest)
         ctx = make_ctx(root, budget, human, rest + (["--budget", str(budget)] if budget is not None else [])
-                       + (["--root", root] if root else []))
+                       + (["--root", root] if root else []), cwd=cwd)
         ctx.run_id = run_id
         root_for_log = ctx.root
         if a.cmd == "checkpoint" and not a.cp_cmd:

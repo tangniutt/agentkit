@@ -33,6 +33,24 @@ def test_model_add_list_never_stores_key(ak, repo, fake):
     assert ak("model", "remove", "cheap")["ok"] and ak("model", "list")["data"]["models"] == []
 
 
+def test_global_models_layer_under_project_overrides(ak, repo, tmp_path):
+    ak.env["XDG_CONFIG_HOME"] = str(tmp_path / "user-config")
+    added = ak("model", "add", "shared", "--global", "--base-url", "http://global.invalid/v1", "--model", "global-model")
+    assert added["ok"] and added["data"]["scope"] == "global"
+    listed = ak("model", "list")["data"]["models"]
+    assert listed[0]["scope"] == "global" and listed[0]["base_url"] == "http://global.invalid/v1"
+    other = tmp_path / "other"
+    other.mkdir()
+    assert ak("model", "list", cwd=other)["data"]["models"][0]["name"] == "shared"
+    override = ak("model", "add", "shared", "--base-url", "http://project.invalid/v1", "--model", "project-model")
+    assert override["ok"] and override["data"]["scope"] == "project"
+    listed = ak("model", "list")["data"]["models"]
+    assert listed[0]["scope"] == "project" and listed[0]["base_url"] == "http://project.invalid/v1"
+    assert ak("model", "remove", "shared", "--global")["ok"]
+    assert ak("model", "list")["data"]["models"][0]["model"] == "project-model"
+    assert ak("model", "remove", "shared")["ok"] and ak("model", "list")["data"]["models"] == []
+
+
 def test_model_test_ok_and_invalid_key(ak, repo, fake):
     ak.env["FAKE_KEY"] = KEY
     ak("model", "add", "fake", "--base-url", fake.url, "--key-env", "FAKE_KEY")

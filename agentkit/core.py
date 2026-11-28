@@ -290,8 +290,9 @@ class Ctx:
         return "agentkit " + shlex.join(argv)
 
 
-def make_ctx(root: Optional[str], budget: Optional[int], human: bool, argv: list) -> Ctx:
-    cwd = Path(os.getcwd()).resolve()
+def make_ctx(root: Optional[str], budget: Optional[int], human: bool, argv: list,
+             cwd: Optional[str | os.PathLike] = None) -> Ctx:
+    cwd = Path(cwd).expanduser().resolve() if cwd is not None else Path(os.getcwd()).resolve()
     if root:
         r = Path(root).expanduser().resolve()
     else:

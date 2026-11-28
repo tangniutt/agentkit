@@ -217,9 +217,36 @@ def recover(root: Path) -> list:
             EventLog(root, t["id"], "task").emit("interrupted", step=t.get("rounds"), error_code="AK-TASK-INTERRUPTED")
             save(root, t)
             changed.append(t["id"])
-        elif t.get("status") == "starting" and time.time() - t.get("updated", 0) > 30 and not pid_alive(t.get("pid")):
-            t["status"] = "queued"
-            save(root, t)
+        elif t.get("status") == "starting":
+            updated = float(t.get("updated") or t.get("created") or time.time())
+            alive = pid_alive(t.get("pid"))
+            if not alive or time.time() - updated > 30:
+                if alive:
+                    try:
+                        if os.name == "posix":
+                            os.killpg(int(t["pid"]), signal.SIGKILL)
+                        else:
+                            os.kill(int(t["pid"]), signal.SIGTERM)
+                    except (ProcessLookupError, PermissionError):
+                        pass
+                sandbox_failed = t.get("sandbox") == "bwrap"
+                code = "AK-SANDBOX-UNAVAILABLE" if sandbox_failed else "AK-TASK-INTERRUPTED"
+                reason = ("sandbox worker exited before startup" if sandbox_failed else
+                          "worker process exited before startup")
+                try:
+                    detail = (tpath(root, t["id"]) / "worker.log").read_text(encoding="utf-8", errors="replace").strip()
+                    if detail:
+                        reason += ": " + redact(detail[-240:])
+                except OSError:
+                    pass
+                t.update(status="failed", reason=reason[:400], ended=time.time(), error_code=code,
+                         component="sandbox" if sandbox_failed else "worker")
+                EventLog(root, t["id"], "task").emit("startup_failed", step=t.get("rounds"), error_code=code,
+                                                      why=reason[:300])
+                save(root, t)
+                _set_sandbox_state(root, t["id"], "failed", lock=False)
+                _close_task_credential(root, t, "sandbox_failed" if sandbox_failed else "startup_failed")
+                changed.append(t["id"])
     return changed
 
 
@@ -366,19 +393,13 @@ def schedule(root: Path) -> None:
                             raise S.SandboxUnavailable("sandbox network proxy failed to start")
                 except S.SandboxUnavailable as e:
                     _stop_proxy(proxy_proc)
-                    restricted = domains is not None or not network
-                    sandboxed = False
-                    command = base_command
-                    domains = None
-                    env.pop("AGENTKIT_NET_PROXY_SOCKET", None)
-                    if smode == "required" or restricted:
-                        logf.close()
-                        t.update(status="failed", reason=f"restricted sandbox network required but unavailable: {e}",
-                                 ended=time.time(), error_code="AK-TASK-STATE", component="task")
-                        save(root, t)
-                        _set_sandbox_state(root, t["id"], "failed", lock=False)
-                        _close_task_credential(root, t, "sandbox_failed")
-                        continue
+                    logf.close()
+                    t.update(status="failed", reason=f"sandbox unavailable: {e}", ended=time.time(),
+                             error_code="AK-SANDBOX-UNAVAILABLE", component="sandbox")
+                    save(root, t)
+                    _set_sandbox_state(root, t["id"], "failed", lock=False)
+                    _close_task_credential(root, t, "sandbox_failed")
+                    continue
                 except AKError as e:
                     _stop_proxy(proxy_proc)
                     logf.close()
@@ -948,13 +969,17 @@ def create(ctx: Ctx, a) -> dict:
     _ensure_state_ignored(root)
     with locked(root):
         recover(root)
-        for t in all_tasks(root):
-            if t.get("hash") == h and (t.get("status") in ACTIVE | {"queued", "starting"}
-                                       or (t.get("status") == "done" and t.get("verdict") == "pass")):
-                d = {"id": t["id"], "status": t["status"], "deduped": True}
-                if queue_pos(root, t["id"]):
-                    d["queue_pos"] = queue_pos(root, t["id"])
-                return d
+        if not getattr(a, "fresh", False):
+            for t in all_tasks(root):
+                if t.get("hash") == h and (t.get("status") in ACTIVE | {"queued", "starting"}
+                                           or (t.get("status") == "done" and t.get("verdict") == "pass")):
+                    d = {"id": t["id"], "status": t["status"], "deduped": True, "reused": True,
+                         "original_status": t["status"]}
+                    if t.get("verdict"):
+                        d["verdict"] = t["verdict"]
+                    if queue_pos(root, t["id"]):
+                        d["queue_pos"] = queue_pos(root, t["id"])
+                    return d
         free = shutil.disk_usage(str(root)).free // (1024 * 1024)
         min_free = int((cfg.get("tasks") or {}).get("min_free_mb", 200))
         if free < min_free:
@@ -994,7 +1019,7 @@ def create(ctx: Ctx, a) -> dict:
     schedule(root)
     t = load(root, tid)
     # C-06: lean output. model / branch are known to the host (branch = agentkit/<id>); next goes in the envelope
-    out = {"id": tid, "status": t["status"]}
+    out = {"id": tid, "status": t["status"], "deduped": False}
     qp = queue_pos(root, tid)
     if qp:
         out["queue_pos"] = qp
@@ -1170,6 +1195,8 @@ def run_task(root: Path, tid: str) -> None:
     def progress(stats):
         try:
             extra = {k: stats[k] for k in ("credits", "credits_known") if k in stats}
+            if "round_details" in stats:
+                extra["round_details"] = stats["round_details"]
             update(root, tid, rounds=stats["rounds"], tokens=stats["tokens_in"] + stats["tokens_out"],
                    usd=stats["usd"], **extra)
         except Exception:
@@ -1247,6 +1274,7 @@ def run_task(root: Path, tid: str) -> None:
                   rounds=st["rounds"], tokens=st["tokens_in"] + st["tokens_out"], tokens_in=st["tokens_in"],
                   tokens_out=st["tokens_out"], usd=st["usd"], compactions=st["compactions"], repairs=st["repairs"],
                   compression=st.get("compression"),
+                  round_details=st.get("round_details") if st.get("round_details") is not None else t.get("round_details") or [],
                   denied=sorted(set(worker.denied) | set(t.get("denied") or [])),
                   worker_s=round(time.monotonic() - t0 + float((t.get("prior") or {}).get("worker_s") or 0), 1),
                   error_code=code, component=worker.last_component if code else None, last_step=worker.last_step,
@@ -1525,6 +1553,7 @@ def verify_task(root: Path, tid: str) -> dict:
                      "result": "skipped" if not baseline_required else "fail" if baseline_failed else "pass" if baseline_valid else "invalid",
                      "checks": baseline_checks},
         "acceptance_sha256": t.get("acceptance_sha256"),
+        "round_details": t.get("round_details") or [],
         "changed": [f"{s} {p}" for p, s in sorted(changes.items())],
         "suspicious": flags,
         "cost": {"s": round((t.get("worker_s") or 0) + time.monotonic() - t0, 1), "tokens": t.get("tokens", 0),
@@ -1624,6 +1653,8 @@ def compact_status(root: Path, t: dict) -> dict:
     end = t.get("ended") or time.time()
     if start:
         s["s"] = int(end - start)
+    if t["status"] not in TERMINAL and t.get("updated"):
+        s["idle_s"] = max(0, int(time.time() - float(t["updated"])))
     if t.get("error_code") and t["status"] in TERMINAL:
         s["code"] = t["error_code"]
         s["at"] = f"{t.get('component') or 'task'}#{t.get('last_step', t.get('rounds', 0))}"
@@ -1827,6 +1858,9 @@ def cmd_task(ctx: Ctx, a) -> Result:
         schedule(root)
         out, trunc = report_view(ctx, a.ids[0])
         nxt = out.pop("_next", None)
+        if getattr(a, "details", False):
+            full = json.loads((tpath(root, a.ids[0]) / "report.json").read_text(encoding="utf-8"))
+            return Result(full, False, None, budget_chars=REPORT_CHARS * 4)
         return Result(out, trunc, nxt, budget_chars=REPORT_CHARS)
     if sub == "resume":
         out = resume(ctx, a)
@@ -1835,26 +1869,16 @@ def cmd_task(ctx: Ctx, a) -> Result:
         out = resume(ctx, a, handoff=True)
         return Result(out, False, ctx.next_cmd("task", "wait", out["id"], "--timeout", "600"))
     if sub == "diff":
-        if not a.ids:
-            raise AKError("diff needs a task id", "", "agentkit task diff ID", code="AK-USAGE")
-        return task_diff(ctx, a.ids[0], a.offset)
+        return task_diff(ctx, a.id, a.offset)
     if sub == "steer":
-        if not a.ids:
-            raise AKError("steer needs a task id", "", "agentkit task steer ID 'constraint'", code="AK-USAGE")
-        return Result(steer(root, a.ids[0], a.text))
+        return Result(steer(root, a.id, a.text))
     if sub == "answer":
-        if not a.ids:
-            raise AKError("answer needs a task id", "", "agentkit task answer ID 'answer'", code="AK-USAGE")
-        out = answer(ctx, a.ids[0], a.text)
+        out = answer(ctx, a.id, a.text)
         return Result(out, False, ctx.next_cmd("task", "wait", out["id"], "--timeout", "600"))
     if sub == "accept":
-        if not a.ids:
-            raise AKError("accept needs a task id", "", "agentkit task accept ID", code="AK-USAGE")
-        return Result(decide(root, a.ids[0], True))
+        return Result(decide(root, a.id, True))
     if sub == "reject":
-        if not a.ids:
-            raise AKError("reject needs a task id", "", "agentkit task reject ID 'reason'", code="AK-USAGE")
-        return Result(decide(root, a.ids[0], False, a.reason or ""))
+        return Result(decide(root, a.id, False, a.reason or ""))
     if sub == "cancel":
         if not a.ids:
             raise AKError("cancel needs task ids", "", "agentkit task cancel ID")
@@ -1996,7 +2020,7 @@ def resume(ctx: Ctx, a, handoff: bool = False) -> dict:
                               "agentkit task resume --help", code="AK-USAGE")
         prior = {"tokens_in": t.get("tokens_in", t.get("tokens", 0)), "tokens_out": t.get("tokens_out", 0),
                  "usd": t.get("usd", 0.0), "rounds": t.get("rounds", 0), "worker_s": t.get("worker_s", 0),
-                 "credits": t.get("credits", 0.0)}
+                 "credits": t.get("credits", 0.0), "round_details": t.get("round_details") or []}
         if t.get("stopped") == "budget" and budget == (t.get("budget") or {}):
             raise AKError(f"task {tid} is out of budget", "resuming with the same budget would stop at once",
                           f"agentkit task resume {tid} --budget-tokens N | --budget-usd X | --budget-minutes M")
@@ -2051,18 +2075,25 @@ def cancel(root: Path, tid: str) -> dict:
             _close_task_credential(root, t, "cancelled")
             return compact_status(root, t)
         pid = t.get("pid")
-    if pid and pid_alive(pid):
+    alive = bool(pid and pid_alive(pid))
+    if alive:
         try:
             os.kill(int(pid), signal.SIGTERM)
         except ProcessLookupError:
             pass
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline:
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            t = load(root, tid)
+            if t["status"] in TERMINAL or t["status"] == "verifying" or not pid_alive(pid):
+                break
+            time.sleep(0.1)
+    t = load(root, tid)
+    alive = bool(pid and pid_alive(pid))
+    if t["status"] == "starting" and not alive:
+        update(root, tid, status="cancelled", reason="cancelled before worker startup", ended=time.time(),
+               error_code="AK-TASK-CANCELLED", component="task")
         t = load(root, tid)
-        if t["status"] in TERMINAL or t["status"] == "verifying":
-            break
-        time.sleep(0.1)
-    if pid and pid_alive(pid) and load(root, tid)["status"] not in TERMINAL | {"verifying"}:
+    if pid and pid_alive(pid) and t["status"] not in TERMINAL | {"verifying"}:
         try:
             if os.name == "posix":
                 os.killpg(int(pid), signal.SIGKILL)

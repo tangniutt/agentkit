@@ -77,7 +77,7 @@ allow_unsandboxed = false
 # CLI stream-json has no token/cost fields; SDK reports usage when the runtime provides it.
 
 [sandbox]
-mode = "auto"          # auto | required | off; bubblewrap on Linux, direct-only on Windows
+mode = "auto"          # auto | required: dispatch fails closed without bubblewrap; off: explicit unsandboxed
 network = true         # false = no network; ["api.openai.com"] = domain allowlist via isolated proxy
 
 [codeintel]
@@ -138,9 +138,16 @@ def load_config(root: Path) -> dict:
         user = load_user_config()
     if not isinstance(user, dict):
         user = {}
+    project_models = cfg.get("models") if isinstance(cfg.get("models"), dict) else {}
     for k in ("model", "models"):
         if k in user and k not in cfg:
             cfg[k] = user[k]
+    user_models = user.get("models") if isinstance(user.get("models"), dict) else {}
+    if user_models or project_models:
+        cfg["models"] = {**user_models, **project_models}
+    cfg["_model_scopes"] = {name: "project" for name in project_models}
+    for name in user_models:
+        cfg["_model_scopes"].setdefault(name, "global")
     security = user.get("security")
     cfg["_user_security"] = security if isinstance(security, dict) else {}
     return cfg
@@ -173,9 +180,7 @@ def _toml_value(v) -> str:
     return f'"{s}"'
 
 
-def set_table(root: Path, header: str, values: dict) -> Path:
-    """Replace (or append) one `[header]` table in the repo config, keeping everything else verbatim."""
-    p = repo_config_path(root)
+def _set_table_path(p: Path, header: str, values: dict) -> Path:
     p.parent.mkdir(parents=True, exist_ok=True)
     lines = p.read_text().splitlines() if p.exists() else []
     out, skip = [], False
@@ -198,3 +203,12 @@ def set_table(root: Path, header: str, values: dict) -> Path:
         out += [f"{k} = {_toml_value(v)}" for k, v in values.items() if v is not None]
     p.write_text("\n".join(out) + "\n")
     return p
+
+
+def set_table(root: Path, header: str, values: dict) -> Path:
+    """Replace (or append) one `[header]` table in the repo config, keeping everything else verbatim."""
+    return _set_table_path(repo_config_path(root), header, values)
+
+
+def set_user_table(header: str, values: dict) -> Path:
+    return _set_table_path(user_config_path(), header, values)

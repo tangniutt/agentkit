@@ -179,6 +179,7 @@ def test_builtin_task_hands_off_to_codex_in_same_worktree(ak, repo, fake):
     task = tjson(repo, tid)
     assert task["backend"] == "codex" and task["backend_history"][-1]["to"] == "codex"
     assert task["tokens"] >= prior_tokens + 120
+    assert task["round_details"], "builtin round details survive handoff to an external backend"
 
 
 @pytest.mark.skipif(not sandbox.available(), reason="bubblewrap is unavailable")

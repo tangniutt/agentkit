@@ -143,11 +143,13 @@ def cmd_doctor(ctx: Ctx, a) -> Result:
         checks.append(_check(f"model:{m.name}", key_ok, val, fix))
     if ctx.config.get("_error"):
         checks.append(_check("config_parse", False, ctx.config["_error"][:160], "fix the TOML syntax in .agentkit/config.toml"))
-    required = {"python>=3.10", "write_permission", "disk_space", "config_parse", "sandbox_network_policy"}
-    ok = all(c["ok"] for c in checks if c["name"] in required)
     external = bool(codex_config(ctx.config) or opencode_config(ctx.config) or qoder_config(ctx.config)
                     or cursor_config(ctx.config))
     dispatch = (bool(model) or external) and os.name == "posix"
+    required = {"python>=3.10", "write_permission", "disk_space", "config_parse", "sandbox_network_policy"}
+    if dispatch:
+        required.add("sandbox")
+    ok = all(c["ok"] for c in checks if c["name"] in required)
     return Result({"healthy": ok, "mode": "dispatch" if dispatch else "direct", "checks": checks})
 
 

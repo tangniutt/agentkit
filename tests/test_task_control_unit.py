@@ -4,6 +4,7 @@
 import json
 
 from agentkit import tasks
+from agentkit.cli import build_parser
 from agentkit.config import load_config
 from agentkit.core import Ctx
 from agentkit.models import ModelSpec
@@ -33,6 +34,18 @@ def _task(repo, **kw):
     return tid, wt
 
 
+def test_compact_status_exposes_heartbeat_idle(repo):
+    import time
+
+    tid, _ = _task(repo, status="running")
+    path = repo / ".agentkit" / "tasks" / tid / "task.json"
+    task = json.loads(path.read_text(encoding="utf-8"))
+    task["updated"] = time.time() - 12
+    path.write_text(json.dumps(task), encoding="utf-8")
+    status = tasks.compact_status(repo, tasks.load(repo, tid))
+    assert 11 <= status["idle_s"] <= 13
+
+
 def test_task_diff_includes_tracked_and_untracked(repo):
     tid, wt = _task(repo)
     (wt / "a.py").write_text("A = 2\n", encoding="utf-8")
@@ -40,6 +53,34 @@ def test_task_diff_includes_tracked_and_untracked(repo):
     r = tasks.task_diff(Ctx(root=repo, cwd=repo), tid)
     text = "\n".join(r.data["diff"])
     assert "A = 2" in text and "new.py" in text and "NEW = 1" in text
+
+
+def test_task_diff_and_accept_cli_dispatch(repo):
+    tid, wt = _task(repo)
+    (wt / "a.py").write_text("A = 2\n", encoding="utf-8")
+    ctx = Ctx(root=repo, cwd=repo, config=load_config(repo))
+    diff = tasks.cmd_task(ctx, build_parser().parse_args(["task", "diff", tid]))
+    assert "A = 2" in "\n".join(diff.data["diff"])
+    accepted = tasks.cmd_task(ctx, build_parser().parse_args(["task", "accept", tid]))
+    assert accepted.data["accepted"] and not accepted.data["merged"]
+
+
+def test_task_steer_and_reject_cli_dispatch(repo):
+    tid, _ = _task(repo)
+    ctx = Ctx(root=repo, cwd=repo, config=load_config(repo))
+    steered = tasks.cmd_task(ctx, build_parser().parse_args(["task", "steer", tid, "keep API"]))
+    assert steered.data["steering"] == ["keep API"]
+    rejected = tasks.cmd_task(ctx, build_parser().parse_args(["task", "reject", tid, "wrong fix"]))
+    assert rejected.data["rejected"] and tasks.load(repo, tid)["rejection_reason"] == "wrong fix"
+
+
+def test_task_answer_cli_dispatch(repo, monkeypatch):
+    tid, _ = _task(repo, question={"question": "compatible?"}, waiting=True)
+    monkeypatch.setattr(tasks, "schedule", lambda _root: None)
+    ctx = Ctx(root=repo, cwd=repo, config=load_config(repo))
+    answered = tasks.cmd_task(ctx, build_parser().parse_args(["task", "answer", tid, "yes"]))
+    assert answered.data["resumes"] == 1
+    assert "ANSWER: yes" in tasks.load(repo, tid)["goal"]
 
 
 def test_steer_updates_paused_task(repo):

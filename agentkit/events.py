@@ -61,6 +61,7 @@ ERRORS: dict = {
     "AK-TASK-NOGIT": ("dispatch needs a git repo with at least one commit", "git init && git add -A && git commit -m init"),
     "AK-TASK-UNKNOWN": ("unknown or invalid task id", "agentkit task status"),
     "AK-TASK-STATE": ("operation not allowed in the task's current state", "agentkit task status ID"),
+    "AK-SANDBOX-UNAVAILABLE": ("bubblewrap could not start the isolated worker", "agentkit doctor; use a Linux host that permits the full bubblewrap launch"),
     "AK-TASK-WAITING": ("worker is waiting for a supervisor answer", "agentkit task answer ID 'answer'"),
     "AK-GIT": ("a git command failed", "agentkit doctor"),
     "AK-DISK-FULL": ("not enough free disk space", "agentkit task clean --all"),

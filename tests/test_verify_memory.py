@@ -1,6 +1,7 @@
 # Copyright 2026 tangniutt and contributors
 # SPDX-License-Identifier: Apache-2.0
 """M-10 verify, M-21 memory, M-18 doctor, M-11 direct mode."""
+import json
 import subprocess
 import sys
 
@@ -43,6 +44,49 @@ def test_verify_pass_and_report_size(ak, repo):
     assert set(r["data"]) >= {"verdict", "checks", "changed", "suspicious", "cost"}
 
 
+def test_verify_ignores_generated_bytecode_noise(ak, repo):
+    _project(repo)
+    cache = repo / "__pycache__"
+    cache.mkdir()
+    (cache / "noise.pyc").write_bytes(b"generated")
+    r = ak("verify", "--check", CHECK)
+    assert r["data"]["verdict"] == "pass"
+    assert not any("__pycache__" in item or item.endswith(".pyc") for item in r["data"]["changed"])
+
+
+def test_verify_receipt_reruns_baseline_and_writes_evidence(ak, repo):
+    _project(repo)
+    ak("edit", "calc.py", "--old", "return a + b", "--new", "return a - b")
+    git(repo, "add", "calc.py")
+    git(repo, "commit", "-qm", "broken baseline")
+    ak("edit", "calc.py", "--old", "return a - b", "--new", "return a + b")
+    r = ak("verify", "--check", CHECK, "--receipt")
+    assert r["data"]["verdict"] == "pass" and r["data"]["baseline"]["result"] == "fail"
+    summary = r["data"]["receipt"]
+    receipt = json.loads((repo / summary["path"]).read_text(encoding="utf-8"))
+    assert receipt["receipt_id"] == summary["id"] and receipt["verdict"] == "pass"
+    assert {c["phase"] for c in receipt["checks"]} == {"baseline", "acceptance"}
+    assert receipt["base_commit"] and receipt["diff_sha256"] and receipt["environment_sha256"]
+
+
+def test_verify_receipt_rejects_baseline_pass(ak, repo):
+    _project(repo)
+    r = ak("verify", "--check", CHECK, "--receipt")
+    assert r["data"]["verdict"] == "invalid" and r["data"]["baseline"]["result"] == "pass"
+    assert "baseline checks did not fail" in r["data"]["hint"]
+    assert r["data"]["receipt"]["id"].startswith("er_")
+
+
+def test_verify_receipt_requires_git_base(repo):
+    _project(repo, use_git=False)
+    from agentkit.core import AKError, Ctx
+    from agentkit.verify import cmd_verify
+    from types import SimpleNamespace
+
+    with pytest.raises(AKError, match="valid git base"):
+        cmd_verify(Ctx(root=repo, cwd=repo), SimpleNamespace(check=[CHECK], timeout=None, base="HEAD", receipt=True))
+
+
 def test_verify_fail(ak, repo):
     _project(repo)
     ak("edit", "calc.py", "--old", "return a + b", "--new", "return a - b")
@@ -66,7 +110,8 @@ def test_verify_flags_modified_test(ak, repo):
     r = ak("verify", "--check", CHECK)
     flags = {f["flag"] for f in r["data"]["suspicious"]}
     assert "tests_modified" in flags and "check_script_modified" in flags
-    assert r["data"]["verdict"] == "pass"  # passing, but flagged
+    assert r["data"]["verdict"] == "needs_review"
+    assert r["data"]["code"] == "AK-VERIFY-SUSPICIOUS"
 
 
 def test_verify_flags_deleted_test_and_check_script(ak, repo):
@@ -90,7 +135,7 @@ def test_verify_without_git(ak, repo):
     _project(repo, use_git=False)
     ak("edit", "tests/test_calc.py", "--old", "== 5", "--new", "== 5  # same")
     r = ak("verify", "--check", CHECK)
-    assert r["data"]["env"] == "temp-copy" and r["data"]["verdict"] == "pass"
+    assert r["data"]["env"] == "temp-copy" and r["data"]["verdict"] == "needs_review"
     assert any(f["flag"] == "tests_modified" for f in r["data"]["suspicious"])
 
 

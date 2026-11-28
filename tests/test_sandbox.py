@@ -2,14 +2,88 @@
 # SPDX-License-Identifier: Apache-2.0
 """Bubblewrap command construction, network policy and real isolation."""
 import json
+import os
 import socket
 import subprocess
 import sys
+import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from agentkit import sandbox, tasks
+
+
+def _starting_task(root: Path) -> Path:
+    task_dir = root / ".agentkit" / "tasks" / "t123abc"
+    task_dir.mkdir(parents=True)
+    task = {"id": "t123abc", "status": "starting", "sandbox": "bwrap", "pid": 999999,
+            "created": time.time(), "updated": time.time(), "rounds": 0, "tokens": 0}
+    (task_dir / "task.json").write_text(json.dumps(task), encoding="utf-8")
+    (task_dir / "worker.log").write_text("bwrap: Can't mount proc on /newroot/proc: Operation not permitted\n",
+                                          encoding="utf-8")
+    return task_dir
+
+
+@pytest.mark.skipif(os.name != "posix", reason="bubblewrap probe requires POSIX")
+def test_available_probe_matches_real_launch_isolation(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(sandbox.shutil, "which", lambda _name: "/usr/bin/bwrap")
+    monkeypatch.setattr(sandbox.subprocess, "run", lambda args, **kwargs: captured.update(args=args) or
+                        type("Result", (), {"returncode": 0})())
+    assert sandbox.available() is True
+    args = captured["args"]
+    assert args[:4] == ["bwrap", "--new-session", "--unshare-all", "--share-net"]
+    assert args[args.index("--proc") + 1] == "/proc"
+    assert args[-1] == "true"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="dispatch doctor requires POSIX")
+def test_doctor_dispatch_requires_available_sandbox(tmp_path, monkeypatch):
+    from agentkit import doctor
+    from agentkit.core import Ctx
+
+    cfg = {"models": {"fake": {"base_url": "http://127.0.0.1:1/v1", "key_env": "FAKE_KEY"}}}
+    monkeypatch.setattr(sandbox, "available", lambda: False)
+    result = doctor.cmd_doctor(Ctx(root=tmp_path, cwd=tmp_path, config=cfg), SimpleNamespace(online=False))
+    assert result.data["mode"] == "dispatch" and result.data["healthy"] is False
+    check = next(item for item in result.data["checks"] if item["name"] == "sandbox")
+    assert check["ok"] is False
+
+
+def test_dead_starting_sandbox_task_fails_fast(tmp_path, monkeypatch):
+    task_dir = _starting_task(tmp_path)
+    monkeypatch.setattr(tasks, "pid_alive", lambda _pid: False)
+    assert tasks.recover(tmp_path) == ["t123abc"]
+    task = json.loads((task_dir / "task.json").read_text(encoding="utf-8"))
+    assert task["status"] == "failed" and task["error_code"] == "AK-SANDBOX-UNAVAILABLE"
+    assert task["sandbox_status"]["state"] == "failed"
+    assert "Can't mount proc" in task["reason"]
+
+
+def test_cancel_dead_starting_sandbox_task(tmp_path, monkeypatch):
+    task_dir = _starting_task(tmp_path)
+    monkeypatch.setattr(tasks, "pid_alive", lambda _pid: False)
+    result = tasks.cancel(tmp_path, "t123abc")
+    assert result["status"] == "cancelled"
+    task = json.loads((task_dir / "task.json").read_text(encoding="utf-8"))
+    assert task["error_code"] == "AK-TASK-CANCELLED"
+
+
+def test_cancel_starting_worker_that_exits_during_wait(tmp_path, monkeypatch):
+    task_dir = _starting_task(tmp_path)
+    states = iter((True, False))
+    monkeypatch.setattr(tasks, "pid_alive", lambda _pid: next(states, False))
+
+    def kill(*_args):
+        raise ProcessLookupError
+
+    monkeypatch.setattr(tasks.os, "kill", kill)
+    result = tasks.cancel(tmp_path, "t123abc")
+    assert result["status"] == "cancelled"
+    task = json.loads((task_dir / "task.json").read_text(encoding="utf-8"))
+    assert task["error_code"] == "AK-TASK-CANCELLED"
 
 
 def test_sandbox_command_binds_only_worker_paths(tmp_path, monkeypatch):
@@ -125,8 +199,23 @@ def test_restricted_network_never_falls_back_to_host(tmp_path, monkeypatch):
     monkeypatch.setattr(sandbox, "available", lambda: False)
     tasks.schedule(root)
     result = json.loads((task_dir / "task.json").read_text(encoding="utf-8"))
-    assert result["status"] == "failed" and result["error_code"] == "AK-TASK-STATE"
-    assert "restricted" in result["reason"]
+    assert result["status"] == "failed" and result["error_code"] == "AK-SANDBOX-UNAVAILABLE"
+    assert "sandbox unavailable" in result["reason"]
+
+
+def test_auto_sandbox_unavailable_never_runs_unsandboxed(tmp_path, monkeypatch):
+    root = tmp_path / "repo"
+    task_dir = root / ".agentkit" / "tasks" / "t123abc"
+    task_dir.mkdir(parents=True)
+    (root / ".agentkit/config.toml").write_text('[sandbox]\nmode = "auto"\nnetwork = true\n', encoding="utf-8")
+    task = {"id": "t123abc", "goal": "fix", "checks": [], "allow": [], "model": "fake", "backend": "builtin",
+            "status": "queued", "worktree": ".agentkit/worktrees/t123abc", "base": "HEAD", "branch": "agentkit/t123abc",
+            "budget": {"tokens": 0, "usd": 0, "minutes": 5}, "hash": "h"}
+    (task_dir / "task.json").write_text(json.dumps(task), encoding="utf-8")
+    monkeypatch.setattr(sandbox, "available", lambda: False)
+    tasks.schedule(root)
+    result = json.loads((task_dir / "task.json").read_text(encoding="utf-8"))
+    assert result["status"] == "failed" and result["error_code"] == "AK-SANDBOX-UNAVAILABLE"
 
 
 @pytest.mark.skipif(not sandbox.available(), reason="bubblewrap is unavailable")

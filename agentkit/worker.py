@@ -235,6 +235,7 @@ class Worker:
         self.tokens_out = int(prior.get("tokens_out") or 0)
         self.usd = float(prior.get("usd") or 0.0)
         self.rounds = int(prior.get("rounds") or 0)
+        self.round_details = list(prior.get("round_details") or [])
         self.start_round = self.rounds
         self.session_id = f"builtin:{task.get('id', 'task')}"
         self.turn_id = ""
@@ -271,7 +272,7 @@ class Worker:
     def stats(self) -> dict:
         return {"rounds": self.rounds, "tokens_in": self.tokens_in, "tokens_out": self.tokens_out,
                 "usd": round(self.usd, 6), "compactions": self.compactions, "repairs": self.repairs,
-                "compression": dict(self.cc.stats(), style=self.style_at or "off")}
+                "round_details": self.round_details, "compression": dict(self.cc.stats(), style=self.style_at or "off")}
 
     def _ev(self, event: str, component: str, duration=None, error_code=None, **extra):
         self.last_component, self.last_step = component, self.rounds
@@ -520,7 +521,12 @@ class Worker:
             except ModelError as e:
                 from .events import model_code
 
-                self._ev("model_error", "model", time.monotonic() - tq, model_code(e.kind), what=str(e)[:200])
+                duration = time.monotonic() - tq
+                code = model_code(e.kind)
+                self.round_details.append({"round": self.rounds, "tokens_in": 0, "tokens_out": 0,
+                                           "usd": 0.0, "model_s": round(duration, 3), "actions": [], "error_code": code})
+                self.on_progress(self.stats())
+                self._ev("model_error", "model", duration, code, what=str(e)[:200])
                 return self._model_fail(e)
             self._ev("model_call", "model", time.monotonic() - tq)
             tin, tout = usage_of(resp, self.messages)
@@ -531,6 +537,10 @@ class Worker:
             amsg = {k: v for k, v in msg.items() if v is not None and k in ("role", "content", "tool_calls", "extra_content")}
             amsg["role"] = "assistant"
             calls = list(amsg.get("tool_calls") or [])
+            self.round_details.append({"round": self.rounds, "tokens_in": tin, "tokens_out": tout,
+                                       "usd": round(self.spec.cost(tin, tout), 6),
+                                       "model_s": round(time.monotonic() - tq, 3),
+                                       "actions": [str((tc.get("function") or {}).get("name") or "") for tc in calls]})
             self.on_progress(self.stats())
             ob = self._over_budget()
             if ob:
