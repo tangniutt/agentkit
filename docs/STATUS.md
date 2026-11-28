@@ -236,6 +236,15 @@
 - 新增正式 `[sandbox] mode="policy"`：显式无进程 jail，保留 worktree、凭证 Grant、独立验收与 receipt；只支持共享网络，`off` 仍为测试逃生口。
 - search 支持 flag 位于两个位置参数之间；Qoder/Codex CLI 缺失时只提示选中后端，不自动下载或安装。
 
+### 2026-11-28 v0.2.2 发布
+
+- Release：https://github.com/tangniutt/agentkit/releases/tag/v0.2.2 ；不可变 annotated tag 指向 `f1cdc715f56908ac87d6790287b2ad40aa981541`。
+- CI run `46171663439`：Linux Python 3.10/3.12、Windows direct-mode、release 全部成功。
+- wheel：254,808 bytes，SHA-256 `89f201a059b1ab1ea8c6731ee892d32bc272ee6c963654d5b21629d483d19f7f`；sdist：339,994 bytes，SHA-256 `2f190e51bb0dbc6ba90fc721a5c55731556283ba96474f1fec3efff22b846f5f`。
+- `SHA256SUMS` 与 `provenance.json` 均使用 RSA-3072/SHA-256 分离式签名；公钥 SHA-256 `29496f078b46cfd3fdf2351e720495906d5cdc6e546cc3272ece6742e0f1e8ed`。私钥未进入仓库、日志或文档，签名后已删除临时副本。
+- v0.2.1 → v0.2.2 临时 Windows venv 回滚演练成功，`doctor healthy`；远端下载的 manifest、wheel/sdist、签名、provenance 与 Muse 任务书全部复验通过。
+- Muse 复测任务书 `muse-v0.2.2-test-plan.md`：20,892 bytes，SHA-256 `54aa59335b0821647c3032fb8be1c5a1f61feac51520744566a4ad3d465c4698`，已作为 Release 资产上传。
+
 ### 2026-11-28 v0.2.1 发布
 
 - Release：https://github.com/tangniutt/agentkit/releases/tag/v0.2.1 ；不可变 annotated tag 指向 `4ed059a657f6a0f9b2f9382106da112ed582758f`。
