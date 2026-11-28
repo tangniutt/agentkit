@@ -1,15 +1,15 @@
-# Muse × AgentKit v0.2.2 测试任务书
+# Muse × AgentKit v0.2.3 测试任务书
 
-> 版本：v0.2.2  
-> 发布页：https://github.com/tangniutt/agentkit/releases/tag/v0.2.2  
-> 执行者：Muse  
-> 目标：验证直接模式、MCP stdio、派活模式三条真实使用路径，并产出可复现的脱敏证据。  
+> 版本：v0.2.3
+> 发布页：https://github.com/tangniutt/agentkit/releases/tag/v0.2.3
+> 执行者：Muse
+> 目标：验证直接模式、MCP stdio、派活模式三条真实使用路径，并产出可复现的脱敏证据。
 > 重要：本任务书只生成测试结论和 Issue 草稿；**未经人类用户确认，不得提交公开 Issue、推送代码、发布 Release 或部署服务。**
 
 ## 1. 交给 Muse 的开场提示词
 
 ```text
-请在 Linux 测试环境中安装 AgentKit v0.2.2，严格按照 docs/muse-v0.2.2-test-plan.md 执行直接模式、MCP、派活模式测试。使用临时仓库和测试专用凭证；不得修改验收命令来制造通过，不得轮换账号或绕过限额。失败时保存精确命令、工作目录、退出码、error.code、error.run、task/goal ID、日志 ID 和最小复现步骤。所有输出先脱敏；最终把结果和 Issue 草稿交给我确认，不要自行提交 Issue。
+请在 Linux 测试环境中安装 AgentKit v0.2.3，严格按照 docs/muse-v0.2.3-test-plan.md 执行直接模式、MCP、派活模式测试。使用临时仓库和测试专用凭证；不得修改验收命令来制造通过，不得轮换账号或绕过限额。失败时保存精确命令、工作目录、退出码、error.code、error.run、task/goal ID、日志 ID 和最小复现步骤。所有输出先脱敏；最终把结果和 Issue 草稿交给我确认，不要自行提交 Issue。
 ```
 
 ## 2. 目标与完成标准
@@ -33,7 +33,7 @@
 
 ## 2.1 v0.2.1 回归重点（保留）
 
-本轮是在 v0.2.0 反馈基础上的定向复测，先完成下表，再继续完整三阶段回归。
+先完成 v0.2.3 的 2.3 节，再依次回归 2.1、2.2 和完整三阶段流程。
 
 | 反馈 | 复测动作 | 预期 |
 |---|---|---|
@@ -50,7 +50,7 @@
 
 每个复测项都记录 command、exit/code、run/task/log ID 和最小复现；未触发环境写 `skipped + 原因`，不要写 pass。
 
-## 2.2 v0.2.2 定向复测
+## 2.2 v0.2.2 回归重点（保留）
 
 | 反馈 | 复测动作 | 预期 |
 |---|---|---|
@@ -62,13 +62,18 @@
 | #8.5 search | `search "pattern" --fixed file.py` | 正常返回结果，不再 AK-USAGE |
 | CLI 缺失提示 | 未安装 Qoder/Codex 时分别选择后端 | 只提示缺少被选中的 CLI；不自动下载、不安装、不联网 |
 
-先完成本节，再回归 v0.2.1 检查表和完整三阶段流程。
+本节保留 v0.2.2 回归；完成 2.3 后复测本节，再继续完整三阶段流程。
 
-## 2.3 图片能力复测
+## 2.3 v0.2.3 图片能力定向复测
+
+先完成本节，再回归 v0.2.1/v0.2.2 检查表和完整三阶段流程。
 
 | 用例 | 操作 | 预期 |
 |---|---|---|
 | 视觉模型附件 | `model add ... --vision` 后 `task create ... --attach ref.png` | 请求含 `image_url`，task/round_details 记录附件与 image token 估算；transcript/log 不含 base64 |
+| Goal 附件 | `goal create ... --attach ref.png` 后运行有界 Goal | TaskSpec 保留附件与能力门禁；Goal 子任务使用同一视觉模型，证据收据包含附件元数据 |
+| 接力能力 | 对带附件任务执行 `task resume`/`task handoff` 到纯文本模型；再换视觉模型 | 纯文本目标返回 `AK-MODEL-CAPABILITY`；合法接力保留原 worktree、预算与接力历史 |
+| 暂存图篡改 | 创建任务后修改 `.agentkit/tasks/<id>/attachments/` 中的暂存图，再触发请求 | 哈希/大小不一致时返回 `AK-CONFIG`，不发送被篡改图片 |
 | 非视觉模型 | 对未开 vision 的 builtin 模型传 `--attach` | `AK-MODEL-CAPABILITY`，不创建任务、不静默丢图 |
 | 外部后端 | 对 Codex/OpenCode/Qoder/Cursor 传 `--attach` | 明确 `AK-MODEL-CAPABILITY`，不伪装支持 |
 | 证据图 | 工人在 `artifacts/` 产出 png/jpeg/webp | report/receipt 含路径与 SHA-256；MCP `include_images=true` 返回 image block |
@@ -94,7 +99,7 @@ python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install \
-  https://github.com/tangniutt/agentkit/releases/download/v0.2.2/agentkit-0.2.2-py3-none-any.whl
+  https://github.com/tangniutt/agentkit/releases/download/v0.2.3/agentkit-0.2.3-py3-none-any.whl
 
 agentkit doctor
 agentkit manual
@@ -122,7 +127,7 @@ sudo apt-get install -y git ripgrep bubblewrap
 ### 4.2 创建可复现测试夹具
 
 ```bash
-TEST_ROOT=$(mktemp -d /tmp/agentkit-muse-v020.XXXXXX)
+TEST_ROOT=$(mktemp -d /tmp/agentkit-muse-v023.XXXXXX)
 cd "$TEST_ROOT"
 git init -q -b main
 
@@ -226,10 +231,10 @@ agentkit run "python -c 'print(\"line\"); [print(f\"row-{i}\") for i in range(20
 ### D-05 记忆
 
 ```bash
-agentkit memory add muse-test "add must return the sum" --id muse-v020
+agentkit memory add muse-test "add must return the sum" --id muse-v023
 agentkit memory search "add sum"
 agentkit memory brief
-agentkit memory forget muse-v020
+agentkit memory forget muse-v023
 ```
 
 预期：搜索命中、brief 在预算内、forget 后不再命中。记忆不得包含 Key 或私有会话内容。
@@ -244,7 +249,7 @@ agentkit run "git push"
 
 预期：
 
-- 读取 `.env` 返回 `AK-PATH`（v0.2.2 的受保护文件拒绝行为）。
+- 读取 `.env` 返回 `AK-PATH`（v0.2.3 的受保护文件拒绝行为）。
 - `git push` 返回 `AK-RUN-DENIED`。
 - 两个失败都不得泄露文件内容或凭证。
 
@@ -508,13 +513,13 @@ agentkit feedback --bug RUN_ID
 或手工按以下结构生成草稿：
 
 ```text
-Title: [v0.2.2][MODE][BACKEND] concise failure
+Title: [v0.2.3][MODE][BACKEND] concise failure
 
 Summary:
 - 一句话说明用户影响
 
 Environment:
-- AgentKit v0.2.2, commit, OS, Python, backend/model
+- AgentKit v0.2.3, commit, OS, Python, backend/model
 
 Steps to reproduce:
 1. ...
@@ -542,7 +547,7 @@ Security / secrets:
 ## 9. 最终报告模板
 
 ```text
-# Muse × AgentKit v0.2.2 测试报告
+# Muse × AgentKit v0.2.3 测试报告
 
 ## 环境
 - 版本 / commit：

@@ -5,9 +5,9 @@
 >
 > **核心设计理念：AgentKit 是一个让 AI 自己提建议、持续改进、持续吸收先进工具设计理念的 AI 编程工具。** AI 用户带证据提 bug 与设计建议（`agentkit feedback --improve`）→ [评分](docs/triage.md) → 接受的成为基线变更 → 合并前用评测量化。
 
-**状态：`v0.2.2` 已发布为生产候选（[Release](https://github.com/tangniutt/agentkit/releases/tag/v0.2.2)）——包含前两轮 Muse 反馈修复：沙箱失败关闭与正式 policy 档位、CLI/MCP/验收契约、去重与心跳、全局模型配置、直接验收回执、轮次成本明细、上下文硬上限/工作预算、paused 生命周期、分模式 doctor 和 search 参数容错。固定版本签名/provenance 与回滚门禁已落地；真实账号与其余 LSP 服务器按用户决定延后到发布后用 Muse 验证。官方 CLI 自身仍须持有 provider 凭证，不声称提供完整反代 broker。Windows 仅保留开发机 direct-mode 兼容，不作为生产部署平台或验收门槛。**
+**状态：`v0.2.3` 已发布为生产候选（[Release](https://github.com/tangniutt/agentkit/releases/tag/v0.2.3)）——包含 Muse v0.2.0/v0.2.1 反馈修复，以及图片附件、builtin 视觉模型输入、证据截图和 MCP 图片返回。固定版本签名/provenance 与回滚门禁已落地；真实账号与其余 LSP 服务器按用户决定延后到发布后用 Muse 验证。官方 CLI 自身仍须持有 provider 凭证，不声称提供完整反代 broker。Windows 仅保留开发机 direct-mode 兼容，不作为生产部署平台或验收门槛。**
 
-> Muse 复测任务书：[`docs/muse-v0.2.2-test-plan.md`](docs/muse-v0.2.2-test-plan.md)。
+> Muse 复测任务书：[`docs/muse-v0.2.3-test-plan.md`](docs/muse-v0.2.3-test-plan.md)。
 
 ## 它解决什么
 - 现有编程工具为人设计，AI 用起来读得多、改容易失败、不知道改得对不对。
@@ -60,12 +60,12 @@ AI 读 [`llms.txt`](llms.txt) 即可上手；管理 AgentKit 的主管 AI 用 `a
 | `agentkit checkpoint list / diff ID / rollback ID` | 每次改动前自动快照，回滚后哈希校验；不依赖 git |
 | `agentkit memory brief / add / list / search / show / forget` | 项目记忆（Markdown + front matter，SQLite FTS5 检索，代码锚定失效标记） |
 | `agentkit doctor` | 自检，分别给出 `direct_ready` / `dispatch_ready`，`healthy` 对应当前 `healthy_for` 模式 |
-| `agentkit model add/list/test/remove` | 配置工人模型（任意 OpenAI 兼容接口）；`add/remove --global` 使用用户级配置，项目级同名模型覆盖；只存 Key 的**环境变量名** |
-| `agentkit task create "目标" --check "pytest -q" [--backend builtin\|codex\|opencode\|qoder\|cursor] [--model NAME] [--allow DIR] [--budget-tokens/--budget-usd/--budget-minutes] [--tier] [--fresh]` | 派活：builtin API Key 模型、Codex、OpenCode、Qoder 或 Cursor CLI 在独立 worktree/分支 `agentkit/<id>` 干活；默认要求验收在基线失败、修复后通过；`--fresh` 跳过内容去重，无模型时返回「直接模式」提示 |
+| `agentkit model add/list/test/remove` | 配置工人模型（任意 OpenAI 兼容接口）；`add/remove --global` 使用用户级配置，项目级同名模型覆盖；`--vision` 声明 builtin 图片输入能力；只存 Key 的**环境变量名** |
+| `agentkit task create "目标" --check "pytest -q" [--backend builtin\|codex\|opencode\|qoder\|cursor] [--model NAME] [--allow DIR] [--budget-tokens/--budget-usd/--budget-minutes] [--tier] [--fresh] [--attach FILE]` | 派活：builtin API Key 模型、Codex、OpenCode、Qoder 或 Cursor CLI 在独立 worktree/分支 `agentkit/<id>` 干活；默认要求验收在基线失败、修复后通过；`--fresh` 跳过内容去重，无模型时返回「直接模式」提示 |
 | `agentkit task status / wait / report [--details] / diff / steer / answer / accept / reject / cancel / clean` | status <100 token 且活跃任务含 `idle_s`；report 默认 ≤300 token，`--details` 展开轮次明细；支持 diff、纠偏、提问回答和接受/拒绝 |
 | `agentkit task resume [ID ...] [--all-paused] [--model NAME] [--backend builtin\|codex\|opencode\|qoder\|cursor] [--budget-*]` | 续跑 paused（429/超时）/ interrupted / stopped 任务；`--all-paused` 显式批量恢复，默认不自动重试；沿用原 worktree、分支和累计预算 |
 | `agentkit task handoff ID [--model NAME] [--backend builtin\|codex\|opencode\|qoder\|cursor]` | 显式换工人接力，保留 worktree、diff、记忆和累计预算，记录接力历史 |
-| `agentkit goal create/run/status/wait/report/steer/answer/cancel/resume` | 有界结果闭环：执行、独立验收、失败反馈、提问回答、续跑或换模型，只有验收通过才完成 |
+| `agentkit goal create/run/status/wait/report/steer/answer/cancel/resume` | 有界结果闭环：执行、独立验收、失败反馈、提问回答、续跑或换模型，只有验收通过才完成；create 支持 `--attach FILE` |
 | `agentkit uninstall [--yes] [--this-repo] [--delete-branches]` | 卸载：不带 `--yes` 只列出将删除的内容；删除包、`~/.config/agentkit`、`~/.local/share/agentkit`、各仓库 `.agentkit/` 与 worktree；**不动你的代码和 git 历史**（任务分支默认保留，git 已跟踪的共享记忆保留） |
 | `agentkit credential show TASK_ID` / `credential revoke GRANT_ID\|BINDING_ID` | 查看或撤销凭证授权元数据；只显示环境变量名/认证目录引用，绝不显示密钥值 |
 | `agentkit logs <id> [--errors]` / `agentkit debug-bundle <id>` | 定位失败：结构化事件（哪一步、哪个组件、错误码）；脱敏归档用于报 Bug（错误码见 [docs/errors.md](docs/errors.md)） |
@@ -130,7 +130,7 @@ AI 代用户报 Bug / 提需求：先搜已有 Issue，**先问人类用户**（
 
 ### 本地发布与回滚
 
-- 已发布 [`v0.2.2`](https://github.com/tangniutt/agentkit/releases/tag/v0.2.2)：wheel/sdist、SHA256 校验和及分离式签名、公钥、manifest、provenance 与 Muse 复测任务书均可下载；远端下载后已验证全部哈希与签名。
+- 已发布 [`v0.2.3`](https://github.com/tangniutt/agentkit/releases/tag/v0.2.3)：wheel/sdist、SHA256 校验和及分离式签名、公钥、manifest、provenance 与 Muse 复测任务书均可下载；远端下载后已验证全部哈希与签名。
 - `agentkit release plan`：只读显示版本、git 提交、产物目录和构建计划。
 - `agentkit release build`：要求干净 git 工作树，构建 wheel/sdist、`SHA256SUMS` 和 `release-manifest.json`；`--allow-dirty` 仅用于测试构建，`--overwrite` 需显式确认。
 - `agentkit release verify dist/release-manifest.json`：校验文件哈希、大小、wheel METADATA/必需模块和 sdist 安全路径，不导入或执行 artifact；`trusted:false` 表示哈希不证明发布来源。可加 `--signature SHA256SUMS.sig --public-key public.pem` 校验分离式签名。
