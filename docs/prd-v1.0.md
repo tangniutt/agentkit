@@ -95,8 +95,8 @@ AgentKit 不能依靠“功能更多”建立差异。当前更有价值的方�
 - `HandoffPacket` 与 Codex/OpenCode/Qoder/Cursor 适配器已实现，支持 builtin↔Codex↔OpenCode↔Qoder↔Cursor 接力；OpenCode V1 与 V2 均已适配，V2 官方免费模型可免登录使用，真实 2.4.2 最小任务验证通过，免费额度 429 会暂停且不绕过；LSP 引用窄客户端与词法回退已实现，Pyright 1.1.414 与 typescript-language-server 6.1.0 真实引用验证通过，其余语言服务器矩阵待测；Cursor 支持官方 headless CLI 与可选 Python SDK，CLI 仅轮次/时间预算，SDK 可在运行时报告 token 与按运行成本，但真实 API Key 任务未验证且 USD 硬预算不支持；Antigravity consumer 不包装，自动接力仍默认关闭；
 - XERJ 已接入，但固定 benchmark 中返回字符仍高于内置后端，未达到 token 门槛；
 - 结构化 retrospective 与证据收据已有本地实现，缺 SWE-bench/Terminal-Bench 等外部 benchmark；
-- 已有固定版本构建、wheel/sdist SHA256、版本化清单、artifact 校验、OpenSSL 分离式签名/公钥验证、provenance 与显式回滚；`v0.2.0` 已通过 annotated tag 与 GitHub Release 发布，远端下载复验通过；自动升级仍未实现；
-- 生产目标平台为 Linux VPS；Windows 仅保留 direct-mode 开发兼容，派活沙箱不是当前生产门槛。OpenCode V2 与发布签名接入后 Windows 最终全量 **455 passed, 93 skipped**（含真实 Pyright），Linux Python 3.10/3.12 + bubblewrap 最终全量均为 **544 passed, 4 skipped**；DCO 提交 `ae85bf3` 已推送，Linux GitHub Actions 通过；后续 `v0.2.0` 已完成签名、provenance 与正式发布。
+- 已有固定版本构建、wheel/sdist SHA256、版本化清单、artifact 校验、OpenSSL 分离式签名/公钥验证、provenance 与显式回滚；`v0.2.1` 已通过 annotated tag 与 GitHub Release 发布，包含 Muse 反馈修复与复测任务书，远端下载复验通过；自动升级仍未实现；
+- 生产目标平台为 Linux VPS；Windows 仅保留 direct-mode 开发兼容，派活沙箱不是当前生产门槛。OpenCode V2 与发布签名接入后 Windows 最终全量 **455 passed, 93 skipped**（含真实 Pyright），Linux Python 3.10/3.12 + bubblewrap 最终全量均为 **544 passed, 4 skipped**；DCO 提交 `ae85bf3` 已推送，Linux GitHub Actions 通过；后续 `v0.2.1` 已完成签名、provenance 与正式发布。
 
 ## 1.3 目标用户
 

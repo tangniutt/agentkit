@@ -193,7 +193,7 @@
 1. **Linux VPS 门禁**：Linux Python 3.10/3.12 + bubblewrap 全量已在 GitHub Actions 通过；Windows direct-mode 仅作非阻塞开发兼容回归，不是生产门槛。
 2. **P1 收尾**：Goal 状态事件流、核心/可选工具包；MCP 2026 继续保持明确不支持，除非完整实现 `server/discover`、缓存与 `subscriptions/listen` 后再开放。
 3. **P2 智能与生态**：补齐真实 LSP 服务器矩阵、外部 WorkerBackend、模型能力与健康档案、缓存感知成本；Builtin/XERJ/LSP 适配与 Pyright 真实引用已落地，待补公开 benchmark。
-4. **P3 外部验证与发布**：固定版本 `v0.2.0`、签名/provenance 与回滚已发布；SWE-bench Verified / Terminal-Bench、内部真实长任务、外部作弊留出集与公开成本-质量报告按用户决定在 Muse 接入后继续。
+4. **P3 外部验证与发布**：固定版本 `v0.2.1`、签名/provenance 与回滚已发布；SWE-bench Verified / Terminal-Bench、内部真实长任务、外部作弊留出集与公开成本-质量报告按用户决定在 Muse 接入后继续。
 5. 原生二进制在 P3 证明价值后重新评估。
 
 ## 生产完成定义审计（2026-11-28）
@@ -208,10 +208,10 @@
 | 内置与外部工人产生统一证据 | TaskSpec、预算、独立验收与 EvidenceReceipt 已统一 | 已覆盖 |
 | 模型断流可安全接力 | HandoffPacket 与多后端适配器已落地；自动接力默认关闭，真实故障切换未验证 | 部分 |
 | 外部评测公开且可复现 | 统一 harness 与 JSONL 证据已落地：离线 48/48 任务通过、14/14 作弊检出；真实账号评测按用户决定延后到 Muse 接入后 | 部分 |
-| 固定版本可安装、校验和回滚 | [`v0.2.0`](https://github.com/tangniutt/agentkit/releases/tag/v0.2.0) 已发布；wheel/sdist、SHA256、分离式签名、公钥、provenance、CI 安装与临时环境回滚均通过，远端下载复验通过 | 已完成 |
+| 固定版本可安装、校验和回滚 | [`v0.2.1`](https://github.com/tangniutt/agentkit/releases/tag/v0.2.1) 已发布；wheel/sdist、SHA256、分离式签名、公钥、provenance、CI 安装与临时环境回滚均通过，远端下载复验通过 | 已完成 |
 | 未达到指标如实标注 | 状态文档明确记录假模型、跳过项、额度与生产缺口 | 已覆盖 |
 
-结论：`v0.2.0` 已发布为**生产候选**，可通过 Release 资产安装；真实 Codex/Antigravity/Muse 账号测试按用户决定延后到发布后由 Muse 接入执行，问题进入反馈回路，不伪造真实账号通过结论。凭证侧不是承诺实现会让官方 CLI 无法读取自身密钥的反向代理 broker。
+结论：`v0.2.1` 已发布为**生产候选**，包含 Muse v0.2.0 反馈修复并附带定向复测任务书；真实 Codex/Antigravity/Muse 账号测试按用户决定延后到发布后由 Muse 接入执行，问题进入反馈回路，不伪造真实账号通过结论。凭证侧不是承诺实现会让官方 CLI 无法读取自身密钥的反向代理 broker。
 
 ### 2026-11-28 本地生产门禁
 

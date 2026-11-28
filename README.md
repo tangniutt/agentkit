@@ -5,9 +5,9 @@
 >
 > **核心设计理念：AgentKit 是一个让 AI 自己提建议、持续改进、持续吸收先进工具设计理念的 AI 编程工具。** AI 用户带证据提 bug 与设计建议（`agentkit feedback --improve`）→ [评分](docs/triage.md) → 接受的成为基线变更 → 合并前用评测量化。
 
-**状态：`v0.2.0` 已发布为生产候选（[Release](https://github.com/tangniutt/agentkit/releases/tag/v0.2.0)）——M2 Python 原型 + P0 可信基座 + Goal/MCP 2025 + 任务控制面 + Builtin/XERJ/LSP 代码智能、宿主侧凭证授权/FD 隔离、导入劫持防护、固定版本签名/provenance 与回滚门禁已落地。真实账号与其余 LSP 服务器按用户决定延后到发布后用 Muse 验证；官方 CLI 自身仍须持有 provider 凭证，不声称提供完整反代 broker。Windows 仅保留开发机 direct-mode 兼容，不作为生产部署平台或验收门槛。**
+**状态：`v0.2.1` 已发布为生产候选（[Release](https://github.com/tangniutt/agentkit/releases/tag/v0.2.1)）——包含 Muse v0.2.0 反馈修复：沙箱失败关闭、CLI/MCP/验收契约、去重可见性、心跳、全局模型配置、直接验收回执和轮次成本明细。固定版本签名/provenance 与回滚门禁已落地；真实账号与其余 LSP 服务器按用户决定延后到发布后用 Muse 验证。官方 CLI 自身仍须持有 provider 凭证，不声称提供完整反代 broker。Windows 仅保留开发机 direct-mode 兼容，不作为生产部署平台或验收门槛。**
 
-> v0.2.0 发布后的 Muse 反馈修复已进入 `main`，尚未创建新版本 tag。
+> Muse 复测任务书：[`docs/muse-v0.2.1-test-plan.md`](docs/muse-v0.2.1-test-plan.md)。
 
 ## 它解决什么
 - 现有编程工具为人设计，AI 用起来读得多、改容易失败、不知道改得对不对。
@@ -121,7 +121,7 @@ AI 代用户报 Bug / 提需求：先搜已有 Issue，**先问人类用户**（
 
 ### 本地发布与回滚
 
-- 已发布 [`v0.2.0`](https://github.com/tangniutt/agentkit/releases/tag/v0.2.0)：wheel/sdist、SHA256 校验和及分离式签名、公钥、manifest、provenance 与离线评测证据均可下载；远端下载后已验证全部哈希与签名。
+- 已发布 [`v0.2.1`](https://github.com/tangniutt/agentkit/releases/tag/v0.2.1)：wheel/sdist、SHA256 校验和及分离式签名、公钥、manifest、provenance 与 Muse 复测任务书均可下载；远端下载后已验证全部哈希与签名。
 - `agentkit release plan`：只读显示版本、git 提交、产物目录和构建计划。
 - `agentkit release build`：要求干净 git 工作树，构建 wheel/sdist、`SHA256SUMS` 和 `release-manifest.json`；`--allow-dirty` 仅用于测试构建，`--overwrite` 需显式确认。
 - `agentkit release verify dist/release-manifest.json`：校验文件哈希、大小、wheel METADATA/必需模块和 sdist 安全路径，不导入或执行 artifact；`trusted:false` 表示哈希不证明发布来源。可加 `--signature SHA256SUMS.sig --public-key public.pem` 校验分离式签名。

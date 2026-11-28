@@ -1,7 +1,7 @@
-# Muse × AgentKit v0.2.0 测试任务书
+# Muse × AgentKit v0.2.1 测试任务书
 
-> 版本：v0.2.0  
-> 发布页：https://github.com/tangniutt/agentkit/releases/tag/v0.2.0  
+> 版本：v0.2.1  
+> 发布页：https://github.com/tangniutt/agentkit/releases/tag/v0.2.1  
 > 执行者：Muse  
 > 目标：验证直接模式、MCP stdio、派活模式三条真实使用路径，并产出可复现的脱敏证据。  
 > 重要：本任务书只生成测试结论和 Issue 草稿；**未经人类用户确认，不得提交公开 Issue、推送代码、发布 Release 或部署服务。**
@@ -9,7 +9,7 @@
 ## 1. 交给 Muse 的开场提示词
 
 ```text
-请在 Linux 测试环境中安装 AgentKit v0.2.0，严格按照 docs/muse-v0.2.0-test-plan.md 执行直接模式、MCP、派活模式测试。使用临时仓库和测试专用凭证；不得修改验收命令来制造通过，不得轮换账号或绕过限额。失败时保存精确命令、工作目录、退出码、error.code、error.run、task/goal ID、日志 ID 和最小复现步骤。所有输出先脱敏；最终把结果和 Issue 草稿交给我确认，不要自行提交 Issue。
+请在 Linux 测试环境中安装 AgentKit v0.2.1，严格按照 docs/muse-v0.2.1-test-plan.md 执行直接模式、MCP、派活模式测试。使用临时仓库和测试专用凭证；不得修改验收命令来制造通过，不得轮换账号或绕过限额。失败时保存精确命令、工作目录、退出码、error.code、error.run、task/goal ID、日志 ID 和最小复现步骤。所有输出先脱敏；最终把结果和 Issue 草稿交给我确认，不要自行提交 Issue。
 ```
 
 ## 2. 目标与完成标准
@@ -31,6 +31,25 @@
 - [ ] 两个模型之间的 `task handoff`。
 - [ ] 测试专用凭证的 `credential show → revoke → cancel` 演练。
 
+## 2.1 v0.2.1 Muse 复测重点
+
+本轮是在 v0.2.0 反馈基础上的定向复测，先完成下表，再继续完整三阶段回归。
+
+| 反馈 | 复测动作 | 预期 |
+|---|---|---|
+| #1 沙箱启动 | 运行 `agentkit doctor`；在支持 bubblewrap 的 Linux VM 创建派活任务；若环境不支持，检查失败与 cancel | sandbox 探针与真实启动一致；不支持时快速 `AK-SANDBOX-UNAVAILABLE`，不静默无沙箱运行 |
+| #2 CLI 崩溃 | 对已完成任务运行 `task diff`、`task accept`；另测 steer/answer/reject | 不再出现 `Namespace.ids` / `AK-INTERNAL` |
+| #3 验收语义 | 弱化测试断言但让错误实现通过，运行直接 `verify` | 顶层 `verdict=needs_review`，`code=AK-VERIFY-SUSPICIOUS` |
+| #4 MCP 参数 | 传错误参数名/类型；使用 `path` 别名读相对文件；单任务工具传单元素 `ids` | 参数错误返回 `-32602 Invalid arguments` 和 issues；别名可用；相对路径按 `--root` 解析 |
+| #5 任务书/噪声 | 按 D-01/D-04/D-05/D-06 原命令执行；检查 changed | search flag 顺序可执行；forget 用 id；`.env` 为 `AK-PATH`；日志字段正确；无 `__pycache__` 噪声 |
+| #6.1 去重 | 相同目标/check 创建两次，再加 `--fresh` | 第二次显式 `deduped/reused/original_status/verdict`；fresh 生成新 task |
+| #6.2 心跳 | 运行中重复 `task status` | 返回 `idle_s`，可区分慢任务与卡死 |
+| #6.3 全局模型 | `model add --global`，换仓库 `model list`，再加项目同名覆盖 | 全局模型可见，项目覆盖生效，配置不含 Key 值 |
+| #6.4 直接回执 | 修复后运行 `verify --receipt` | baseline fail、acceptance pass，生成带哈希的 EvidenceReceipt |
+| #6.6 轮次明细 | 派活后运行 `task report --details` | 包含每轮 token、模型耗时和动作；默认紧凑 report 不展开 |
+
+每个复测项都记录 command、exit/code、run/task/log ID 和最小复现；未触发环境写 `skipped + 原因`，不要写 pass。
+
 ## 3. 安全与停止条件
 
 - 只使用临时仓库和专用测试 Key；Key 只放环境变量，不写命令行、配置值、日志、截图或 Issue。
@@ -51,7 +70,7 @@ python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install \
-  https://github.com/tangniutt/agentkit/releases/download/v0.2.0/agentkit-0.2.0-py3-none-any.whl
+  https://github.com/tangniutt/agentkit/releases/download/v0.2.1/agentkit-0.2.1-py3-none-any.whl
 
 agentkit doctor
 agentkit manual
@@ -201,7 +220,7 @@ agentkit run "git push"
 
 预期：
 
-- 读取 `.env` 返回 `AK-PATH`（v0.2.0 的受保护文件拒绝行为）。
+- 读取 `.env` 返回 `AK-PATH`（v0.2.1 的受保护文件拒绝行为）。
 - `git push` 返回 `AK-RUN-DENIED`。
 - 两个失败都不得泄露文件内容或凭证。
 
@@ -465,13 +484,13 @@ agentkit feedback --bug RUN_ID
 或手工按以下结构生成草稿：
 
 ```text
-Title: [v0.2.0][MODE][BACKEND] concise failure
+Title: [v0.2.1][MODE][BACKEND] concise failure
 
 Summary:
 - 一句话说明用户影响
 
 Environment:
-- AgentKit v0.2.0, commit, OS, Python, backend/model
+- AgentKit v0.2.1, commit, OS, Python, backend/model
 
 Steps to reproduce:
 1. ...
@@ -499,7 +518,7 @@ Security / secrets:
 ## 9. 最终报告模板
 
 ```text
-# Muse × AgentKit v0.2.0 测试报告
+# Muse × AgentKit v0.2.1 测试报告
 
 ## 环境
 - 版本 / commit：

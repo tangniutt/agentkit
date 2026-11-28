@@ -15,7 +15,7 @@ import pytest
 from agentkit import release
 from agentkit.core import AKError, Ctx
 
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 
 
 def _project(root: Path, version: str = VERSION):
@@ -128,7 +128,7 @@ def test_release_rejects_cross_platform_artifact_paths(tmp_path, name):
     assert error.value.code == "AK-RELEASE-HASH"
 
 
-@pytest.mark.parametrize("name", ["../escape", "agentkit-0.2.0/..\\escape", "C:/escape", "/escape"])
+@pytest.mark.parametrize("name", ["../escape", "agentkit-0.2.1/..\\escape", "C:/escape", "/escape"])
 def test_release_rejects_cross_platform_sdist_paths(tmp_path, name):
     path = tmp_path / "unsafe.tar.gz"
     with tarfile.open(path, "w:gz") as tar:
@@ -143,7 +143,7 @@ def test_release_rejects_cross_platform_sdist_paths(tmp_path, name):
 def test_release_rejects_sdist_links(tmp_path):
     path = tmp_path / "link.tar.gz"
     with tarfile.open(path, "w:gz") as tar:
-        info = tarfile.TarInfo("agentkit-0.2.0/link")
+        info = tarfile.TarInfo("agentkit-0.2.1/link")
         info.type = tarfile.SYMTYPE
         info.linkname = "../../escape"
         tar.addfile(info)
