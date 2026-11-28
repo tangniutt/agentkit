@@ -31,6 +31,7 @@ draft an issue (never posted automatically): `agentkit feedback --bug <id>`.
 | `AK-MODEL-NONE` | no worker model configured (direct mode) | use the tools directly, or agentkit model add |
 | `AK-MODEL-KEYENV` | the model's key environment variable is not set | export the variable named by key_env |
 | `AK-MODEL-AUTH` | model rejected the key (401/403) | agentkit model test NAME; check the key |
+| `AK-MODEL-CAPABILITY` | model or backend lacks a required capability | choose a capable model/backend or remove the unsupported input |
 | `AK-MODEL-429` | model rate limit / quota exhausted (429) | wait for Retry-After or the quota reset, then re-submit |
 | `AK-MODEL-TIMEOUT` | model did not answer after 2 retries | check the endpoint / network; re-submit later |
 | `AK-MODEL-NETWORK` | cannot reach the model endpoint | check base_url and network; agentkit model test |

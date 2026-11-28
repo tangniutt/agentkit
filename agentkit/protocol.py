@@ -131,6 +131,7 @@ class BackendCapabilities:
     cost_reporting: bool = False
     credits_reporting: bool = False
     cancel: bool = False
+    image_input: bool = False
     schema_version: str = SCHEMA_VERSION
 
     def validate(self) -> "BackendCapabilities":
@@ -142,7 +143,7 @@ class BackendCapabilities:
             raise ProtocolError("event_protocol must be internal, jsonl or sdk")
         for name in ("headless", "streaming", "session_resume", "session_fork", "approval_events",
                      "diff_events", "native_mcp", "oauth", "api_key", "usage_reporting",
-                     "cost_reporting", "credits_reporting", "cancel"):
+                     "cost_reporting", "credits_reporting", "cancel", "image_input"):
             if not isinstance(getattr(self, name), bool):
                 raise ProtocolError(f"{name} must be boolean")
         return self
@@ -154,7 +155,7 @@ class BackendCapabilities:
     def from_dict(cls, data: dict) -> "BackendCapabilities":
         allowed = {"backend", "event_protocol", "headless", "streaming", "session_resume", "session_fork",
                    "approval_events", "diff_events", "native_mcp", "oauth", "api_key", "usage_reporting",
-                   "cost_reporting", "credits_reporting", "cancel", "schema_version"}
+                   "cost_reporting", "credits_reporting", "cancel", "image_input", "schema_version"}
         _keys(data, allowed, {"backend", "event_protocol"})
         return cls(**{k: data[k] for k in allowed if k in data}).validate()
 
@@ -542,6 +543,7 @@ class TaskSpec:
     context: list[str] = field(default_factory=list)
     allowed_paths: list[str] = field(default_factory=list)
     forbidden_paths: list[str] = field(default_factory=list)
+    attachments: list[dict] = field(default_factory=list)
     worker: dict = field(default_factory=lambda: {"backend": "builtin", "failover": []})
     schema_version: str = SCHEMA_VERSION
 
@@ -553,6 +555,11 @@ class TaskSpec:
         self.context = _strings(self.context, "context")
         self.allowed_paths = _strings(self.allowed_paths, "allowed_paths")
         self.forbidden_paths = _strings(self.forbidden_paths, "forbidden_paths")
+        if not isinstance(self.attachments, list) or any(not isinstance(item, dict) for item in self.attachments):
+            raise ProtocolError("attachments must be an object array")
+        for item in self.attachments:
+            if not item.get("path") or not item.get("sha256") or not item.get("mime"):
+                raise ProtocolError("attachment requires path, sha256 and mime")
         self.acceptance = validate_acceptance(self.acceptance)
         self.budget = validate_budget(self.budget)
         if not isinstance(self.worker, dict):
@@ -565,10 +572,10 @@ class TaskSpec:
     @classmethod
     def from_dict(cls, data: dict) -> "TaskSpec":
         _keys(data, {"schema_version", "goal", "acceptance", "budget", "context", "allowed_paths",
-                     "forbidden_paths", "worker"}, {"goal", "acceptance"})
+                     "forbidden_paths", "attachments", "worker"}, {"goal", "acceptance"})
         return cls(goal=data["goal"], acceptance=data["acceptance"], budget=data.get("budget") or default_budget(),
                    context=data.get("context", []), allowed_paths=data.get("allowed_paths", []),
-                   forbidden_paths=data.get("forbidden_paths", []),
+                   forbidden_paths=data.get("forbidden_paths", []), attachments=data.get("attachments", []),
                    worker=data.get("worker") or {"backend": "builtin", "failover": []},
                    schema_version=data.get("schema_version", SCHEMA_VERSION)).validate()
 
@@ -626,6 +633,8 @@ class EvidenceReceipt:
     cost: dict
     created_at: str
     suspicious: list[dict] = field(default_factory=list)
+    attachments: list[dict] = field(default_factory=list)
+    artifacts: list[dict] = field(default_factory=list)
     schema_version: str = SCHEMA_VERSION
 
     def validate(self) -> "EvidenceReceipt":
@@ -644,6 +653,10 @@ class EvidenceReceipt:
             raise ProtocolError("checks must be objects")
         if not isinstance(self.suspicious, list) or any(not isinstance(x, dict) for x in self.suspicious):
             raise ProtocolError("suspicious must be objects")
+        if not isinstance(self.attachments, list) or any(not isinstance(x, dict) for x in self.attachments):
+            raise ProtocolError("attachments must be objects")
+        if not isinstance(self.artifacts, list) or any(not isinstance(x, dict) for x in self.artifacts):
+            raise ProtocolError("artifacts must be objects")
         if not isinstance(self.worker, dict) or not isinstance(self.cost, dict):
             raise ProtocolError("worker/cost must be objects")
         return self
@@ -654,8 +667,9 @@ class EvidenceReceipt:
     @classmethod
     def from_dict(cls, data: dict) -> "EvidenceReceipt":
         allowed = {"schema_version", "receipt_id", "subject", "base_commit", "diff_sha256", "acceptance_sha256",
-                   "environment_sha256", "checks", "verdict", "suspicious", "verifier_version", "worker", "cost", "created_at"}
-        _keys(data, allowed, allowed - {"schema_version", "suspicious"})
+                   "environment_sha256", "checks", "verdict", "suspicious", "attachments", "artifacts",
+                   "verifier_version", "worker", "cost", "created_at"}
+        _keys(data, allowed, allowed - {"schema_version", "suspicious", "attachments", "artifacts"})
         return cls(**{k: data[k] for k in allowed if k in data}).validate()
 
 

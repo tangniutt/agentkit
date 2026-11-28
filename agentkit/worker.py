@@ -217,6 +217,9 @@ class Worker:
         self.wt = worktree
         self.main_root = main_root
         self.task = task
+        self.attachments = list(task.get("attachments") or [])
+        self.image_tokens_estimate = sum(int(item.get("estimated_tokens") or 0) for item in self.attachments)
+        self.image_urls = []
         self.on_progress = on_progress
         self.transcript = transcript
         self.client = client or ChatClient(spec, backoff=float(cfg.get("backoff_s", 1.0)))
@@ -271,7 +274,8 @@ class Worker:
     def stats(self) -> dict:
         return {"rounds": self.rounds, "tokens_in": self.tokens_in, "tokens_out": self.tokens_out,
                 "usd": round(self.usd, 6), "compactions": self.compactions, "repairs": self.repairs,
-                "round_details": self.round_details, "compression": dict(self.cc.stats(), style=self.style_at or "off")}
+                "round_details": self.round_details, "image_tokens_estimated": self.image_tokens_estimate,
+                "compression": dict(self.cc.stats(), style=self.style_at or "off")}
 
     def _ev(self, event: str, component: str, duration=None, error_code=None, **extra):
         self.last_component, self.last_step = component, self.rounds
@@ -291,7 +295,22 @@ class Worker:
         self._log(msg)
 
     def est_tokens(self) -> int:
-        return (len(dumps(self.messages)) + len(dumps(self.tools))) // 4
+        return (len(dumps(self.messages)) + len(dumps(self.tools))) // 4 + self.image_tokens_estimate
+
+    def _request_messages(self) -> list:
+        if not self.image_urls:
+            return self.messages
+        messages = list(self.messages)
+        for index, message in enumerate(messages):
+            if message.get("role") != "user":
+                continue
+            text = str(message.get("content") or "")
+            parts = [{"type": "text", "text": text},
+                     *({"type": "image_url", "image_url": {"url": url, "detail": "auto"}}
+                       for url in self.image_urls)]
+            messages[index] = {**message, "content": parts}
+            break
+        return messages
 
     def _over_budget(self) -> Optional[str]:
         if self.budget_tokens and self.tokens_in + self.tokens_out >= self.budget_tokens:
@@ -489,11 +508,20 @@ class Worker:
                                style=STYLE_TERSE if self._style_at_start() else "")
         if resume:
             self._log({"role": "_resume", "content": f"resumed at round {self.rounds}"})
+        if self.attachments:
+            from . import images
+
+            attachment_dir = self.main_root / ".agentkit" / "tasks" / str(t.get("id") or "") / "attachments"
+            self.image_urls = [images.data_url(self.main_root, item, base_dir=attachment_dir)
+                               for item in self.attachments]
         self._add({"role": "system", "content": sysmsg})
+        task_text = f"Task {t['id']}: {t['goal']}\nStart with the memory brief above, then explore with repo_map/search/read."
+        if self.attachments:
+            task_text += "\nAttachments: " + ", ".join(str(item.get("name") or "image") for item in self.attachments)
         if resume:
             self._add({"role": "user", "content": resume})
         else:
-            self._add({"role": "user", "content": f"Task {t['id']}: {t['goal']}\nStart with the memory brief above, then explore with repo_map/search/read."})
+            self._add({"role": "user", "content": task_text})
         format_errors = 0
         last_fp = self.diff_fingerprint()
         changed_once = bool(resume)  # a resumed task usually carries a diff already
@@ -516,19 +544,22 @@ class Worker:
             self.item_id = ""
             tq = time.monotonic()
             try:
-                resp = self.client.chat(self.messages, self.tools)
+                resp = self.client.chat(self._request_messages(), self.tools)
             except ModelError as e:
                 from .events import model_code
 
                 duration = time.monotonic() - tq
                 code = model_code(e.kind)
                 self.round_details.append({"round": self.rounds, "tokens_in": 0, "tokens_out": 0,
-                                           "usd": 0.0, "model_s": round(duration, 3), "actions": [], "error_code": code})
+                                           "usd": 0.0, "model_s": round(duration, 3), "actions": [],
+                                           "images": len(self.attachments),
+                                           "image_tokens_estimated": self.image_tokens_estimate,
+                                           "error_code": code})
                 self.on_progress(self.stats())
                 self._ev("model_error", "model", duration, code, what=str(e)[:200])
                 return self._model_fail(e)
             self._ev("model_call", "model", time.monotonic() - tq)
-            tin, tout = usage_of(resp, self.messages)
+            tin, tout = usage_of(resp, self.messages, self.image_tokens_estimate)
             self.tokens_in += tin
             self.tokens_out += tout
             self.usd += self.spec.cost(tin, tout)
@@ -539,7 +570,8 @@ class Worker:
             self.round_details.append({"round": self.rounds, "tokens_in": tin, "tokens_out": tout,
                                        "usd": round(self.spec.cost(tin, tout), 6),
                                        "model_s": round(time.monotonic() - tq, 3),
-                                       "actions": [str((tc.get("function") or {}).get("name") or "") for tc in calls]})
+                                       "actions": [str((tc.get("function") or {}).get("name") or "") for tc in calls],
+                                       "images": len(self.attachments), "image_tokens_estimated": self.image_tokens_estimate})
             self.on_progress(self.stats())
             ob = self._over_budget()
             if ob:

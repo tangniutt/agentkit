@@ -57,6 +57,7 @@ def _spec_from_args(a) -> GoalSpec:
         raise AKError("goal needs acceptance checks", "Goal requires at least one --check", "agentkit goal create 'outcome' --check 'pytest -q'", code="AK-VERIFY-NOCHECK")
     constraints = {"max_tasks": 1, "max_handoffs": getattr(a, "max_handoffs", 2),
                    "max_iterations": getattr(a, "max_iterations", 3), "allowed_paths": list(a.allow or []),
+                   "attachments": list(getattr(a, "attach", None) or []),
                    "failover": list(a.failover or [])}
     return GoalSpec.from_dict({
         "outcome": a.outcome,
@@ -107,6 +108,7 @@ def create(ctx: Ctx, a) -> dict:
         model_name = routing_decision.model_id
     task_args = SimpleNamespace(
         goal=spec["outcome"], check=spec["acceptance"]["checks"], allow=constraints.get("allowed_paths", []),
+        attach=constraints.get("attachments", []),
         allow_baseline_pass=not spec["acceptance"].get("baseline_must_fail", True),
         budget_tokens=int(budget.get("tokens", 200000)), budget_usd=float(budget.get("usd", 2.0)),
         budget_minutes=float(budget.get("minutes", 30)), tier=getattr(a, "tier", None), model=model_name,

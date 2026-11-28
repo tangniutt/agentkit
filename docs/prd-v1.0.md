@@ -270,6 +270,9 @@ Goal 默认关闭。只有在多步骤、结果可验证、需要持续迭代时
   "context": ["src/stock.py", "tests/test_stock.py"],
   "allowed_paths": ["src/"],
   "forbidden_paths": ["tests/", ".github/"],
+  "attachments": [
+    {"path": ".agentkit/tasks/t1a2b3c/attachments/ref.png", "sha256": "...", "mime": "image/png", "bytes": 245760}
+  ],
   "acceptance": {
     "checks": ["pytest -q tests/test_stock.py"],
     "baseline_must_fail": true,
@@ -295,6 +298,7 @@ Goal 默认关闭。只有在多步骤、结果可验证、需要持续迭代时
 - 工人不能修改验收命令、测试配置或冻结哈希。
 - 允许路径与禁止路径同时存在；禁止路径优先。
 - 未提供验收检查时只能创建 draft，不能直接运行。
+- 图片附件按任务 opt-in，记录路径、MIME、大小与 SHA-256；仅视觉 builtin 模型可接收，外部 CLI 不支持时明确拒绝，不静默丢图。
 
 ## 6.3 GoalSpec
 
@@ -311,7 +315,8 @@ Goal 默认关闭。只有在多步骤、结果可验证、需要持续迭代时
   "constraints": {
     "max_tasks": 8,
     "max_handoffs": 2,
-    "allowed_paths": ["src/"]
+    "allowed_paths": ["src/"],
+    "attachments": ["design/reference.png"]
   },
   "budget": {
     "tokens": 500000,
@@ -355,6 +360,12 @@ Goal 默认关闭。只有在多步骤、结果可验证、需要持续迭代时
   ],
   "verdict": "pass",
   "suspicious": [],
+  "attachments": [
+    {"path": ".agentkit/tasks/t1a2b3c/attachments/ref.png", "sha256": "...", "mime": "image/png", "bytes": 245760}
+  ],
+  "artifacts": [
+    {"path": "artifacts/proof.png", "sha256": "...", "mime": "image/png", "bytes": 198400}
+  ],
   "verifier_version": "0.3.0",
   "worker": {"backend": "builtin", "model": "cheap"},
   "cost": {"tokens": 12345, "usd": 0.12, "seconds": 42},
@@ -365,6 +376,7 @@ Goal 默认关闭。只有在多步骤、结果可验证、需要持续迭代时
 要求：
 
 - receipt 内容寻址、不可变、可校验。
+- 图片附件与 `artifacts/` 证据图只记录元数据与哈希；MCP 可显式返回 image content block，不把 base64 写入 transcript 或普通日志。
 - `task report` 和 `goal report` 返回 receipt ID 与摘要，不返回大全文。
 - `debug-bundle` 默认包含 receipt。
 - 外部评测直接消费 receipt，避免重新解释日志。

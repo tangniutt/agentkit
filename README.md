@@ -78,6 +78,14 @@ AI 读 [`llms.txt`](llms.txt) 即可上手；管理 AgentKit 的主管 AI 用 `a
 
 运行状态写在仓库内 `.agentkit/`（快照、日志、记忆、任务、worktree；其中 `.gitignore` 只放行 `config.toml` 与记忆文件），除了调用你配置的模型接口外不上传任何数据。
 
+### 图片输入与证据
+
+- `agentkit model add ... --vision` 标记 builtin 模型支持图片；未标记或外部 CLI 后端收到 `--attach` 时立即返回 `AK-MODEL-CAPABILITY`，不会静默丢图。
+- `task create --attach FILE` / `goal create --attach FILE` 可重复传入 png/jpg/jpeg/webp；附件复制到任务目录、记录 SHA-256，并以 OpenAI 兼容 `image_url` 块发送给视觉模型。resume/handoff 会重新注入，不依赖供应商私有状态。
+- 单张上限 5 MiB、单任务总计 10 MiB；每张按 1000 token 计入预算估算与 `round_details`。当前不做自动缩放，附件可能包含敏感信息，创建时会明确警告。
+- 工人可把截图放到 worktree 的 `artifacts/`；完整 report/receipt 记录图片路径与哈希，`task report --details` 可查看，MCP `agentkit_task_report` 传 `include_images=true` 可返回标准 image content block。
+- 不提供自动 VLM 裁判；Codex/OpenCode/Qoder/Cursor 的原生图片输入暂不支持，后续按官方接口单独适配。
+
 ### 多工人后端
 
 - 接入边界：只接可脚本化的官方 CLI/API/RPC/MCP 编程工具；不接 GUI 自动化、电脑操作工具，也不为需要模拟 Windows 沙箱的工具做兼容层。生产运行平台为 Linux VPS。

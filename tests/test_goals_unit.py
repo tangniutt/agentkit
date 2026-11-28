@@ -47,10 +47,12 @@ def test_goal_create_registers_one_underlying_task(repo, monkeypatch):
         return {"id": "t123abc", "status": "queued"}
 
     monkeypatch.setattr(tasks, "create", create)
-    out = goals.create(Ctx(root=repo, cwd=repo), _args())
+    out = goals.create(Ctx(root=repo, cwd=repo), _args(attach=["reference.png"]))
     assert out["task_id"] == "t123abc" and len(calls) == 1
+    assert calls[0].attach == ["reference.png"]
     g = goals.load(repo, out["id"])
     assert g["status"] == "planned" and g["spec"]["acceptance"]["baseline_must_fail"] is True
+    assert g["spec"]["constraints"]["attachments"] == ["reference.png"]
 
 
 def test_goal_create_routes_initial_model_from_risk(repo, monkeypatch):

@@ -1,6 +1,7 @@
 # Copyright 2026 tangniutt and contributors
 # SPDX-License-Identifier: Apache-2.0
 """M-12 worker loop, M-13 task system, M-14 isolation, M-16 budgets, M-17 key hygiene, M-21 auto-memory."""
+import base64
 import json
 import os
 import signal
@@ -133,6 +134,47 @@ def test_task_missing_key_env_refused(ak, repo, fake):
     project(repo, ak, fake)
     r = ak("task", "create", "x", "--check", CHECK, env={"FAKE_KEY": ""})
     assert not r["ok"] and "FAKE_KEY" in r["error"]["what"]
+
+
+def test_task_attachments_require_vision_and_reach_model(ak, repo, fake):
+    project(repo, ak, fake)
+    png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6nWQAAAAASUVORK5CYII="
+    image = repo / "reference.png"
+    image.write_bytes(base64.b64decode(png_b64))
+    rejected = ak("task", "create", "fix add [VISION-NO]", "--check", CHECK, "--attach", "reference.png")
+    assert not rejected["ok"] and rejected["error"]["code"] == "AK-MODEL-CAPABILITY"
+    enabled = ak("model", "add", "fake", "--base-url", fake.url, "--key-env", "FAKE_KEY",
+                 "--price-in", "1", "--price-out", "2", "--vision")
+    assert enabled["ok"] and enabled["data"]["vision"] is True
+    screenshot = f'''{PY} -c "import base64,pathlib; pathlib.Path('artifacts').mkdir(exist_ok=True); pathlib.Path('artifacts/proof.png').write_bytes(base64.b64decode('{png_b64}'))"'''
+    fake.add("[VISION]", [
+        {"call": "edit", "args": {"path": "calc.py", "old": "a - b", "new": "a + b"}},
+        {"call": "run", "args": {"command": screenshot}},
+        {"call": "run", "args": {"command": CHECK}},
+        {"call": "finish", "args": {"summary": "fixed with visual evidence"}},
+    ])
+    tid = create(ak, "fix add [VISION]", "--attach", "reference.png")
+    assert wait(ak, tid)["verdict"] == "pass"
+    task = tjson(repo, tid)
+    assert task["attachments"][0]["mime"] == "image/png"
+    assert (repo / task["attachments"][0]["path"]).is_file()
+    request = fake.requests_for("[VISION]")[0]["body"]["messages"]
+    content = next(message["content"] for message in request if message["role"] == "user")
+    assert any(part.get("type") == "image_url" for part in content)
+    transcript = (repo / ".agentkit" / "tasks" / tid / "transcript.jsonl").read_text(encoding="utf-8")
+    assert "data:image" not in transcript
+    assert all(item["images"] == 1 for item in task["round_details"])
+    report = ak("task", "report", tid, "--details", budget=4000)["data"]
+    assert report["images"][0]["path"] == "artifacts/proof.png" and report["images"][0]["sha256"]
+    receipt = json.loads((repo / ".agentkit" / "tasks" / tid / "receipt.json").read_text(encoding="utf-8"))
+    assert receipt["attachments"] and receipt["artifacts"][0]["path"] == "artifacts/proof.png"
+    from agentkit.mcp_server import _meta, _state, handle
+
+    response = handle(repo, {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                             "params": {**_meta("2025-11-25"), "name": "agentkit_task_report",
+                                        "arguments": {"id": tid, "include_images": True}}}, _state())
+    image_content = next(item for item in response["result"]["content"] if item["type"] == "image")
+    assert base64.b64decode(image_content["data"]) == base64.b64decode(png_b64)
 
 
 def test_dedupe_and_queue(ak, repo, fake):

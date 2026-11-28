@@ -236,6 +236,14 @@
 - 新增正式 `[sandbox] mode="policy"`：显式无进程 jail，保留 worktree、凭证 Grant、独立验收与 receipt；只支持共享网络，`off` 仍为测试逃生口。
 - search 支持 flag 位于两个位置参数之间；Qoder/Codex CLI 缺失时只提示选中后端，不自动下载或安装。
 
+### 2026-11-28 图片输入与证据链路
+
+- 新增 `task/goal create --attach`：png/jpg/jpeg/webp 校验、任务目录暂存、SHA-256 元数据；非视觉 builtin 模型或外部 CLI 后端以 `AK-MODEL-CAPABILITY` 明确拒绝。
+- builtin 视觉模型请求注入 OpenAI 兼容 `image_url` 块；transcript/log 不写 base64，resume/handoff 重新注入；每张按 1000 token 计入预算估算与轮次明细。
+- `artifacts/` 截图进入 report/receipt 哈希清单；MCP `agentkit_task_report(include_images=true)` 返回标准 image content block。
+- 附件单张 5 MiB、总计 10 MiB，不做自动缩放或 VLM 自动裁判；外部 CLI 原生图片输入暂未适配。
+- 回归：Linux 聚合 **208 passed**，Windows 契约 **154 passed**，外部后端拒绝测试通过。
+
 ### 2026-11-28 v0.2.2 发布
 
 - Release：https://github.com/tangniutt/agentkit/releases/tag/v0.2.2 ；不可变 annotated tag 指向 `f1cdc715f56908ac87d6790287b2ad40aa981541`。

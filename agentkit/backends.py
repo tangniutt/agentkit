@@ -185,7 +185,7 @@ def _capabilities(backend: str, protocol: str, **flags) -> dict:
 
 def builtin_capabilities() -> dict:
     return _capabilities("builtin", "internal", headless=True, streaming=True, api_key=True,
-                         usage_reporting=True, cost_reporting=True, cancel=True)
+                         usage_reporting=True, cost_reporting=True, cancel=True, image_input=True)
 
 
 def backend_capabilities(name: str, cfg: Optional[dict] = None, transport: Optional[str] = None) -> dict:

@@ -6,7 +6,7 @@ AgentKit: token-frugal coding tools for AI agents + optional cheap worker with i
 
 Global options: --budget N (output tokens, default 2000), --human (text), --root DIR; anywhere on the line.
 
-JSON form: `agentkit manual` (overview, ~1789 tokens), `agentkit manual <command>` (one command), `agentkit manual --all` (everything, ~4982 tokens).
+JSON form: `agentkit manual` (overview, ~1779 tokens), `agentkit manual <command>` (one command), `agentkit manual --all` (everything, ~4982 tokens).
 
 ## Quick start (supervisor)
 
@@ -427,9 +427,10 @@ add model; env name
 | `--base-url` | str |  | OpenAI-compatible base URL (required unless --preset) |
 | `--model` | str |  | provider model id (default: NAME) |
 | `--key-env` | str |  | NAME of the env var holding the key (never the key itself) |
-| `--context` | int |  | legacy alias for --context-limit |
-| `--context-limit` | int |  | hard window; 0=unknown |
-| `--context-budget` | int |  | history budget before compaction |
+| `--context` | int |  | alias for context-limit |
+| `--context-limit` | int |  | hard window;0=unknown |
+| `--context-budget` | int |  | history budget |
+| `--vision` | bool |  | accept images |
 | `--rpm` | float |  | max requests per minute this worker sends (free-tier pacing) |
 | `--rate-wait` | float |  | seconds to sit out a 429 that has no Retry-After, once per call (0 = pause the task at once) |
 | `--max-wait` | float |  | longest Retry-After (s) to sit out before pausing (default 30) |
@@ -440,7 +441,7 @@ add model; env name
 | `--default` | bool |  |  |
 | `--global` | bool |  | write to the user config; project models override it |
 
-- **Output `data`:** `added,scope,limit,budget,key_env_set,warning?`
+- **Output `data`:** `added,scope,limit,budget,vision,key_env_set,warning?`
 - **Errors:** `AK-USAGE` (bad command line arguments)
 - **Side effects:** state
 - **Example:** `agentkit model add x --preset nvidia`
@@ -484,7 +485,7 @@ remove model
 
 ### `agentkit task create`
 
-dispatch with fail-to-pass
+dispatch; fail-to-pass
 
 | arg | type | default | notes |
 |---|---|---|---|
@@ -493,6 +494,7 @@ dispatch with fail-to-pass
 | `--check` | str |  | repeatable; acceptance command run by the verifier, e.g. 'pytest -q' |
 | `--allow-baseline-pass` | bool |  | allow checks that already pass on the base commit (default: baseline must fail) |
 | `--allow` | str |  | repeatable; glob/dir the worker may change |
+| `--attach` | str |  | repeatable; image attachment (repeatable) |
 | `--budget-tokens` | int |  | stop after this many worker tokens |
 | `--budget-usd` | float |  | stop after this many USD (needs model prices) |
 | `--budget-minutes` | float |  | stop after this many minutes |
@@ -501,7 +503,7 @@ dispatch with fail-to-pass
 | `--backend` | str | `builtin` | worker backend |
 | `--fresh` | bool |  | bypass task content dedupe and create a new run |
 
-- **Output `data`:** `id,status,deduped,reused?,verdict?,warnings?`
+- **Output `data`:** `id,status,deduped,reused?,attachments?,verdict?,warnings?`
 - **Errors:** `AK-MODEL-NONE` (no worker model configured (direct mode)), `AK-VERIFY-NOCHECK` (verify/task has no check command), `AK-TASK-STATE` (operation not allowed in the task's current state)
 - **Side effects:** tokens, net, exec, state
 - **Example:** `agentkit task create x --check true`
@@ -541,14 +543,14 @@ verdict; details=rounds
 | `ids` | str |  | zero or more |
 | `--details` | bool |  | include full per-round token and action details |
 
-- **Output `data`:** `task,status,verdict,checks,changed,suspicious,cost,rounds?,error?`
+- **Output `data`:** `task,status,verdict,checks,changed,images,cost,rounds?,error?`
 - **Errors:** `AK-TASK-UNKNOWN` (unknown or invalid task id)
 - **Side effects:** ro
 - **Example:** `agentkit task report t1a2b3c`
 
 ### `agentkit task wait`
 
-wait; one done task inlines report
+wait; inline done report
 
 | arg | type | default | notes |
 |---|---|---|---|
@@ -582,7 +584,7 @@ resume; batch paused
 
 ### `agentkit task handoff`
 
-resume with another model/backend; keep budgets
+handoff; keep budgets
 
 | arg | type | default | notes |
 |---|---|---|---|
@@ -600,7 +602,7 @@ resume with another model/backend; keep budgets
 
 ### `agentkit task diff`
 
-budgeted tracked and untracked diff
+budgeted diff
 
 | arg | type | default | notes |
 |---|---|---|---|
@@ -669,7 +671,7 @@ record rejection and reason
 
 ### `agentkit task clean`
 
-remove finished tasks' worktrees (and branches unless --keep-branch)
+remove finished worktrees/branches
 
 | arg | type | default | notes |
 |---|---|---|---|
@@ -693,6 +695,7 @@ create bounded Goal over one task
 | `--check` | str |  | repeatable; acceptance command (repeatable) |
 | `--non-goal` | str |  | repeatable |
 | `--allow` | str |  | repeatable |
+| `--attach` | str |  | repeatable; image attachment (repeatable) |
 | `--allow-baseline-pass` | bool |  |  |
 | `--budget-tokens` | int |  |  |
 | `--budget-usd` | float |  |  |

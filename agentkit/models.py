@@ -107,6 +107,7 @@ class ModelSpec:
     context_limit: int = 0  # 0 = unknown; never silently claim a 32k hard limit
     context_budget: int = 128000
     context_budget_defaulted: bool = True
+    vision: bool = False
     price_in: float = 0.0  # USD per 1M input tokens
     price_out: float = 0.0
     tier: str = "low"
@@ -155,6 +156,7 @@ def all_models(cfg: dict) -> dict:
             name=name, base_url=str(m["base_url"]), model_id=str(m.get("model") or name),
             key_env=m.get("key_env") or None, context_limit=limit, context_budget=budget,
             context_budget_defaulted=bool(m.get("context_budget_defaulted", m.get("context_budget") is None)),
+            vision=bool(m.get("vision", False)),
             price_in=float(m.get("price_in", 0)), price_out=float(m.get("price_out", 0)),
             tier=str(m.get("tier", "low")), timeout=float(m.get("timeout", 120)),
             rpm=float(m.get("rpm", 0) or 0), max_wait=float(m.get("max_wait", RETRY_AFTER_CAP_S)),
@@ -382,12 +384,12 @@ def reasoning_text(msg: dict) -> str:
     return str(msg.get("reasoning_content") or msg.get("reasoning") or "")
 
 
-def usage_of(resp: dict, messages: list) -> tuple:
+def usage_of(resp: dict, messages: list, extra_tokens: int = 0) -> tuple:
     u = resp.get("usage") or {}
     tin = u.get("prompt_tokens")
     tout = u.get("completion_tokens")
     if tin is None:
-        tin = len(json.dumps(messages)) // 4
+        tin = len(json.dumps(messages)) // 4 + int(extra_tokens)
     if tout is None:
         tout = len(json.dumps(resp["choices"][0]["message"])) // 4
     return int(tin), int(tout)
@@ -432,7 +434,7 @@ def cmd_model(ctx: Ctx, a) -> Result:
                           "keys are never stored in config (M-17)", "export MY_KEY=...; agentkit model add NAME --key-env MY_KEY ...")
         vals = {"base_url": base_url, "model": a.model or a.name, "key_env": a.key_env,
                 "context_limit": limit, "context_budget": budget,
-                "context_budget_defaulted": a.context_budget is None,
+                "context_budget_defaulted": a.context_budget is None, "vision": bool(a.vision),
                 "price_in": a.price_in, "price_out": a.price_out, "tier": a.tier}
         for k in ("rpm", "max_wait", "max_tokens", "rate_wait"):
             v = getattr(a, k, None)
@@ -446,7 +448,7 @@ def cmd_model(ctx: Ctx, a) -> Result:
         data = {"added": a.name, "scope": "global" if global_config else "project",
                 "config": str(p) if global_config else ctx.rel(p),
                 "context_limit": limit, "context_budget": budget,
-                "context_budget_defaulted": a.context_budget is None,
+                "context_budget_defaulted": a.context_budget is None, "vision": bool(a.vision),
                 "key_env_set": bool(a.key_env and os.environ.get(a.key_env))}
         if limit == 0:
             data["context_warning"] = "context_limit unknown; worker uses the explicit context_budget, not a claimed 32k hard limit"
@@ -469,7 +471,7 @@ def cmd_model(ctx: Ctx, a) -> Result:
              "key_env": m.key_env, "key_set": bool(m.key_env and os.environ.get(m.key_env)) if m.key_env else None,
              "base_url": m.base_url, "scope": (cfg.get("_model_scopes") or {}).get(m.name, "project"),
              "context_limit": m.context_limit, "context_budget": m.context_budget,
-             "context_budget_defaulted": m.context_budget_defaulted} for m in ms.values()],
+             "context_budget_defaulted": m.context_budget_defaulted, "vision": m.vision} for m in ms.values()],
             "default": pick(cfg).name if ms else None})
     if sub == "remove":
         if getattr(a, "global_config", False):

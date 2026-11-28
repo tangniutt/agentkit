@@ -49,6 +49,15 @@ def test_handoff_preserves_state_and_records_history(repo, monkeypatch):
     assert wt.exists()
 
 
+def test_handoff_rejects_nonvision_target_for_attachment_task(repo, monkeypatch):
+    ctx, task, _ = _paused(repo, monkeypatch)
+    task["attachments"] = [{"path": ".agentkit/tasks/t123abc/attachments/ref.png",
+                            "sha256": "d" * 64, "mime": "image/png", "bytes": 68}]
+    tasks.save(repo, task)
+    with pytest.raises(AKError, match="does not support image attachments"):
+        tasks.resume(ctx, _args("fake-b"), handoff=True)
+
+
 def test_handoff_limit_and_same_model(repo, monkeypatch):
     ctx, task, _ = _paused(repo, monkeypatch)
     with pytest.raises(AKError, match="already uses model"):

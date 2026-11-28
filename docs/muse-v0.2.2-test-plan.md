@@ -64,6 +64,16 @@
 
 先完成本节，再回归 v0.2.1 检查表和完整三阶段流程。
 
+## 2.3 图片能力复测
+
+| 用例 | 操作 | 预期 |
+|---|---|---|
+| 视觉模型附件 | `model add ... --vision` 后 `task create ... --attach ref.png` | 请求含 `image_url`，task/round_details 记录附件与 image token 估算；transcript/log 不含 base64 |
+| 非视觉模型 | 对未开 vision 的 builtin 模型传 `--attach` | `AK-MODEL-CAPABILITY`，不创建任务、不静默丢图 |
+| 外部后端 | 对 Codex/OpenCode/Qoder/Cursor 传 `--attach` | 明确 `AK-MODEL-CAPABILITY`，不伪装支持 |
+| 证据图 | 工人在 `artifacts/` 产出 png/jpeg/webp | report/receipt 含路径与 SHA-256；MCP `include_images=true` 返回 image block |
+| 护栏 | 传坏格式、超过 5 MiB 或总量超过 10 MiB | 明确拒绝；附件发送前有敏感信息警告 |
+
 ## 3. 安全与停止条件
 
 - 只使用临时仓库和专用测试 Key；Key 只放环境变量，不写命令行、配置值、日志、截图或 Issue。

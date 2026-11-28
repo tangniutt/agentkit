@@ -26,6 +26,8 @@ def test_builtin_and_external_backends_declare_distinct_capabilities():
     qoder = backend_capabilities("qoder")
     cursor = backend_capabilities("cursor")
     assert builtin["event_protocol"] == "internal" and builtin["session_resume"] is False
+    assert builtin["image_input"] is True
+    assert not any(backend["image_input"] for backend in (codex, opencode, qoder, cursor))
     assert codex["session_resume"] is False and codex["usage_reporting"] is True
     assert codex["approval_events"] is False and codex["cost_reporting"] is False
     assert opencode["oauth"] is True and opencode["cost_reporting"] is True

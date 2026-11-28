@@ -602,9 +602,11 @@ def selected_worker_env(cfg: dict, backend: str, model: str, *, include_secret: 
 # ---------------------------------------------------------------- create
 
 
-def content_hash(goal, checks, allow, model, tier, budget, base, baseline_must_fail=True, backend="builtin") -> str:
-    blob = json.dumps([goal.strip(), list(checks), sorted(allow), model, tier, budget, base, baseline_must_fail, backend],
-                      sort_keys=True)
+def content_hash(goal, checks, allow, model, tier, budget, base, baseline_must_fail=True, backend="builtin",
+                 attachments=None) -> str:
+    image_specs = [(item.get("sha256"), item.get("mime"), item.get("bytes")) for item in attachments or []]
+    blob = json.dumps([goal.strip(), list(checks), sorted(allow), model, tier, budget, base, baseline_must_fail,
+                       backend, image_specs], sort_keys=True)
     return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
 
@@ -869,7 +871,7 @@ def _finalize_task_credential(root: Path, task: dict) -> None:
 
 
 def create(ctx: Ctx, a) -> dict:
-    from . import models as M
+    from . import images as I, models as M
 
     cfg = ctx.config
     backend = getattr(a, "backend", "builtin") or "builtin"
@@ -945,6 +947,11 @@ def create(ctx: Ctx, a) -> dict:
         if spec.key_env and not os.environ.get(spec.key_env):
             raise AKError(f"environment variable {spec.key_env} is not set", f"model '{spec.name}' reads its key from it",
                           f"export {spec.key_env}=...  then  agentkit model test {spec.name}")
+    attachment_specs = I.inspect_attachments(root, list(getattr(a, "attach", None) or []))
+    if attachment_specs and (backend != "builtin" or not spec.vision):
+        raise AKError("model or backend does not support image attachments",
+                      "use a builtin model with vision=true; external CLI image input is not supported yet",
+                      "agentkit model add NAME --vision ...", code="AK-MODEL-CAPABILITY")
     for c in a.check or []:
         v = V.permissions.check(c, cfg)
         if not v.allowed:
@@ -967,13 +974,16 @@ def create(ctx: Ctx, a) -> dict:
                           f"configure workers.{backend}.price_in/price_out or remove --budget-usd",
                           "agentkit task create --help", code="AK-USAGE")
     baseline_must_fail = not bool(getattr(a, "allow_baseline_pass", False))
-    h = content_hash(a.goal, a.check or [], a.allow or [], model_name, tier, budget, base, baseline_must_fail, backend)
+    h = content_hash(a.goal, a.check or [], a.allow or [], model_name, tier, budget, base, baseline_must_fail,
+                     backend, attachment_specs)
     acceptance = {"checks": a.check or [], "allow": a.allow or [], "baseline_must_fail": baseline_must_fail}
     acceptance_sha256 = hashlib.sha256(json.dumps(acceptance, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     warnings = []
     dirty = [ln for ln in _git(root, "status", "--porcelain").splitlines() if ln[3:].split("/")[0] != ".agentkit"]
     if dirty:
         warnings.append(f"{len(dirty)} uncommitted change(s) are NOT visible to the worker (worktree starts at HEAD)")
+    if attachment_specs:
+        warnings.append("image attachments will be sent to the selected model and may contain sensitive information")
     _ensure_state_ignored(root)
     with locked(root):
         recover(root)
@@ -996,6 +1006,7 @@ def create(ctx: Ctx, a) -> dict:
         tid = "t" + secrets.token_hex(3)
         while (tasks_dir(root) / tid).exists():
             tid = "t" + secrets.token_hex(3)
+        attachments = I.stage(root, attachment_specs, tpath(root, tid) / "attachments") if attachment_specs else []
         wt = root / ".agentkit" / "worktrees" / tid
         branch = f"agentkit/{tid}"
         wt.parent.mkdir(parents=True, exist_ok=True)
@@ -1010,7 +1021,7 @@ def create(ctx: Ctx, a) -> dict:
         t = {
             "id": tid, "goal": a.goal, "checks": a.check or [], "allow": a.allow or [], "model": model_name,
             "tier": tier, "backend": backend, "budget": budget, "hash": h, "base": base, "branch": branch,
-            "acceptance": acceptance, "acceptance_sha256": acceptance_sha256,
+            "acceptance": acceptance, "acceptance_sha256": acceptance_sha256, "attachments": attachments,
             "worktree": str(wt.relative_to(root)), "status": "queued", "created": time.time(),
             "type": task_type(a.goal), "rounds": 0, "tokens": 0, "usd": 0.0,
         }
@@ -1206,6 +1217,8 @@ def run_task(root: Path, tid: str) -> None:
             extra = {k: stats[k] for k in ("credits", "credits_known") if k in stats}
             if "round_details" in stats:
                 extra["round_details"] = stats["round_details"]
+            if "image_tokens_estimated" in stats:
+                extra["image_tokens_estimated"] = stats["image_tokens_estimated"]
             update(root, tid, rounds=stats["rounds"], tokens=stats["tokens_in"] + stats["tokens_out"],
                    usd=stats["usd"], **extra)
         except Exception:
@@ -1284,6 +1297,7 @@ def run_task(root: Path, tid: str) -> None:
                   tokens_out=st["tokens_out"], usd=st["usd"], compactions=st["compactions"], repairs=st["repairs"],
                   compression=st.get("compression"),
                   round_details=st.get("round_details") if st.get("round_details") is not None else t.get("round_details") or [],
+                  image_tokens_estimated=st.get("image_tokens_estimated", 0),
                   denied=sorted(set(worker.denied) | set(t.get("denied") or [])),
                   worker_s=round(time.monotonic() - t0 + float((t.get("prior") or {}).get("worker_s") or 0), 1),
                   error_code=code, component=worker.last_component if code else None, last_step=worker.last_step,
@@ -1430,7 +1444,7 @@ def _environment_sha256(root: Path) -> str:
 
 
 def _write_evidence(root: Path, t: dict, wt: Path, changes: dict, checks: list, verdict: str,
-                    flags: list, report: dict) -> tuple[dict, dict]:
+                    flags: list, report: dict, artifacts: list[dict] | None = None) -> tuple[dict, dict]:
     from . import __version__
     from .protocol import EvidenceReceipt, Retrospective, canonical_json, sha256
 
@@ -1453,7 +1467,8 @@ def _write_evidence(root: Path, t: dict, wt: Path, changes: dict, checks: list, 
     diff_hash = _diff_sha256(wt, changes)
     env_hash = _environment_sha256(root)
     receipt_id = "er_" + sha256({"task": t["id"], "diff": diff_hash, "acceptance": acceptance_hash,
-                                 "checks": receipt_checks, "verdict": verdict})[:24]
+                                 "checks": receipt_checks, "verdict": verdict,
+                                 "attachments": t.get("attachments") or [], "artifacts": artifacts or []})[:24]
     evidence_dir = root / ".agentkit" / "evidence"
     evidence_dir.mkdir(parents=True, exist_ok=True)
     receipt_path = evidence_dir / f"{receipt_id}.json"
@@ -1464,7 +1479,8 @@ def _write_evidence(root: Path, t: dict, wt: Path, changes: dict, checks: list, 
         worker={"backend": t.get("backend", "builtin"), "model": t.get("model"), "sandbox": t.get("sandbox", "unknown"),
                 "sandbox_network": t.get("sandbox_network", "unknown"),
                 **({"sandbox_domains": t["sandbox_domains"]} if "sandbox_domains" in t else {})},
-        cost=report["cost"], created_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+        cost=report["cost"], created_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        attachments=t.get("attachments") or [], artifacts=artifacts or [])
     atomic_write(receipt_path, (canonical_json(receipt.to_dict()) + "\n").encode("utf-8"))
     receipt_data = json.loads(receipt_path.read_text(encoding="utf-8"))
     task_receipt = tpath(root, t["id"]) / "receipt.json"
@@ -1499,6 +1515,8 @@ def verify_task(root: Path, tid: str) -> dict:
     and re-run the checks there. The worker's own claim is never consulted."""
     t = load(root, tid)
     cfg = load_config(root)
+    from . import images as I
+
     wt = root / t["worktree"]
     if not wt.exists():
         raise AKError("task worktree is gone", "it was cleaned", "agentkit task create ... to run again")
@@ -1507,6 +1525,7 @@ def verify_task(root: Path, tid: str) -> dict:
     changes = task_changes(wt, base)
     tmp = Path(tempfile.mkdtemp(prefix="agentkit-taskverify-"))
     clean = tmp / "wt"
+    artifacts = []
     timeout = float((cfg.get("run") or {}).get("timeout", 120))
     try:
         _git(root, "worktree", "add", "-q", "--detach", "--force", str(clean), base)
@@ -1531,6 +1550,7 @@ def verify_task(root: Path, tid: str) -> dict:
                 if dst.exists() or dst.is_symlink():
                     dst.unlink()
                 shutil.copy2(src, dst)
+        artifacts = I.scan_artifacts(clean)
         checks = V.run_checks(t.get("checks") or [], clean, timeout, log_dir, env=env) if t.get("checks") else []
     finally:
         subprocess.run(["git", "-C", str(root), "worktree", "remove", "--force", str(clean)], capture_output=True)
@@ -1563,10 +1583,12 @@ def verify_task(root: Path, tid: str) -> dict:
                      "checks": baseline_checks},
         "acceptance_sha256": t.get("acceptance_sha256"),
         "round_details": t.get("round_details") or [],
+        "images": artifacts,
         "changed": [f"{s} {p}" for p, s in sorted(changes.items())],
         "suspicious": flags,
         "cost": {"s": round((t.get("worker_s") or 0) + time.monotonic() - t0, 1), "tokens": t.get("tokens", 0),
                  "usd": round(t.get("usd", 0.0), 4), "usd_known": bool(t.get("cost_known", True)),
+                 "image_tokens_estimated": t.get("image_tokens_estimated", 0),
                  **({"credits": round(t["credits"], 4), "credits_known": bool(t.get("credits_known", True))}
                     if "credits" in t else {})},
         "env": "git-worktree",
@@ -1589,7 +1611,7 @@ def verify_task(root: Path, tid: str) -> dict:
     if code:
         report["error"] = {"code": code, "component": t.get("component") or "verifier",
                            "step": t.get("last_step", t.get("rounds", 0)), "log": f"agentkit logs {tid} --errors"}
-    report, _retrospective = _write_evidence(root, t, wt, changes, checks, verdict, flags, report)
+    report, _retrospective = _write_evidence(root, t, wt, changes, checks, verdict, flags, report, artifacts)
     atomic_write(tpath(root, tid) / "report.json", json.dumps(redact(report), ensure_ascii=False, indent=1).encode("utf-8"))
     return report
 
@@ -2016,6 +2038,10 @@ def resume(ctx: Ctx, a, handoff: bool = False) -> dict:
             if spec.key_env and not os.environ.get(spec.key_env):
                 raise AKError(f"environment variable {spec.key_env} is not set", f"model '{spec.name}' reads its key from it",
                               f"export {spec.key_env}=...  then  agentkit task {command} {tid}")
+        if t.get("attachments") and (target_backend != "builtin" or not spec.vision):
+            raise AKError("target model or backend does not support image attachments",
+                          "resume with a builtin vision model or remove the attachment requirement",
+                          f"agentkit task {command} {tid} --model VISION_MODEL", code="AK-MODEL-CAPABILITY")
         switched = target_backend != old_backend or model_name != old_model
         if handoff and not switched:
             raise AKError(f"task {tid} already uses model '{old_model}' on {old_backend}", "handoff requires a different model or backend",

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import secrets
@@ -179,7 +180,8 @@ TOOLS = [
           ["task_id", "complexity", "blast_radius", "profiles"], {"readOnlyHint": True}),
     _tool("agentkit_task_create", "Create an isolated worker task with frozen fail-to-pass acceptance.",
           {"goal": {"type": "string"}, "checks": {"type": "array", "items": {"type": "string"}, "minItems": 1},
-           "allow": {"type": "array", "items": {"type": "string"}}, "model": {"type": "string"},
+           "allow": {"type": "array", "items": {"type": "string"}}, "attachments": {"type": "array", "items": {"type": "string"}},
+           "model": {"type": "string"},
            "backend": {"type": "string", "enum": ["builtin", "codex", "opencode", "qoder", "cursor"]},
            "tier": {"type": "string"}, "budget_tokens": {"type": "integer"}, "budget_usd": {"type": "number"},
            "budget_minutes": {"type": "number"}, "allow_baseline_pass": {"type": "boolean"},
@@ -194,7 +196,7 @@ TOOLS = [
           annotations={"readOnlyHint": True}),
     _tool("agentkit_task_report", "Return the independent verification report for a task; 'ids' accepts one id.",
           {"id": {"type": "string"}, "ids": {"type": "array", "items": {"type": "string"}},
-           "details": {"type": "boolean"}}, annotations={"readOnlyHint": True}),
+           "details": {"type": "boolean"}, "include_images": {"type": "boolean"}}, annotations={"readOnlyHint": True}),
     _tool("agentkit_task_diff", "Return a budgeted tracked and untracked task diff; 'ids' accepts one id.",
           {"id": {"type": "string"}, "ids": {"type": "array", "items": {"type": "string"}},
            "offset": {"type": "integer"}}, annotations={"readOnlyHint": True}),
@@ -217,7 +219,8 @@ TOOLS = [
           {"readOnlyHint": False, "destructiveHint": False}),
     _tool("agentkit_goal_create", "Create a bounded Goal that loops through execution and independent verification.",
           {"outcome": {"type": "string"}, "checks": {"type": "array", "items": {"type": "string"}, "minItems": 1},
-           "allow": {"type": "array", "items": {"type": "string"}}, "model": {"type": "string"},
+           "allow": {"type": "array", "items": {"type": "string"}}, "attachments": {"type": "array", "items": {"type": "string"}},
+           "model": {"type": "string"},
            "budget_tokens": {"type": "integer"}, "budget_usd": {"type": "number"}, "budget_minutes": {"type": "number"},
            "max_iterations": {"type": "integer"}, "failover": {"type": "array", "items": {"type": "string"}}},
           ["outcome", "checks"], {"readOnlyHint": False, "destructiveHint": False}),
@@ -319,6 +322,8 @@ def _argv(name: str, a: dict) -> list:
             out += ["--check", check]
         for path in a.get("allow") or []:
             out += ["--allow", path]
+        for path in a.get("attachments") or []:
+            out += ["--attach", path]
         for key, flag in (("model", "--model"), ("backend", "--backend"), ("tier", "--tier"),
                           ("budget_tokens", "--budget-tokens"), ("budget_usd", "--budget-usd"),
                           ("budget_minutes", "--budget-minutes")):
@@ -339,7 +344,7 @@ def _argv(name: str, a: dict) -> list:
             out.append("--no-report")
         return out
     if name == "agentkit_task_report":
-        return ["task", "report", a["id"], *(["--details"] if a.get("details") else [])]
+        return ["task", "report", a["id"], *(["--details"] if a.get("details") or a.get("include_images") else [])]
     if name == "agentkit_task_diff":
         return ["task", "diff", a["id"], *(["--offset", str(a["offset"])] if a.get("offset") is not None else [])]
     if name == "agentkit_task_steer":
@@ -367,6 +372,8 @@ def _argv(name: str, a: dict) -> list:
             out += ["--check", check]
         for path in a.get("allow") or []:
             out += ["--allow", path]
+        for path in a.get("attachments") or []:
+            out += ["--attach", path]
         for model in a.get("failover") or []:
             out += ["--failover", model]
         for key, flag in (("model", "--model"), ("budget_tokens", "--budget-tokens"),
@@ -446,7 +453,17 @@ def _call_tool(root: Path, name: str, arguments: dict) -> dict:
             env = ToolResult(ok=False, error={"what": str(e), "code": "AK-CONFIG"}).to_dict()
     else:
         env, _code, _human = run_cli(["--root", str(root), *_argv(name, arguments or {})], cwd=root)
-    return {"resultType": "complete", "content": [{"type": "text", "text": dumps(env)}],
+    content = [{"type": "text", "text": dumps(env)}]
+    if name == "agentkit_task_report" and arguments.get("include_images") and env.get("ok"):
+        from . import images, tasks
+
+        task = tasks.load(root, str(env["data"]["task"]))
+        worktree = root / task["worktree"]
+        for item in env["data"].get("images") or []:
+            raw = images.image_bytes(worktree, item, base_dir=worktree / "artifacts")
+            content.append({"type": "image", "data": base64.b64encode(raw).decode("ascii"),
+                            "mimeType": item["mime"]})
+    return {"resultType": "complete", "content": content,
             "structuredContent": env, "isError": not bool(env.get("ok"))}
 
 

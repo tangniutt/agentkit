@@ -28,6 +28,8 @@ def _task():
         "context": ["calc.py"],
         "allowed_paths": ["src/"],
         "forbidden_paths": ["tests/"],
+        "attachments": [{"path": ".agentkit/tasks/t123abc/attachments/ref.png", "sha256": "d" * 64,
+                         "mime": "image/png", "bytes": 68}],
         "acceptance": {"checks": ["pytest -q"], "baseline_must_fail": True, "frozen": True},
         "budget": {"tokens": 1000, "minutes": 10},
         "worker": {"backend": "builtin", "model": "cheap"},
@@ -132,7 +134,8 @@ def test_evidence_retrospective_and_event_roundtrip():
         diff_sha256="d" * 64, acceptance_sha256="a" * 64, environment_sha256="e" * 64,
         checks=[{"cmd": "pytest", "result": "pass", "exit": 0}], verdict="pass",
         verifier_version="0.3.0", worker={"backend": "builtin", "model": "cheap"},
-        cost={"tokens": 10, "usd": 0.1, "seconds": 1}, created_at="2026-11-25T00:00:00Z")
+        cost={"tokens": 10, "usd": 0.1, "seconds": 1}, created_at="2026-11-25T00:00:00Z",
+        artifacts=[{"path": "artifacts/proof.png", "sha256": "f" * 64, "mime": "image/png", "bytes": 68}])
     assert EvidenceReceipt.from_dict(receipt.to_dict()).to_dict() == receipt.to_dict()
     retro = Retrospective(id="rp_1", subject={"kind": "task", "id": "t123abc"}, outcome="fixed",
                           changes=[{"path": "calc.py"}], evidence=[{"receipt": "er_1"}], failures=[],

@@ -1,6 +1,7 @@
 # Copyright 2026 tangniutt and contributors
 # SPDX-License-Identifier: Apache-2.0
 """End-to-end Codex worker backend through task create/wait/verify."""
+import base64
 import json
 import os
 import sys
@@ -180,6 +181,15 @@ def test_builtin_task_hands_off_to_codex_in_same_worktree(ak, repo, fake):
     assert task["backend"] == "codex" and task["backend_history"][-1]["to"] == "codex"
     assert task["tokens"] >= prior_tokens + 120
     assert task["round_details"], "builtin round details survive handoff to an external backend"
+
+
+def test_external_backend_rejects_image_attachments(ak, repo):
+    _repo(repo, ak, SCRIPT)
+    (repo / "reference.png").write_bytes(base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6nWQAAAAASUVORK5CYII="))
+    result = ak("task", "create", "fix add [CODEX-IMAGE]", "--check", CHECK,
+                "--backend", "codex", "--attach", "reference.png")
+    assert not result["ok"] and result["error"]["code"] == "AK-MODEL-CAPABILITY"
 
 
 def test_codex_policy_mode_is_explicit_production_level(ak, repo):
